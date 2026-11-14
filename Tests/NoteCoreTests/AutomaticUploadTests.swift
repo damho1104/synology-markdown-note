@@ -26,8 +26,14 @@ import Testing
         // Await the scheduled work instead of racing CI's other MainActor tests
         // against an arbitrary six-second polling window. Do not push manually:
         // this test must still prove that editing schedules the upload itself.
-        await session.saveTask?.value
-        await store.uploadTask?.value
+        for _ in 0..<10 {
+            await session.saveTask?.value
+            await store.uploadTask?.value
+            if session.note.syncState == .synced { break }
+            // A save/upload can replace the task we just awaited. Follow the
+            // newly scheduled task rather than treating the old task as idle.
+            await Task.yield()
+        }
         #expect(session.note.syncState == .synced)
         #expect(session.note.remoteID != nil)
         #expect(session.note.markdown == "# 자동 저장된 변경")
@@ -35,7 +41,11 @@ import Testing
         #expect(try await store.repository.pendingOperations().isEmpty)
         store.edit(session) { $0.markdown += "\n\n다시 편집한 내용" }
         await store.flush()
-        await store.uploadTask?.value
+        for _ in 0..<10 {
+            await store.uploadTask?.value
+            if session.note.syncState == .synced { break }
+            await Task.yield()
+        }
         let remoteID = try #require(session.note.remoteID)
         let remote = try await f.client.fetch(noteID: remoteID)
         #expect(remote.html.contains("다시 편집한 내용"))

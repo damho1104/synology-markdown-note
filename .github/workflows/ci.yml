@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [develop]
+    branches: [develop, main]
   pull_request:
   workflow_dispatch:
 
@@ -30,6 +30,7 @@ jobs:
       - name: Test CLI
         working-directory: cli
         run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           uv python install 3.13
           uv lock --check
           uv run --locked pytest -q tests

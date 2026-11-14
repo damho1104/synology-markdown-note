@@ -18,7 +18,10 @@ enum MermaidPreviewRuntime {
         guard let url else {
             throw CocoaError(.fileNoSuchFile)
         }
-        return try String(contentsOf: url, encoding: .utf8)
+        // The library's final expression is an object that older WebKit cannot
+        // bridge to Swift. Its side effects have completed; return a safe value
+        // so the preview coordinator can continue with diagram rendering.
+        return try String(contentsOf: url, encoding: .utf8) + "\n;null;"
     }
 
     static func bootstrapJavaScript(style: MermaidStyle = .sketch, theme: MermaidTheme = .automatic) -> String {

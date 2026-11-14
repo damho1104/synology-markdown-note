@@ -15,7 +15,8 @@ concurrency:
 
 jobs:
   cli:
-    runs-on: [self-hosted, Linux, X64, docker-compose]
+    # Untrusted PR code runs only on GitHub-hosted infrastructure.
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || fromJSON('["self-hosted", "Linux", "X64", "docker-compose"]') }}
     container: ubuntu:24.04
     steps:
       - name: Install container build tools
@@ -23,9 +24,11 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends ca-certificates curl git build-essential binutils
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@v6
         with:
-          enable-cache: true
+          enable-cache: ${{ github.event_name != 'pull_request' }}
           cache-dependency-glob: cli/uv.lock
       - name: Test CLI
         working-directory: cli
@@ -36,9 +39,11 @@ jobs:
           uv run --locked pytest -q tests
 
   swift:
-    runs-on: [self-hosted, macOS, ARM64]
+    runs-on: ${{ github.event_name == 'pull_request' && 'macos-latest' || fromJSON('["self-hosted", "macOS", "ARM64"]') }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Test Swift
         run: |
           swift --version

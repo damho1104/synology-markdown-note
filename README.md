@@ -170,7 +170,7 @@ uv sync --locked
 uv run --locked pytest -q tests
 ```
 
-[GitHub Actions CI](.github/workflows/ci.yml)는 `develop`·`main` 브랜치에 대한 push, Pull Request, 수동 실행 시 저장소에 등록한 **셀프호스팅 러너**에서 다음을 검사합니다.
+[GitHub Actions CI](.github/workflows/ci.yml)는 `develop`·`main` 브랜치에 대한 push, Pull Request, 수동 실행 시 다음을 검사합니다. **Pull Request는 GitHub 제공 Ubuntu·macOS 러너**, 신뢰된 브랜치 push·수동 실행은 저장소에 등록한 셀프호스팅 러너를 사용합니다.
 
 - **macOS:** Swift 테스트 실행.
 - **Ubuntu 24.04 / Python 3.13:** CLI 잠금 파일 확인 및 테스트 실행.

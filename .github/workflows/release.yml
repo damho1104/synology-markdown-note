@@ -30,6 +30,12 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends ca-certificates git python3
       - uses: actions/checkout@v4
+      - name: Verify release source branch
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          python3 script/check_release_source.py \
+            --event "$GITHUB_EVENT_NAME" --ref-type "$GITHUB_REF_TYPE" --ref-name "$GITHUB_REF_NAME"
       - id: version
         name: Validate release tag against project version
         env:
@@ -245,7 +251,7 @@ jobs:
             test "$(jq -r .isDraft release.json)" = true
           else
             # Creation fails safely if the tag is missing or the API is unavailable.
-            gh release create "$RELEASE_TAG" --verify-tag --draft \
+            gh release create "$RELEASE_TAG" --verify-tag --target main --draft \
               --title "$RELEASE_TAG" --generate-notes \
               --notes 'macOS arm64 app and CLI; Linux x86_64 glibc 2.28+ CLI tested on Debian, Ubuntu, AlmaLinux, Rocky Linux, Fedora and openSUSE; Ubuntu 22.04/24.04 amd64 CLI. macOS app uses a dedicated self-signed release certificate and is not Apple notarized. See distribution.ko.md and SHA256SUMS-*.'
           fi

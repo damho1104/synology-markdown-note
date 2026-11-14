@@ -202,7 +202,7 @@ Swift 코드가 생성한 골든 fixture 및 모의 NAS 테스트는 완료했�
 
 ## GitHub 배포
 
-공식 소스는 [GitHub 저장소](https://github.com/damho1104/synology-markdown-note)에서 관리합니다. `develop` 브랜치의 변경 사항과 Pull Request에 대해 Python CLI 및 Swift 테스트를 실행합니다. `v1.2.17` 또는 `1.2.17` 형식의 버전 태그를 푸시하면 macOS arm64·Ubuntu 22.04/24.04 amd64 CLI와 Linux x86_64/glibc 2.28+ 공용 CLI 및 체크섬을 [GitHub Releases](https://github.com/damho1104/synology-markdown-note/releases)에 자동 게시합니다. 태그는 프로젝트 버전과 일치해야 하며 short commit을 붙이지 않습니다. 릴리스 실행 파일의 표시 버전도 `1.2.17`처럼 해시 없이 표시됩니다. 설정과 사용법은 [GitHub 릴리스 안내](../docs/github-release.ko.md)를 참고하세요.
+공식 소스는 [GitHub 저장소](https://github.com/damho1104/synology-markdown-note)에서 관리합니다. `develop`·`main` 브랜치의 변경 사항과 Pull Request에 대해 Python CLI 및 Swift 테스트를 실행합니다. `v1.2.17` 또는 `1.2.17` 형식의 버전 태그를 `main`에 반영된 커밋에 붙여 푸시하면 macOS arm64·Ubuntu 22.04/24.04 amd64 CLI와 Linux x86_64/glibc 2.28+ 공용 CLI 및 체크섬을 [GitHub Releases](https://github.com/damho1104/synology-markdown-note/releases)에 자동 게시합니다. 태그는 프로젝트 버전과 일치해야 하며 short commit을 붙이지 않습니다. 릴리스 실행 파일의 표시 버전도 `1.2.17`처럼 해시 없이 표시됩니다. 설정과 사용법은 [GitHub 릴리스 안내](../docs/github-release.ko.md)를 참고하세요.
 
 CLI는 macOS와 Linux에서 PyInstaller를 이용해 단일 실행 파일로 빌드할 수 있습니다. 공식 릴리스에 사용할 실행 파일 및 체크섬은 해당 OS에서 별도로 검증해야 합니다.
 

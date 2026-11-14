@@ -86,7 +86,7 @@ synonote version
 
 #### 릴리스 실행 파일 설치
 
-[Releases](https://github.com/damho1104/synology-markdown-note/releases)에 CLI 실행 파일이 게시되어 있다면 자신의 OS·버전·아키텍처에 맞는 파일을 선택하고 제공된 SHA-256 체크섬을 확인하세요. 기존 Ubuntu 전용 파일 외에 다음 릴리스부터 **Linux x86_64 / glibc 2.28 이상용 공용 실행 파일**을 추가합니다. Debian·Ubuntu·AlmaLinux·Rocky Linux·Fedora·openSUSE의 12개 컨테이너 환경을 검사합니다. 대상 버전과 설치 방법은 [Linux CLI 설치 안내](cli/README.md#여러-linux-배포판용-x86_64-실행-파일)를 참고하세요.
+[Releases](https://github.com/damho1104/synology-markdown-note/releases)에 CLI 실행 파일이 게시되어 있다면 자신의 OS·버전·아키텍처에 맞는 파일을 선택하고 제공된 SHA-256 체크섬을 확인하세요. 기존 Ubuntu 전용 파일 외에 `v1.2.17` 재빌드부터 **Linux x86_64 / glibc 2.28 이상용 공용 실행 파일**을 추가합니다. Debian·Ubuntu·AlmaLinux·Rocky Linux·Fedora·openSUSE의 12개 컨테이너 환경을 검사합니다. 대상 버전과 설치 방법은 [Linux CLI 설치 안내](cli/README.md#여러-linux-배포판용-x86_64-실행-파일)를 참고하세요.
 
 자세한 내용은 [CLI 설치·빌드 안내](cli/README.md#설치)를 참고하세요.
 

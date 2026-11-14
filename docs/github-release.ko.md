@@ -45,7 +45,7 @@ git push origin v1.2.17
 
 `linux-compatibility` 작업은 동일한 공용 바이너리를 Debian 11·12·13, Ubuntu 20.04·22.04·24.04, AlmaLinux 8·9, Rocky Linux 8·9, Fedora 43, openSUSE Leap 16.0의 깨끗한 컨테이너에서 실행합니다. 대상 컨테이너에는 Python을 설치하지 않습니다. 체크섬을 확인한 후 `script/smoke_linux_binary.sh`로 버전·하위 명령 도움말·한글 설정 경로·로그아웃과 SSL 클라이언트 초기화를 검사합니다. 접속 테스트는 사용하지 않는 로컬 포트에 대한 오류 처리를 확인하며 실제 NAS로 자격 증명을 보내지 않습니다.
 
-모든 배포판 검증이 성공해야 `publish` 작업이 시작됩니다. 이미 게시된 `v1.2.17` 산출물에는 이 공용 파일이 없으며, 변경 사항 이후 새 버전 태그에서 추가됩니다. 이미지 태그는 고정된 배포판 버전을 사용하지만 보안 업데이트로 내용은 갱신될 수 있습니다. 실제 NAS, Linux ARM64, Alpine/musl은 이 검증 범위에 포함하지 않습니다. [PyInstaller 안내](https://pyinstaller.org/en/stable/usage.html#making-gnu-linux-apps-forward-compatible)와 [manylinux 안내](https://github.com/pypa/manylinux)를 참고하세요.
+모든 배포판 검증이 성공해야 `publish` 작업이 시작됩니다. `v1.2.17` 재빌드부터 이 공용 실행 파일과 전용 체크섬을 기존 macOS·Ubuntu 산출물과 함께 게시합니다. 이미지 태그는 고정된 배포판 버전을 사용하지만 보안 업데이트로 내용은 갱신될 수 있습니다. 실제 NAS, Linux ARM64, Alpine/musl은 이 검증 범위에 포함하지 않습니다. [PyInstaller 안내](https://pyinstaller.org/en/stable/usage.html#making-gnu-linux-apps-forward-compatible)와 [manylinux 안내](https://github.com/pypa/manylinux)를 참고하세요.
 
 ## macOS 서명 설정
 

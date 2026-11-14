@@ -36,7 +36,7 @@ macOS arm64에서는 체크섬을 `shasum -a 256 -c SHA256SUMS-macos-arm64`로 �
 
 ### 여러 Linux 배포판용 x86_64 실행 파일
 
-다음 릴리스부터 `synonote-cli-<VERSION_TAG>-linux-glibc2.28-amd64`와 `SHA256SUMS-linux-glibc2.28-amd64`를 추가로 제공합니다. Python 설치가 필요 없는 공용 실행 파일이며, **x86_64 및 glibc 2.28 이상** 환경을 대상으로 합니다. 기존 Ubuntu 전용 실행 파일도 유지합니다.
+`v1.2.17` 재빌드부터 `synonote-cli-<VERSION_TAG>-linux-glibc2.28-amd64`와 `SHA256SUMS-linux-glibc2.28-amd64`를 추가로 제공합니다. Python 설치가 필요 없는 공용 실행 파일이며, **x86_64 및 glibc 2.28 이상** 환경을 대상으로 합니다. 기존 Ubuntu 전용 실행 파일도 유지합니다.
 
 릴리스 워크플로는 다음 **12개 컨테이너 환경에서 동일한 공용 실행 파일을 검증**하고, 하나라도 실패하면 게시를 중단합니다.
 

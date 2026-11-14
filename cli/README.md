@@ -83,7 +83,7 @@ synonote version
 
 `PATH` 설정은 사용하는 셸의 설정 파일에도 추가하세요. 설치하지 않고 `./dist/synonote`로 직접 실행해도 됩니다. Windows에서는 `dist/synonote.exe`를 PATH에 포함된 폴더에 두거나 PowerShell에서 `./dist/synonote.exe --help`로 실행하세요. 아래 예시는 실행 파일이 PATH에 있는 것을 기준으로 합니다.
 
-앱과 CLI의 표시 버전은 `x.y.z-<GIT_COMMIT_SHORT_HASH>` 형식입니다(예: `1.2.2-cf2de13`). CLI의 `version` 명령은 NAS 로그인 없이 실행되며, `--json`은 `action: version`, `status: ok`, `version` 필드를 반환합니다. 설치 패키지의 버전 메타데이터에는 패키징 규약에 따라 `1.2.2`를 사용합니다.
+정식 릴리스 앱·CLI의 표시 버전은 `1.2.17`처럼 커밋 해시 없는 버전입니다. 일반 소스 개발 빌드는 `x.y.z-<GIT_COMMIT_SHORT_HASH>` 형식입니다(예: `1.2.17-7cb95a5`). CLI의 `version` 명령은 NAS 로그인 없이 실행되며, `--json`은 `action: version`, `status: ok`, `version` 필드를 반환합니다. 설치 패키지의 버전 메타데이터에는 패키징 규약에 따라 `1.2.2`를 사용합니다.
 
 ## 로그인과 자동 로그인
 
@@ -101,7 +101,7 @@ synonote auth set-server --server https://new-nas.example:5001
 synonote auth status --json
 ```
 
-이 명령은 로그인 정보를 저장한 **해당 Ubuntu 기기**에서 실행해야 합니다. 다른 기기의 CLI 설정은 변경되지 않습니다. 새 주소는 유효한 HTTPS 주소여야 하며, OTP를 새로 요구하면 `login --server ... --username ... --remember`로 다시 로그인해야 합니다.
+이 명령은 로그인 정보를 저장한 **해당 기기**에서 실행해야 합니다. 다른 기기의 CLI 설정은 변경되지 않습니다. 새 주소는 유효한 HTTPS 주소여야 하며, OTP를 새로 요구하면 `login --server ... --username ... --remember`로 다시 로그인해야 합니다.
 
 대화형 입력에서 비밀번호를 안전하게 받으며, OTP 요청 시 추가 입력을 받습니다. 자동화의 경우 비밀번호를 별도 안전한 프로세스에서 **표준입력**으로 전달하고 `--password-stdin --non-interactive --json` 옵션을 사용합니다. 비밀번호를 명령행 인자에 넣지 마세요. `--remember`를 지정해야 다음 CLI 실행에서 자동 로그인할 수 있습니다.
 

@@ -1,0 +1,27 @@
+.build/
+dist/
+.DS_Store
+.superpowers/
+*.sqlite3*
+cli/.venv/
+cli/.pytest_cache/
+cli/**/__pycache__/
+cli/build/
+cli/dist/
+cli/*.spec
+
+# Local credentials, signing material, and diagnostic output
+.env
+.env.*
+!.env.example
+!.env.*.example
+credentials.json
+profile.json
+*.p12
+*.pfx
+*.pem
+*.key
+*.keychain
+*.keychain-db
+*.log
+.pytest_cache/

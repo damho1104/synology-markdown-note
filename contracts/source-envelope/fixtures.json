@@ -1,0 +1,75 @@
+{
+  "envelopes" : {
+    "blocks" : {
+      "document_id" : "12345678-1234-4321-ABCD-123456789ABC",
+      "encoded_base64" : "PCEtLSBzeW5vbG9neS1ub3RlLXNvdXJjZTp2MSBleUppYkc5amEzTWlPbHQ3SW1oMGJXd2lPaUk4WkdsMklHeGhibWM5WENKcmIxd2lQdXV6dE95aHREeGNMMlJwZGo0aUxDSnBaQ0k2SW10bFpYQWlMQ0pzWVdKbGJDSTZJdXlia091enVDSjlYU3dpWW14dlkydHpSbWx1WjJWeWNISnBiblFpT2lKemFHRXlOVFl0WlhoaFkzUXRkakU2TmpjeE9EUm1ZalEyWW1ZeU0ySTRaVEE0T0RjMFpXUTJOVGd5TldJeE9HSXlNek5tT0RrNE5qSmhNMkZtTVdFNFpqRTVOelpqTWpReE9UZzVOelkyTXlJc0ltSnZaSGxHYVc1blpYSndjbWx1ZENJNkluTm9ZVEkxTmkxbGVHRmpkQzEyTVRveE1tSTJOamhsWlRBek1qVTFaRGN3Tm1Vd01qUmlNR1JoTkRVNE5EY3lPVEpoWkdNeVpHSmxNMlkyWldVME1tSTFOelV3WlRnM1lXUXlaR1ZrTnpZeUlpd2laRzlqZFcxbGJuUkpSQ0k2SWpFeU16UTFOamM0TFRFeU16UXRORE15TVMxQlFrTkVMVEV5TXpRMU5qYzRPVUZDUXlJc0ltWnBibWRsY25CeWFXNTBWbVZ5YzJsdmJpSTZNU3dpWm05eWJXRjBWbVZ5YzJsdmJpSTZNU3dpYzI5MWNtTmxSbWx1WjJWeWNISnBiblFpT2lKemFHRXlOVFl0WlhoaFkzUXRkakU2WWpnNFpXWXpaRFE0TVRkbFpHWmtOREE0TXpVNE9URXdPR1kwT1dJeFpEaG1ORFUzTVdFMVpUWm1NbU0wWWpZeVpXSTBNelJtTlRnNU4ySTNabVkzWkNKOSAtLT4K7JWeCgo6OjpzeW5vbG9neS1ibG9jayBrZWVwIDo6Ogo=",
+      "html" : "<p>앞</p>\n<div lang=\"ko\">보존</div>\n",
+      "markdown" : "앞\n\n:::synology-block keep :::\n"
+    },
+    "v1" : {
+      "document_id" : "12345678-1234-4321-ABCD-123456789ABC",
+      "encoded_base64" : "PCEtLSBzeW5vbG9neS1ub3RlLXNvdXJjZTp2MSBleUppYkc5amEzTWlPbHRkTENKaWJHOWphM05HYVc1blpYSndjbWx1ZENJNkluTm9ZVEkxTmkxbGVHRmpkQzEyTVRvMFpqVXpZMlJoTVRoak1tSmhZVEJqTURNMU5HSmlOV1k1WVRObFkySmxOV1ZrTVRKaFlqUmtPR1V4TVdKaE9EY3pZekptTVRFeE5qRXlNREppT1RRMUlpd2lZbTlrZVVacGJtZGxjbkJ5YVc1MElqb2ljMmhoTWpVMkxXVjRZV04wTFhZeE9qTmtOekJtTjJJeU5qSXhOamN5TUdZME9UbGxOek00T1dNMk5UUmxaV0kxTWpZd01EWTFZV0l6WVdNNU9UZzJOMkUzWVdWaFptSTFOVGRqTWpka00yVWlMQ0prYjJOMWJXVnVkRWxFSWpvaU1USXpORFUyTnpndE1USXpOQzAwTXpJeExVRkNRMFF0TVRJek5EVTJOemc1UVVKRElpd2labWx1WjJWeWNISnBiblJXWlhKemFXOXVJam94TENKbWIzSnRZWFJXWlhKemFXOXVJam94TENKemIzVnlZMlZHYVc1blpYSndjbWx1ZENJNkluTm9ZVEkxTmkxbGVHRmpkQzEyTVRvNVpURXpZakk0WTJSa05tSTBNRFF3TVRsa09XSTFaamhrWlRkallUTXlNalJpTnprNFpERTBaakl5T0dVME1qRXdOR1k0WVRVME1UTmhabVJtT1dSa0luMD0gLS0+Ci0tLQp0aXRsZTog7ZWc6riAIPCfkLEKLS0tDQojIOygnOuqqSAmIOuUsOyYtO2RnA0K67O466y4ICDrgZ0=",
+      "html" : "<h1>제목</h1>\n",
+      "markdown" : "---\ntitle: 한글 🐱\n---\r\n# 제목 & 따옴표\r\n본문  끝"
+    },
+    "v2" : {
+      "document_id" : "12345678-1234-4321-ABCD-123456789ABC",
+      "encoded_base64" : "PCEtLSBzeW5vbG9neS1ub3RlLXNvdXJjZTp2MiBleUpoZEhSaFkyaHRaVzUwUW1sdVpHbHVaM01pT25zaVFVRkJRVUZCUVVFdFFrSkNRaTAwUTBORExUaEVSRVF0UlVWRlJVVkZSVVZGUlVWRklqb2libUZ6TFdacGJHVXRNU0o5TENKaWFXNWthVzVuYzBacGJtZGxjbkJ5YVc1MElqb2ljMmhoTWpVMkxXVjRZV04wTFhZeE9qQTNObVJsWVdVeFpHRmhOekpqWm1NMFltVXlPVFJpWVdVd05ERXdPV1UzWmpjeVpERXhZMlV5TWpsa05HVmxNbVJoTmprMU5tWTFNakppWWpZd1ltRWlMQ0ppYkc5amEzTWlPbHRkTENKaWJHOWphM05HYVc1blpYSndjbWx1ZENJNkluTm9ZVEkxTmkxbGVHRmpkQzEyTVRvMFpqVXpZMlJoTVRoak1tSmhZVEJqTURNMU5HSmlOV1k1WVRObFkySmxOV1ZrTVRKaFlqUmtPR1V4TVdKaE9EY3pZekptTVRFeE5qRXlNREppT1RRMUlpd2lZbTlrZVVacGJtZGxjbkJ5YVc1MElqb2ljMmhoTWpVMkxXVjRZV04wTFhZeE9qTmtOekJtTjJJeU5qSXhOamN5TUdZME9UbGxOek00T1dNMk5UUmxaV0kxTWpZd01EWTFZV0l6WVdNNU9UZzJOMkUzWVdWaFptSTFOVGRqTWpka00yVWlMQ0prYjJOMWJXVnVkRWxFSWpvaU1USXpORFUyTnpndE1USXpOQzAwTXpJeExVRkNRMFF0TVRJek5EVTJOemc1UVVKRElpd2labWx1WjJWeWNISnBiblJXWlhKemFXOXVJam94TENKbWIzSnRZWFJXWlhKemFXOXVJam95TENKcGMxTjBZV2RwYm1jaU9tWmhiSE5sTENKdmNHVnlZWFJwYjI1SlJDSTZJamczTmpVME16SXhMVFF6TWpFdE5ETXlNUzFCUWtORUxVRkNRMFJGUmpFeU16UTFOaUlzSW5OdmRYSmpaVVpwYm1kbGNuQnlhVzUwSWpvaWMyaGhNalUyTFdWNFlXTjBMWFl4T2psbE1UTmlNamhqWkdRMllqUXdOREF4T1dRNVlqVm1PR1JsTjJOaE16SXlOR0kzT1Roa01UUm1Nakk0WlRReU1UQTBaamhoTlRReE0yRm1aR1k1WkdRaWZRPT0gLS0+Ci0tLQp0aXRsZTog7ZWc6riAIPCfkLEKLS0tDQojIOygnOuqqSAmIOuUsOyYtO2RnA0K67O466y4ICDrgZ0=",
+      "html" : "<h1>제목</h1>\n",
+      "markdown" : "---\ntitle: 한글 🐱\n---\r\n# 제목 & 따옴표\r\n본문  끝"
+    },
+    "v3" : {
+      "document_id" : "12345678-1234-4321-ABCD-123456789ABC",
+      "encoded_base64" : "PCEtLSBzeW5vbG9neS1ub3RlLXNvdXJjZTp2MyBleUpoZEhSaFkyaHRaVzUwUW1sdVpHbHVaM01pT25zaVFVRkJRVUZCUVVFdFFrSkNRaTAwUTBORExUaEVSRVF0UlVWRlJVVkZSVVZGUlVWRklqb2libUZ6TFdacGJHVXRNU0o5TENKaWFXNWthVzVuYzBacGJtZGxjbkJ5YVc1MElqb2ljMmhoTWpVMkxXVjRZV04wTFhZeE9qQTNObVJsWVdVeFpHRmhOekpqWm1NMFltVXlPVFJpWVdVd05ERXdPV1UzWmpjeVpERXhZMlV5TWpsa05HVmxNbVJoTmprMU5tWTFNakppWWpZd1ltRWlMQ0ppYkc5amEzTWlPbHRkTENKaWJHOWphM05HYVc1blpYSndjbWx1ZENJNkluTm9ZVEkxTmkxbGVHRmpkQzEyTVRvMFpqVXpZMlJoTVRoak1tSmhZVEJqTURNMU5HSmlOV1k1WVRObFkySmxOV1ZrTVRKaFlqUmtPR1V4TVdKaE9EY3pZekptTVRFeE5qRXlNREppT1RRMUlpd2lZbTlrZVVacGJtZGxjbkJ5YVc1MElqb2ljMmhoTWpVMkxXVjRZV04wTFhZeE9qUmxNamt4TlRCbU5HSTJNemMxTVRGaVl6ZGlNR05pTTJKbU5qSTJaRFl6WTJVMk5XRTRPV1V3TkRWbU16Tm1aak01WW1RNVkyVTJPRGN6TnpjME1XVWlMQ0prYjJOMWJXVnVkRWxFSWpvaU1USXpORFUyTnpndE1USXpOQzAwTXpJeExVRkNRMFF0TVRJek5EVTJOemc1UVVKRElpd2labWx1WjJWeWNISnBiblJXWlhKemFXOXVJam94TENKbWIzSnRZWFJXWlhKemFXOXVJam96TENKcGMxTjBZV2RwYm1jaU9tWmhiSE5sTENKdFlYUm9RWFIwWVdOb2JXVnVkSE1pT25zaVFVRkJRVUZCUVVFdFFrSkNRaTAwUTBORExUaEVSRVF0UlVWRlJVVkZSVVZGUlVWRklqcDdJbWhsYVdkb2RDSTZNVEF1TlN3aWEyVjVJam9pWVdGaFlXRmhZV0ZoWVdGaFlXRmhZV0ZoWVdGaFlXRmhZV0ZoWVdGaFlXRmhZV0ZoWVdGaFlXRmhZV0ZoWVdGaFlXRmhZV0ZoWVdGaFlXRmhZV0ZoWVNJc0luZHBaSFJvSWpveU1IMTlMQ0p0WVhSb1JtbHVaMlZ5Y0hKcGJuUWlPaUp6YUdFeU5UWXRaWGhoWTNRdGRqRTZNVGRtTkdJd01XWmtNbVppTWpnd09XWmlNREprWldSbE9UbGpNV1ExWVdOak1UZzFPR1l6TjJFM1pqUTFNR1JtTWpSaVlUZzRPRGc1WW1WaVpXTTNNQ0lzSW05d1pYSmhkR2x2YmtsRUlqb2lPRGMyTlRRek1qRXRORE15TVMwME16SXhMVUZDUTBRdFFVSkRSRVZHTVRJek5EVTJJaXdpYzI5MWNtTmxSbWx1WjJWeWNISnBiblFpT2lKemFHRXlOVFl0WlhoaFkzUXRkakU2TmpoaU1XUTVNakpoWWpnelpqbGxORFV4TVRFNFpqRXhZMll5TWpsa05qUXpaR0ppTm1VMFl6RTNNRE01Wm1SaVpUZ3lOV05oTm1Jd05qZ3hNalZsWlNKOSAtLT4KJHgkCg==",
+      "html" : "<p>x</p>\n",
+      "markdown" : "$x$\n"
+    }
+  },
+  "render" : [
+    {
+      "html" : "<h1>제목 <strong>강조</strong></h1>\n<p>안녕 &amp; <tag></p>\n",
+      "markdown" : "# 제목 **강조**\n\n안녕 & <tag>\n"
+    },
+    {
+      "html" : "<ul><li><p>첫째</p>\n</li>\n<li><p>둘째</p>\n<ul><li><p>중첩</p>\n</li>\n</ul>\n</li>\n</ul>\n",
+      "markdown" : "- 첫째\n- 둘째\n  - 중첩\n"
+    },
+    {
+      "html" : "<ul><li><input type=\"checkbox\" data-md-task=\"1\" disabled checked> <p>완료</p>\n</li>\n<li><input type=\"checkbox\" data-md-task=\"2\" disabled> <p>대기</p>\n</li>\n</ul>\n",
+      "markdown" : "- [x] 완료\n- [ ] 대기\n"
+    },
+    {
+      "html" : "<table><thead><tr><th align=\"left\">이름</th><th align=\"right\">값</th></tr></thead><tbody><tr><td align=\"left\">한글</td><td align=\"right\"><del>취소</del></td></tr></tbody></table>\n",
+      "markdown" : "| 이름 | 값 |\n| :--- | ---: |\n| 한글 | ~~취소~~ |\n"
+    },
+    {
+      "html" : "<ol start=\"3\"><li><p>항목</p>\n</li>\n<li><p>다음</p>\n</li>\n</ol>\n<blockquote><p>인용 <em>글</em></p>\n</blockquote>\n",
+      "markdown" : "3. 항목\n4. 다음\n\n> 인용 *글*\n"
+    },
+    {
+      "html" : "<pre><code class=\"language-swift\">let a = &quot;한글&quot;\n</code></pre>\n",
+      "markdown" : "```swift\nlet a = \"한글\"\n```\n"
+    },
+    {
+      "html" : "<p><a href=\"https://example.com/?a=1&amp;b=2\" title=\"제목\">연결</a></p>\n",
+      "markdown" : "[연결](https://example.com/?a=1&b=2 \"제목\")\n"
+    },
+    {
+      "html" : "<p>일반\n다음<br>\n줄</p>\n",
+      "markdown" : "일반\n다음  \n줄\n"
+    }
+  ],
+  "render_blocks" : [
+    {
+      "blocks" : [
+        {
+          "html" : "<div lang=\"ko\">원문</div>",
+          "id" : "original",
+          "label" : "원본"
+        }
+      ],
+      "html" : "<p>Intro</p>\n<div lang=\"ko\">원문</div>\n",
+      "markdown" : "Intro\n\n:::synology-block original :::\n"
+    }
+  ]
+}

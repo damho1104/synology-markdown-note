@@ -13,7 +13,7 @@ case "$MODE" in run|--verify|--debug|--logs|--telemetry|--build) ;; *) echo "usa
 cd "$ROOT_DIR"
 APP_VERSION="$(python3 "$ROOT_DIR/script/version_info.py" --base)"
 APP_COMMIT="$(python3 "$ROOT_DIR/script/version_info.py" --hash)"
-DISPLAY_VERSION="$APP_VERSION-$APP_COMMIT"
+DISPLAY_VERSION="$(python3 "$ROOT_DIR/script/version_info.py")"
 # Build and verification can run beside the user's current app. Interactive modes
 # still request a normal quit so pending editor changes are flushed first.
 if [[ "$MODE" != "--build" && "$MODE" != "--verify" ]] && pgrep -x "$EXECUTABLE_NAME" >/dev/null; then

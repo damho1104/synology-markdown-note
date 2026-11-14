@@ -25,3 +25,4 @@ profile.json
 *.keychain-db
 *.log
 .pytest_cache/
+__pycache__/

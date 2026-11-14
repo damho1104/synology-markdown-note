@@ -2,7 +2,6 @@
 
 import argparse
 from pathlib import Path
-import re
 import subprocess
 import sys
 import tempfile
@@ -11,18 +10,13 @@ import tomllib
 
 ROOT = Path(__file__).resolve().parent
 REPOSITORY = ROOT.parent
+sys.path.insert(0, str(ROOT / "src"))
+from synonote_cli.build_version import build_version
 
 
 def display_version() -> str:
     base = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
-    if (REPOSITORY / ".git").exists():
-        commit = subprocess.check_output(["git", "rev-parse", "--short=7", "HEAD"], cwd=REPOSITORY, text=True).strip()
-        result = f"{base}-{commit}"
-    else:
-        result = (ROOT / "src/synonote_cli/_version_build.txt").read_text().strip()
-    if not re.fullmatch(rf"{re.escape(base)}-[0-9a-f]{{7,40}}", result):
-        raise ValueError("Invalid bundled version")
-    return result
+    return build_version(base, REPOSITORY, ROOT / "src/synonote_cli/_version_build.txt")
 
 
 if __name__ == "__main__":

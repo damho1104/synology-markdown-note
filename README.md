@@ -146,11 +146,14 @@ uv run --locked pytest -q tests
 - **macOS:** Swift 테스트 실행.
 - **Ubuntu 24.04 / Python 3.13:** CLI 잠금 파일 확인 및 테스트 실행.
 
-현재 자동 릴리스·코드 서명·공증·설치 파일 업로드는 구성되어 있지 않습니다. CI 테스트 통과와 배포 파일의 설치·NAS 동작 검증은 별개입니다.
+[Release 워크플로](.github/workflows/release.yml)는 `v1.2.17` 또는 `1.2.17`처럼 **commit 접미사 없는 버전 태그**를 푸시하면 테스트·빌드·체크섬 검증 후 GitHub Releases에 자동 업로드합니다. 태그 버전은 `cli/pyproject.toml`의 버전과 일치해야 합니다. macOS arm64 앱(DMG·ZIP)과 CLI, Ubuntu 22.04·24.04 amd64 CLI를 게시하며, 릴리스 앱·CLI의 표시 버전에도 commit 접미사를 붙이지 않습니다.
+
+Ubuntu CLI는 GitHub의 Ubuntu 24.04 러너 안에서 각 대상 버전의 컨테이너로 빌드합니다. macOS 앱은 릴리스 전용 자체 서명 인증서를 사용하며 Apple 공증은 하지 않습니다. 수동 실행은 산출물 검증만 수행하고 릴리스를 게시하지 않습니다. 설정과 태깅 절차는 [GitHub 릴리스 안내](docs/github-release.ko.md)를 참고하세요. CI 테스트 통과와 실제 기기의 설치·NAS 동작 검증은 별개입니다.
 
 ## 추가 문서
 
 - [설치·배포 상세 안내](docs/distribution.ko.md)
+- [GitHub 자동 릴리스·태그 안내](docs/github-release.ko.md)
 - [개발 환경·빌드 안내](docs/development-signing.ko.md)
 - [동기화·저장 동작](docs/nas-contract.ko.md)
 - [진단 로그](docs/diagnostics.ko.md)

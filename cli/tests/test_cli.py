@@ -2,18 +2,17 @@ import json
 from importlib.metadata import version as package_version
 from pathlib import Path
 import re
-import subprocess
 import sys
 
 import pytest
 
 from synonote_cli import main
+from synonote_cli.build_version import build_version
 
 
 def test_version_command_matches_package_and_current_git_commit(monkeypatch, capsys):
     root = Path(__file__).resolve().parents[2]
-    commit = subprocess.check_output(["git", "rev-parse", "--short=7", "HEAD"], cwd=root, text=True).strip()
-    expected = f"{package_version('synonote-cli')}-{commit}"
+    expected = build_version(package_version('synonote-cli'), root)
     monkeypatch.setattr(main, "connected", lambda: pytest.fail("version must not connect to NAS"))
     monkeypatch.setattr(sys, "argv", ["synonote", "version"])
     main.run()
@@ -29,7 +28,7 @@ def test_version_command_json_output(monkeypatch, capsys):
     assert result["schema_version"] == 1
     assert result["action"] == "version"
     assert result["status"] == "ok"
-    assert re.fullmatch(r"\d+\.\d+\.\d+-[0-9a-f]{7,}", result["version"])
+    assert re.fullmatch(r"\d+\.\d+\.\d+(?:-[0-9a-f]{7,})?", result["version"])
 
 
 def test_missing_required_arguments_return_one_json_object(monkeypatch, capsys):

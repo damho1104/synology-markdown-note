@@ -1,0 +1,179 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*', '[0-9]*']
+  # Build and verify artifacts without publishing a release.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        name: Validate release tag against project version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          base=$(python3 script/version_info.py --base)
+          tag="v$base"
+          if [[ "$REF_TYPE" == tag ]]; then tag="$REF_NAME"; fi
+          version=$(SYNOLOGY_NOTE_RELEASE_TAG="$tag" python3 script/version_info.py)
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  linux:
+    needs: version
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        ubuntu: ['22.04', '24.04']
+    # The container selects the build's libc/userland, independently of the host.
+    container: ubuntu:${{ matrix.ubuntu }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      SYNOLOGY_NOTE_RELEASE_TAG: ${{ needs.version.outputs.tag }}
+      PLATFORM: ubuntu-${{ matrix.ubuntu }}-amd64
+      UBUNTU_VERSION: ${{ matrix.ubuntu }}
+    steps:
+      - name: Install build tools in the target Ubuntu environment
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl git build-essential binutils
+          source /etc/os-release
+          test "$VERSION_ID" = "$UBUNTU_VERSION"
+          test "$(uname -m)" = x86_64
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: cli/uv.lock
+      - name: Test and build CLI
+        working-directory: cli
+        run: |
+          uv python install 3.13
+          uv lock --check
+          uv run --locked pytest -q tests
+          uv run --locked python build_onefile.py
+      - name: Smoke test and stage release assets
+        run: |
+          uv run --project cli --locked python script/release_assets.py \
+            --tag "$SYNOLOGY_NOTE_RELEASE_TAG" --platform "$PLATFORM" \
+            --cli cli/dist/synonote --output release-assets
+          cd release-assets
+          sha256sum --check "SHA256SUMS-$PLATFORM"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ env.PLATFORM }}
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 7
+
+  macos:
+    needs: version
+    runs-on: macos-15
+    env:
+      SYNOLOGY_NOTE_RELEASE_TAG: ${{ needs.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: cli/uv.lock
+      - name: Verify arm64 runner and test Swift
+        run: |
+          test "$(uname -m)" = arm64
+          ./script/test.sh
+      - name: Test and build CLI
+        working-directory: cli
+        run: |
+          uv python install 3.13
+          uv lock --check
+          uv run --locked pytest -q tests
+          uv run --locked python build_onefile.py
+      - name: Import dedicated release signing identity
+        env:
+          MACOS_SIGNING_P12_BASE64: ${{ secrets.MACOS_SIGNING_P12_BASE64 }}
+          MACOS_SIGNING_P12_PASSWORD: ${{ secrets.MACOS_SIGNING_P12_PASSWORD }}
+          MACOS_SIGNING_CERT_SHA1: ${{ secrets.MACOS_SIGNING_CERT_SHA1 }}
+        run: python3 script/ci_signing.py
+      - name: Build signed app and verify DMG and ZIP
+        run: |
+          python3 script/build_credential_helper.py
+          ./script/package_app.sh --build --output "$RUNNER_TEMP/app-package"
+      - name: Smoke test and stage release assets
+        run: |
+          python3 script/release_assets.py \
+            --tag "$SYNOLOGY_NOTE_RELEASE_TAG" --platform macos-arm64 \
+            --cli cli/dist/synonote --app-package "$RUNNER_TEMP/app-package" \
+            --output release-assets
+          cd release-assets
+          shasum -a 256 --check SHA256SUMS-macos-arm64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-macos-arm64
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 7
+      - name: Remove temporary signing keychain
+        if: always()
+        run: python3 script/ci_signing.py cleanup
+
+  publish:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: [version, linux, macos]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ needs.version.outputs.tag }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: release-assets
+      - name: Verify complete asset set and checksums
+        working-directory: release-assets
+        env:
+          RELEASE_VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          for platform in ubuntu-22.04-amd64 ubuntu-24.04-amd64 macos-arm64; do
+            test -s "synonote-cli-$RELEASE_TAG-$platform"
+            sha256sum --check "SHA256SUMS-$platform"
+          done
+          test -s "SynologyMarkdownNote-$RELEASE_VERSION-arm64.dmg"
+          test -s "SynologyMarkdownNote-$RELEASE_VERSION-arm64.zip"
+      - name: Upload all assets to a draft, then publish
+        run: |
+          # Resume an interrupted draft; never replace an already published release.
+          if gh release view "$RELEASE_TAG" --json isDraft > release.json 2> release-error.txt; then
+            test "$(jq -r .isDraft release.json)" = true
+          else
+            # Creation fails safely if the tag is missing or the API is unavailable.
+            gh release create "$RELEASE_TAG" --verify-tag --draft \
+              --title "$RELEASE_TAG" --generate-notes \
+              --notes 'macOS arm64 app and CLI; Ubuntu 22.04/24.04 amd64 CLI. macOS app uses a dedicated self-signed release certificate and is not Apple notarized. See distribution.ko.md and SHA256SUMS-*.'
+          fi
+          gh release upload "$RELEASE_TAG" release-assets/* --clobber
+          gh release edit "$RELEASE_TAG" --draft=false --latest

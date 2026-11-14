@@ -71,7 +71,7 @@ if [[ "$BUILD" == 1 ]]; then
     # the inputs as well as isolating SwiftPM's scratch directory. Do not copy
     # dist, user data, signing private keys, or the existing SwiftPM build tree.
     SNAPSHOT="$WORK/source"
-    mkdir -p "$SNAPSHOT/script" "$SNAPSHOT/tools" "$SNAPSHOT/.build/credential-helper" "$SNAPSHOT/cli"
+    mkdir -p "$SNAPSHOT/script" "$SNAPSHOT/tools" "$SNAPSHOT/.build/credential-helper" "$SNAPSHOT/cli/src/synonote_cli"
     ditto "$ROOT_DIR/Sources" "$SNAPSHOT/Sources"
     # SwiftPM resolves every declared target's path even for --product builds.
     ditto "$ROOT_DIR/Tests" "$SNAPSHOT/Tests"
@@ -81,6 +81,7 @@ if [[ "$BUILD" == 1 ]]; then
         cp "$ROOT_DIR/script/$name" "$SNAPSHOT/script/$name"
     done
     cp "$ROOT_DIR/cli/pyproject.toml" "$SNAPSHOT/cli/pyproject.toml"
+    cp "$ROOT_DIR/cli/src/synonote_cli/build_version.py" "$SNAPSHOT/cli/src/synonote_cli/build_version.py"
     cp "$HELPER_CACHE" "$SNAPSHOT/.build/credential-helper/SynologyCredentialHelper"
     cp "$ROOT_DIR/.build/credential-helper/manifest.json" "$SNAPSHOT/.build/credential-helper/manifest.json"
     cmp "$HELPER_CACHE" "$SNAPSHOT/.build/credential-helper/SynologyCredentialHelper"
@@ -112,7 +113,7 @@ fi
 
 BASE_VERSION="$(python3 "$ROOT_DIR/script/version_info.py" --base)"
 APP_INFO="$(python3 - "$APP" "$WORK/result/manifest.json" "$BUILD" "$BASE_VERSION" <<'PY'
-import hashlib, json, pathlib, plistlib, re, subprocess, sys
+import hashlib, json, os, pathlib, plistlib, re, subprocess, sys
 app, manifest = map(pathlib.Path, sys.argv[1:3])
 contents = app / 'Contents'
 info = plistlib.loads((contents / 'Info.plist').read_bytes())
@@ -127,10 +128,12 @@ for key, value in expected.items():
     if info.get(key) != value: raise SystemExit(f'{key}: expected {value!r}, got {info.get(key)!r}')
 display_version = info.get('SynologyDisplayVersion', '')
 commit = info.get('SynologyGitCommit', '')
-if not re.fullmatch(rf'{re.escape(base_version)}-[0-9a-f]{{7,40}}', display_version):
+if not re.fullmatch(rf'{re.escape(base_version)}(?:-[0-9a-f]{{7,40}})?', display_version):
     raise SystemExit(f'Invalid display version: {display_version!r}')
-if display_version != f'{base_version}-{commit}':
+if display_version not in (base_version, f'{base_version}-{commit}'):
     raise SystemExit('Bundle display version and git commit differ')
+if os.environ.get('SYNOLOGY_NOTE_RELEASE_TAG') and display_version != base_version:
+    raise SystemExit('Release bundle must not include a commit suffix')
 binary = contents / 'MacOS/SynologyNote'
 helper = contents / 'Helpers/SynologyCredentialHelper'
 icon = contents / 'Resources/AppIcon.icns'

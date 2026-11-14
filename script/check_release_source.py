@@ -6,10 +6,6 @@ import subprocess
 
 
 def validate(repository: Path, event: str, ref_type: str, ref_name: str) -> None:
-    if event == "workflow_dispatch":
-        if ref_type == "branch" and ref_name in {"develop", "main"}:
-            return
-        raise ValueError("Manual artifact validation must run on develop or main")
     if event != "push" or ref_type != "tag":
         raise ValueError("Publishing requires a version tag pushed from main")
     result = subprocess.run(

@@ -39,12 +39,14 @@ def test_main_commit_can_be_released_after_main_advances(repository):
     policy.validate(path, "push", "tag", "v1.2.17")
 
 
-@pytest.mark.parametrize("branch", ["develop", "main"])
-def test_manual_validation_allows_both_long_lived_branches(tmp_path, branch):
-    policy.validate(tmp_path, "workflow_dispatch", "branch", branch)
-
-
-@pytest.mark.parametrize("ref_type,ref_name", [("tag", "v1.2.17"), ("branch", "feature/test")])
-def test_manual_validation_rejects_other_refs(tmp_path, ref_type, ref_name):
-    with pytest.raises(ValueError, match="develop or main"):
+@pytest.mark.parametrize("ref_type,ref_name", [
+    ("branch", "develop"), ("branch", "main"), ("tag", "v1.2.17"), ("branch", "feature/test"),
+])
+def test_manual_release_is_always_rejected(tmp_path, ref_type, ref_name):
+    with pytest.raises(ValueError, match="version tag pushed from main"):
         policy.validate(tmp_path, "workflow_dispatch", ref_type, ref_name)
+
+
+def test_branch_push_cannot_start_a_release(tmp_path):
+    with pytest.raises(ValueError, match="version tag pushed from main"):
+        policy.validate(tmp_path, "push", "branch", "main")

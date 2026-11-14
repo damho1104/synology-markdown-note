@@ -48,6 +48,10 @@ jobs:
       - name: Test Swift
         run: |
           swift --version
-          ./script/test.sh
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            ./script/test.sh --no-parallel
+          else
+            ./script/test.sh
+          fi
       - name: Build Swift release configuration
         run: ./script/swift.sh build -c release

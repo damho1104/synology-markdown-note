@@ -9,17 +9,26 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash
+
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   version:
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, docker-compose]
+    container: ubuntu:24.04
     outputs:
       tag: ${{ steps.version.outputs.tag }}
       version: ${{ steps.version.outputs.version }}
     steps:
+      - name: Install version validation tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates git python3
       - uses: actions/checkout@v4
       - id: version
         name: Validate release tag against project version
@@ -36,7 +45,7 @@ jobs:
 
   linux:
     needs: version
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, docker-compose]
     strategy:
       fail-fast: false
       matrix:
@@ -86,18 +95,19 @@ jobs:
 
   macos:
     needs: version
-    runs-on: macos-15
+    runs-on: [self-hosted, macOS, ARM64]
     env:
       SYNOLOGY_NOTE_RELEASE_TAG: ${{ needs.version.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
           cache-dependency-glob: cli/uv.lock
+      - name: Select managed Python for build scripts
+        run: |
+          uv python install 3.13
+          echo "$(dirname "$(uv python find 3.13)")" >> "$GITHUB_PATH"
       - name: Verify arm64 runner and test Swift
         run: |
           test "$(uname -m)" = arm64
@@ -118,12 +128,12 @@ jobs:
       - name: Build signed app and verify DMG and ZIP
         run: |
           python3 script/build_credential_helper.py
-          ./script/package_app.sh --build --output "$RUNNER_TEMP/app-package"
+          ./script/package_app.sh --build --output "$RUNNER_TEMP/app-package-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
       - name: Smoke test and stage release assets
         run: |
           python3 script/release_assets.py \
             --tag "$SYNOLOGY_NOTE_RELEASE_TAG" --platform macos-arm64 \
-            --cli cli/dist/synonote --app-package "$RUNNER_TEMP/app-package" \
+            --cli cli/dist/synonote --app-package "$RUNNER_TEMP/app-package-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
             --output release-assets
           cd release-assets
           shasum -a 256 --check SHA256SUMS-macos-arm64
@@ -140,7 +150,8 @@ jobs:
   publish:
     if: github.event_name == 'push' && github.ref_type == 'tag'
     needs: [version, linux, macos]
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, docker-compose]
+    container: ubuntu:24.04
     permissions:
       contents: write
     env:
@@ -148,6 +159,10 @@ jobs:
       GH_REPO: ${{ github.repository }}
       RELEASE_TAG: ${{ needs.version.outputs.tag }}
     steps:
+      - name: Install publishing tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates gh jq
       - uses: actions/download-artifact@v4
         with:
           pattern: release-*

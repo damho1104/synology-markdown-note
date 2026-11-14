@@ -141,14 +141,14 @@ uv sync --locked
 uv run --locked pytest -q tests
 ```
 
-[GitHub Actions CI](.github/workflows/ci.yml)는 `develop` 브랜치에 대한 push, Pull Request, 수동 실행 시 GitHub 호스팅 러너에서 다음을 검사합니다.
+[GitHub Actions CI](.github/workflows/ci.yml)는 `develop` 브랜치에 대한 push, Pull Request, 수동 실행 시 저장소에 등록한 **셀프호스팅 러너**에서 다음을 검사합니다.
 
 - **macOS:** Swift 테스트 실행.
 - **Ubuntu 24.04 / Python 3.13:** CLI 잠금 파일 확인 및 테스트 실행.
 
 [Release 워크플로](.github/workflows/release.yml)는 `v1.2.17` 또는 `1.2.17`처럼 **commit 접미사 없는 버전 태그**를 푸시하면 테스트·빌드·체크섬 검증 후 GitHub Releases에 자동 업로드합니다. 태그 버전은 `cli/pyproject.toml`의 버전과 일치해야 합니다. macOS arm64 앱(DMG·ZIP)과 CLI, Ubuntu 22.04·24.04 amd64 CLI를 게시하며, 릴리스 앱·CLI의 표시 버전에도 commit 접미사를 붙이지 않습니다.
 
-Ubuntu CLI는 GitHub의 Ubuntu 24.04 러너 안에서 각 대상 버전의 컨테이너로 빌드합니다. macOS 앱은 릴리스 전용 자체 서명 인증서를 사용하며 Apple 공증은 하지 않습니다. 수동 실행은 산출물 검증만 수행하고 릴리스를 게시하지 않습니다. 설정과 태깅 절차는 [GitHub 릴리스 안내](docs/github-release.ko.md)를 참고하세요. CI 테스트 통과와 실제 기기의 설치·NAS 동작 검증은 별개입니다.
+Ubuntu CLI는 Linux X64 셀프호스팅 러너 안에서 각 대상 버전의 컨테이너로 빌드하며, macOS 앱·CLI는 macOS ARM64 셀프호스팅 러너에서 빌드합니다. 버전 검증과 릴리스 게시도 Linux 셀프호스팅 러너에서 실행합니다. macOS 앱은 릴리스 전용 자체 서명 인증서를 사용하며 Apple 공증은 하지 않습니다. 수동 실행은 산출물 검증만 수행하고 릴리스를 게시하지 않습니다. 설정과 태깅 절차는 [GitHub 릴리스 안내](docs/github-release.ko.md)를 참고하세요. CI 테스트 통과와 실제 기기의 설치·NAS 동작 검증은 별개입니다.
 
 ## 추가 문서
 

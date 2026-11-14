@@ -1,6 +1,6 @@
 # GitHub 자동 릴리스
 
-`.github/workflows/release.yml`은 GitHub 호스팅 러너에서 실행합니다.
+`.github/workflows/release.yml`은 GitHub 저장소에 등록한 **셀프호스팅 러너**에서 실행합니다. 버전 검증·Linux 빌드·릴리스 게시에는 `[self-hosted, Linux, X64, docker-compose]`, macOS 빌드에는 `[self-hosted, macOS, ARM64]` 라벨을 사용합니다. Linux 러너에는 Docker가, macOS 러너에는 호환되는 Swift 개발 도구가 필요합니다.
 
 ## 태그와 버전
 
@@ -21,9 +21,9 @@ git push origin v1.2.17
 
 | 대상 | GitHub 실행 환경 | 게시 파일 |
 | --- | --- | --- |
-| macOS arm64 | `macos-15` arm64 러너 | 앱 DMG·ZIP, CLI, 앱 manifest·설치 안내, `SHA256SUMS-macos-arm64` |
-| Ubuntu 22.04 amd64 | `ubuntu-24.04` 호스트의 `ubuntu:22.04` 컨테이너 | CLI, `SHA256SUMS-ubuntu-22.04-amd64` |
-| Ubuntu 24.04 amd64 | `ubuntu-24.04` 호스트의 `ubuntu:24.04` 컨테이너 | CLI, `SHA256SUMS-ubuntu-24.04-amd64` |
+| macOS arm64 | macOS ARM64 셀프호스팅 러너 | 앱 DMG·ZIP, CLI, 앱 manifest·설치 안내, `SHA256SUMS-macos-arm64` |
+| Ubuntu 22.04 amd64 | Linux X64 셀프호스팅 러너의 `ubuntu:22.04` 컨테이너 | CLI, `SHA256SUMS-ubuntu-22.04-amd64` |
+| Ubuntu 24.04 amd64 | Linux X64 셀프호스팅 러너의 `ubuntu:24.04` 컨테이너 | CLI, `SHA256SUMS-ubuntu-24.04-amd64` |
 
 예시 파일명은 `SynologyMarkdownNote-1.2.17-arm64.dmg`, `synonote-cli-v1.2.17-ubuntu-22.04-amd64`입니다. CLI 파일명에는 푸시한 태그를 그대로 사용합니다.
 
@@ -45,8 +45,8 @@ Actions의 수동 실행은 동일한 빌드·검증 후 7일 보관되는 Actio
 python3 script/create_release_signing.py --repo OWNER/REPOSITORY
 ```
 
-이 스크립트는 새 자체 서명 인증서를 생성해 위 Secrets에 등록하고 임시 개인 키 파일을 정리합니다. 기존 릴리스 Secrets가 있으면 인증서를 교체하지 않고 중단합니다. 러너는 인증서 지문을 확인하고 임시 키체인에서 서명한 뒤 키체인을 삭제합니다. 서명 인증서는 릴리스 간에 동일하게 유지해야 키체인 접근 호환성을 유지할 수 있습니다.
+이 스크립트는 새 자체 서명 인증서를 생성해 위 Secrets에 등록하고 임시 개인 키 파일을 정리합니다. 기존 릴리스 Secrets가 있으면 인증서를 교체하지 않고 중단합니다. 러너는 인증서 지문을 확인하고 실행별 임시 키체인에서 서명한 뒤 해당 키체인을 검색 목록에서 제거하고 삭제합니다. 러너의 다른 키체인은 유지합니다. 서명 인증서는 릴리스 간에 동일하게 유지해야 키체인 접근 호환성을 유지할 수 있습니다.
 
 이 자체 서명은 **Apple Developer ID 서명이나 Apple 공증이 아닙니다.** 실제 다른 Mac 설치, NAS 접속, 기존 버전에서의 키체인 승계는 별도로 검증해야 합니다. [설치·배포 안내](distribution.ko.md)를 함께 확인하세요.
 
-참고: [GitHub 컨테이너 작업](https://docs.github.com/en/actions/how-tos/write-workflows/choose-where-workflows-run/run-jobs-in-a-container), [GitHub 호스팅 러너](https://docs.github.com/en/actions/reference/runners/github-hosted-runners), [GitHub CLI 릴리스 생성](https://cli.github.com/manual/gh_release_create).
+참고: [GitHub 컨테이너 작업](https://docs.github.com/en/actions/how-tos/write-workflows/choose-where-workflows-run/run-jobs-in-a-container), [GitHub 셀프호스팅 러너](https://docs.github.com/en/actions/concepts/runners/self-hosted-runners), [GitHub CLI 릴리스 생성](https://cli.github.com/manual/gh_release_create).

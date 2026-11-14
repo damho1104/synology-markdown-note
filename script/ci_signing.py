@@ -21,10 +21,17 @@ def security(*args: str) -> str:
 
 
 def main() -> None:
-    directory = Path(os.environ["RUNNER_TEMP"]) / "synonote-release-signing"
+    run = f"{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}"
+    directory = Path(os.environ["RUNNER_TEMP"]) / f"synonote-release-signing-{run}"
     keychain = directory / "release.keychain-db"
     if sys.argv[1:] == ["cleanup"]:
         if keychain.exists():
+            # Preserve the persistent runner's other keychains and any changes
+            # made while the job was running; remove only our temporary entry.
+            current = shlex.split(security("list-keychains", "-d", "user"))
+            remaining = [item for item in current if item != str(keychain)]
+            if remaining != current:
+                security("list-keychains", "-d", "user", "-s", *remaining)
             security("delete-keychain", str(keychain))
         shutil.rmtree(directory, ignore_errors=True)
         return

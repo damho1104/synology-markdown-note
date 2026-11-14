@@ -15,8 +15,13 @@ concurrency:
 
 jobs:
   cli:
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, docker-compose]
+    container: ubuntu:24.04
     steps:
+      - name: Install container build tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl git build-essential binutils
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
         with:
@@ -30,7 +35,7 @@ jobs:
           uv run --locked pytest -q tests
 
   swift:
-    runs-on: macos-latest
+    runs-on: [self-hosted, macOS, ARM64]
     steps:
       - uses: actions/checkout@v4
       - name: Test Swift

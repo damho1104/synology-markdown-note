@@ -30,13 +30,14 @@ jobs:
         with:
           enable-cache: ${{ github.event_name != 'pull_request' }}
           cache-dependency-glob: cli/uv.lock
-      - name: Test CLI
+      - name: Test and build CLI
         working-directory: cli
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           uv python install 3.13
           uv lock --check
           uv run --locked pytest -q tests
+          uv run --locked python build_onefile.py
 
   swift:
     runs-on: ${{ github.event_name == 'pull_request' && 'macos-latest' || fromJSON('["self-hosted", "macOS", "ARM64"]') }}
@@ -48,3 +49,5 @@ jobs:
         run: |
           swift --version
           ./script/test.sh
+      - name: Build Swift release configuration
+        run: ./script/swift.sh build -c release

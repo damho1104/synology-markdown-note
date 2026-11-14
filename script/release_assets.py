@@ -12,7 +12,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "cli" / "src"))
 from synonote_cli.build_version import release_version
 
-PLATFORMS = ("macos-arm64", "ubuntu-22.04-amd64", "ubuntu-24.04-amd64")
+PLATFORMS = ("macos-arm64", "ubuntu-22.04-amd64", "ubuntu-24.04-amd64",
+             "linux-glibc2.28-amd64")
 
 
 def stage(tag: str, platform: str, cli: Path, output: Path, app_package: Path | None = None) -> None:

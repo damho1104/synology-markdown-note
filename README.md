@@ -86,7 +86,7 @@ synonote version
 
 #### 릴리스 실행 파일 설치
 
-[Releases](https://github.com/damho1104/synology-markdown-note/releases)에 CLI 실행 파일이 게시되어 있다면 자신의 OS·버전·아키텍처에 맞는 파일을 선택하고 제공된 SHA-256 체크섬을 확인하세요. Ubuntu용 파일은 릴리스에서 명시한 Ubuntu 버전과 아키텍처에 맞춰 선택해야 합니다. 파일명과 설치 절차는 해당 릴리스 안내를 따르세요.
+[Releases](https://github.com/damho1104/synology-markdown-note/releases)에 CLI 실행 파일이 게시되어 있다면 자신의 OS·버전·아키텍처에 맞는 파일을 선택하고 제공된 SHA-256 체크섬을 확인하세요. 기존 Ubuntu 전용 파일 외에 다음 릴리스부터 **Linux x86_64 / glibc 2.28 이상용 공용 실행 파일**을 추가합니다. Debian·Ubuntu·AlmaLinux·Rocky Linux·Fedora·openSUSE의 12개 컨테이너 환경을 검사합니다. 대상 버전과 설치 방법은 [Linux CLI 설치 안내](cli/README.md#여러-linux-배포판용-x86_64-실행-파일)를 참고하세요.
 
 자세한 내용은 [CLI 설치·빌드 안내](cli/README.md#설치)를 참고하세요.
 
@@ -146,7 +146,7 @@ uv run --locked pytest -q tests
 - **macOS:** Swift 테스트 실행.
 - **Ubuntu 24.04 / Python 3.13:** CLI 잠금 파일 확인 및 테스트 실행.
 
-[Release 워크플로](.github/workflows/release.yml)는 `v1.2.17` 또는 `1.2.17`처럼 **commit 접미사 없는 버전 태그**를 푸시하면 테스트·빌드·체크섬 검증 후 GitHub Releases에 자동 업로드합니다. 태그 버전은 `cli/pyproject.toml`의 버전과 일치해야 합니다. macOS arm64 앱(DMG·ZIP)과 CLI, Ubuntu 22.04·24.04 amd64 CLI를 게시하며, 릴리스 앱·CLI의 표시 버전에도 commit 접미사를 붙이지 않습니다.
+[Release 워크플로](.github/workflows/release.yml)는 `v1.2.17` 또는 `1.2.17`처럼 **commit 접미사 없는 버전 태그**를 푸시하면 테스트·빌드·체크섬 검증 후 GitHub Releases에 자동 업로드합니다. 태그 버전은 `cli/pyproject.toml`의 버전과 일치해야 합니다. macOS arm64 앱(DMG·ZIP)과 CLI, Ubuntu 22.04·24.04 amd64 CLI, Linux x86_64 / glibc 2.28+ 공용 CLI를 게시하며, 릴리스 앱·CLI의 표시 버전에도 commit 접미사를 붙이지 않습니다.
 
 Ubuntu CLI는 Linux X64 셀프호스팅 러너 안에서 각 대상 버전의 컨테이너로 빌드하며, macOS 앱·CLI는 macOS ARM64 셀프호스팅 러너에서 빌드합니다. 버전 검증과 릴리스 게시도 Linux 셀프호스팅 러너에서 실행합니다. macOS 앱은 릴리스 전용 자체 서명 인증서를 사용하며 Apple 공증은 하지 않습니다. 수동 실행은 산출물 검증만 수행하고 릴리스를 게시하지 않습니다. 설정과 태깅 절차는 [GitHub 릴리스 안내](docs/github-release.ko.md)를 참고하세요. CI 테스트 통과와 실제 기기의 설치·NAS 동작 검증은 별개입니다.
 

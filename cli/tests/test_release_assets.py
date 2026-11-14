@@ -27,13 +27,14 @@ def test_release_rejects_development_binary_before_staging(tmp_path):
     assert not output.exists()
 
 
-def test_release_asset_name_and_checksum_match_tag(tmp_path):
+@pytest.mark.parametrize("platform", ["ubuntu-24.04-amd64", "linux-glibc2.28-amd64"])
+def test_release_asset_name_and_checksum_match_tag(tmp_path, platform):
     binary = executable(tmp_path, BASE)
     output = tmp_path / "release"
-    assets.stage(f"v{BASE}", "ubuntu-24.04-amd64", binary, output)
-    name = f"synonote-cli-v{BASE}-ubuntu-24.04-amd64"
+    assets.stage(f"v{BASE}", platform, binary, output)
+    name = f"synonote-cli-v{BASE}-{platform}"
     assert (output / name).stat().st_mode & 0o111
-    assert (output / "SHA256SUMS-ubuntu-24.04-amd64").read_text() == (
+    assert (output / f"SHA256SUMS-{platform}").read_text() == (
         f"{hashlib.sha256(binary.read_bytes()).hexdigest()}  {name}\n"
     )
 

@@ -97,6 +97,65 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  linux-portable:
+    needs: version
+    runs-on: [self-hosted, Linux, X64, docker-compose]
+    container: quay.io/pypa/manylinux_2_28_x86_64:latest
+    env:
+      SYNOLOGY_NOTE_RELEASE_TAG: ${{ needs.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test and build portable Linux x86_64 CLI on glibc 2.28
+        run: bash script/build_linux_portable.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-linux-glibc2.28-amd64
+          path: .build/release-assets/linux-glibc2.28-amd64/*
+          if-no-files-found: error
+          retention-days: 7
+
+  linux-compatibility:
+    needs: [version, linux-portable]
+    runs-on: [self-hosted, Linux, X64, docker-compose]
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - debian:11-slim
+          - debian:12-slim
+          - debian:13-slim
+          - ubuntu:20.04
+          - ubuntu:22.04
+          - ubuntu:24.04
+          - almalinux:8
+          - almalinux:9
+          - rockylinux:8
+          - rockylinux:9
+          - fedora:43
+          - opensuse/leap:16.0
+    env:
+      RELEASE_TAG: ${{ needs.version.outputs.tag }}
+      RELEASE_VERSION: ${{ needs.version.outputs.version }}
+      TEST_IMAGE: ${{ matrix.image }}
+    steps:
+      - name: Restore workspace ownership after container builds
+        run: sudo chown -R --no-dereference "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-linux-glibc2.28-amd64
+          path: .build/linux-compatibility
+      - name: Verify frozen CLI in a clean distribution without Python
+        run: |
+          cd .build/linux-compatibility
+          sha256sum --check SHA256SUMS-linux-glibc2.28-amd64
+          chmod +x "synonote-cli-$RELEASE_TAG-linux-glibc2.28-amd64"
+          docker run --rm --platform linux/amd64 \
+            --volume "$GITHUB_WORKSPACE:/test:ro" \
+            "$TEST_IMAGE" sh /test/script/smoke_linux_binary.sh \
+            "/test/.build/linux-compatibility/synonote-cli-$RELEASE_TAG-linux-glibc2.28-amd64" \
+            "$RELEASE_VERSION"
+
   macos:
     needs: version
     runs-on: [self-hosted, macOS, ARM64]
@@ -153,7 +212,7 @@ jobs:
 
   publish:
     if: github.event_name == 'push' && github.ref_type == 'tag'
-    needs: [version, linux, macos]
+    needs: [version, linux, linux-compatibility, macos]
     runs-on: [self-hosted, Linux, X64, docker-compose]
     container: ubuntu:24.04
     permissions:
@@ -177,7 +236,7 @@ jobs:
         env:
           RELEASE_VERSION: ${{ needs.version.outputs.version }}
         run: |
-          for platform in ubuntu-22.04-amd64 ubuntu-24.04-amd64 macos-arm64; do
+          for platform in ubuntu-22.04-amd64 ubuntu-24.04-amd64 linux-glibc2.28-amd64 macos-arm64; do
             test -s "synonote-cli-$RELEASE_TAG-$platform"
             sha256sum --check "SHA256SUMS-$platform"
           done
@@ -192,7 +251,7 @@ jobs:
             # Creation fails safely if the tag is missing or the API is unavailable.
             gh release create "$RELEASE_TAG" --verify-tag --target main --draft \
               --title "$RELEASE_TAG" --generate-notes \
-              --notes 'macOS arm64 app and CLI; Ubuntu 22.04/24.04 amd64 CLI. macOS app uses a dedicated self-signed release certificate and is not Apple notarized. See distribution.ko.md and SHA256SUMS-*.'
+              --notes 'macOS arm64 app and CLI; Linux x86_64 glibc 2.28+ CLI tested on Debian, Ubuntu, AlmaLinux, Rocky Linux, Fedora and openSUSE; Ubuntu 22.04/24.04 amd64 CLI. macOS app uses a dedicated self-signed release certificate and is not Apple notarized. See distribution.ko.md and SHA256SUMS-*.'
           fi
           gh release upload "$RELEASE_TAG" release-assets/* --clobber
           gh release edit "$RELEASE_TAG" --draft=false --latest

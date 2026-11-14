@@ -34,6 +34,31 @@ synonote version
 
 macOS arm64에서는 체크섬을 `shasum -a 256 -c SHA256SUMS-macos-arm64`로 확인하고 macOS용 파일을 같은 방식으로 설치합니다. 실행 파일 이름을 바꾸기 전에 체크섬을 확인하세요.
 
+### 여러 Linux 배포판용 x86_64 실행 파일
+
+`v1.2.17` 재빌드부터 `synonote-cli-<VERSION_TAG>-linux-glibc2.28-amd64`와 `SHA256SUMS-linux-glibc2.28-amd64`를 추가로 제공합니다. Python 설치가 필요 없는 공용 실행 파일이며, **x86_64 및 glibc 2.28 이상** 환경을 대상으로 합니다. 기존 Ubuntu 전용 실행 파일도 유지합니다.
+
+릴리스 워크플로는 다음 **12개 컨테이너 환경에서 동일한 공용 실행 파일을 검증**하고, 하나라도 실패하면 게시를 중단합니다.
+
+| 계열 | 검사 환경 |
+| --- | --- |
+| Debian | 11, 12, 13 |
+| Ubuntu | 20.04, 22.04, 24.04 |
+| AlmaLinux | 8, 9 |
+| Rocky Linux | 8, 9 |
+| Fedora | 43 |
+| openSUSE Leap | 16.0 |
+
+버전·도움말, 한글 설정 경로, 파일 기반 인증 정보 삭제, SSL/HTTP 클라이언트 초기화를 확인합니다. 실제 NAS 로그인·업로드·다운로드 검증은 별도입니다. Linux Mint 등 같은 glibc 기반 파생 배포판은 별도로 검증하지 않습니다. Alpine(musl), Linux ARM64, 32비트는 지원 대상에 포함하지 않습니다.
+
+```sh
+uname -m                 # x86_64인지 확인
+getconf GNU_LIBC_VERSION # glibc 2.28 이상인지 확인
+sha256sum --check SHA256SUMS-linux-glibc2.28-amd64
+mkdir -p "$HOME/.local/bin"
+install -m 755 './synonote-cli-<VERSION_TAG>-linux-glibc2.28-amd64' "$HOME/.local/bin/synonote"
+```
+
 ### 소스에서 onefile 빌드 (선택)
 
 빌드할 때는 [uv](https://docs.astral.sh/uv/getting-started/installation/)로 Python 3.13과 잠금 파일의 의존성을 준비합니다. 사용할 OS·아키텍처에서 저장소의 `cli/` 폴더로 이동해 실행하세요.
@@ -177,7 +202,7 @@ Swift 코드가 생성한 골든 fixture 및 모의 NAS 테스트는 완료했�
 
 ## GitHub 배포
 
-공식 소스는 [GitHub 저장소](https://github.com/damho1104/synology-markdown-note)에서 관리합니다. `develop`·`main` 브랜치의 변경 사항과 Pull Request에 대해 Python CLI 및 Swift 테스트를 실행합니다. `v1.2.17` 또는 `1.2.17` 형식의 버전 태그를 `main`에 반영된 커밋에 붙여 푸시하면 macOS arm64·Ubuntu 22.04/24.04 amd64 CLI와 체크섬을 [GitHub Releases](https://github.com/damho1104/synology-markdown-note/releases)에 자동 게시합니다. 태그는 프로젝트 버전과 일치해야 하며 short commit을 붙이지 않습니다. 릴리스 실행 파일의 표시 버전도 `1.2.17`처럼 해시 없이 표시됩니다. 설정과 사용법은 [GitHub 릴리스 안내](../docs/github-release.ko.md)를 참고하세요.
+공식 소스는 [GitHub 저장소](https://github.com/damho1104/synology-markdown-note)에서 관리합니다. `develop`·`main` 브랜치의 변경 사항과 Pull Request에 대해 Python CLI 및 Swift 테스트를 실행합니다. `v1.2.17` 또는 `1.2.17` 형식의 버전 태그를 `main`에 반영된 커밋에 붙여 푸시하면 macOS arm64·Ubuntu 22.04/24.04 amd64 CLI와 Linux x86_64/glibc 2.28+ 공용 CLI 및 체크섬을 [GitHub Releases](https://github.com/damho1104/synology-markdown-note/releases)에 자동 게시합니다. 태그는 프로젝트 버전과 일치해야 하며 short commit을 붙이지 않습니다. 릴리스 실행 파일의 표시 버전도 `1.2.17`처럼 해시 없이 표시됩니다. 설정과 사용법은 [GitHub 릴리스 안내](../docs/github-release.ko.md)를 참고하세요.
 
 CLI는 macOS와 Linux에서 PyInstaller를 이용해 단일 실행 파일로 빌드할 수 있습니다. 공식 릴리스에 사용할 실행 파일 및 체크섬은 해당 OS에서 별도로 검증해야 합니다.
 

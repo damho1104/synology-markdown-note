@@ -31,12 +31,21 @@ git push origin v1.2.17
 | macOS arm64 | macOS ARM64 셀프호스팅 러너 | 앱 DMG·ZIP, CLI, 앱 manifest·설치 안내, `SHA256SUMS-macos-arm64` |
 | Ubuntu 22.04 amd64 | Linux X64 셀프호스팅 러너의 `ubuntu:22.04` 컨테이너 | CLI, `SHA256SUMS-ubuntu-22.04-amd64` |
 | Ubuntu 24.04 amd64 | Linux X64 셀프호스팅 러너의 `ubuntu:24.04` 컨테이너 | CLI, `SHA256SUMS-ubuntu-24.04-amd64` |
+| Linux x86_64 / glibc 2.28+ | 같은 Linux 러너의 `quay.io/pypa/manylinux_2_28_x86_64` 컨테이너 | 공용 CLI, `SHA256SUMS-linux-glibc2.28-amd64` |
 
 예시 파일명은 `SynologyMarkdownNote-1.2.17-arm64.dmg`, `synonote-cli-v1.2.17-ubuntu-22.04-amd64`입니다. CLI 파일명에는 푸시한 태그를 그대로 사용합니다.
 
 각 빌드 환경에서 CLI 테스트와 단일 실행 파일의 `version`·`--help` 실행을 확인합니다. macOS에서는 Swift 테스트, 중첩 코드 서명, DMG 마운트·ZIP 복원 검증도 수행합니다. 모든 빌드와 체크섬 확인이 끝난 뒤 Draft 릴리스에 파일을 업로드하고 게시합니다. 게시된 동일 태그 릴리스는 덮어쓰지 않으며, 중단된 Draft는 재실행으로 이어갈 수 있습니다.
 
 릴리스 워크플로에는 `workflow_dispatch`가 없습니다. 버전 태그 푸시가 있어야 테스트·빌드·게시가 시작됩니다. 일반 개발 검증은 CI 워크플로를 사용합니다.
+
+## Linux 공용 실행 파일 검증
+
+`script/build_linux_portable.sh`는 glibc 2.28 빌드 컨테이너에서 공유 라이브러리를 포함하는 uv 관리 CPython 3.13을 사용합니다. 이미지에 내장된 정적 CPython은 PyInstaller에 필요한 `libpython.so`가 없어 사용하지 않습니다. 임시 가상환경에서 잠금 파일과 전체 CLI 테스트를 확인하고 결과를 `synonote-cli-<TAG>-linux-glibc2.28-amd64`로 게시합니다. 기존 Ubuntu 전용 파일도 유지합니다.
+
+`linux-compatibility` 작업은 동일한 공용 바이너리를 Debian 11·12·13, Ubuntu 20.04·22.04·24.04, AlmaLinux 8·9, Rocky Linux 8·9, Fedora 43, openSUSE Leap 16.0의 깨끗한 컨테이너에서 실행합니다. 대상 컨테이너에는 Python을 설치하지 않습니다. 체크섬을 확인한 후 `script/smoke_linux_binary.sh`로 버전·하위 명령 도움말·한글 설정 경로·로그아웃과 SSL 클라이언트 초기화를 검사합니다. 접속 테스트는 사용하지 않는 로컬 포트에 대한 오류 처리를 확인하며 실제 NAS로 자격 증명을 보내지 않습니다.
+
+모든 배포판 검증이 성공해야 `publish` 작업이 시작됩니다. `v1.2.17` 재빌드부터 이 공용 실행 파일과 전용 체크섬을 기존 macOS·Ubuntu 산출물과 함께 게시합니다. 이미지 태그는 고정된 배포판 버전을 사용하지만 보안 업데이트로 내용은 갱신될 수 있습니다. 실제 NAS, Linux ARM64, Alpine/musl은 이 검증 범위에 포함하지 않습니다. [PyInstaller 안내](https://pyinstaller.org/en/stable/usage.html#making-gnu-linux-apps-forward-compatible)와 [manylinux 안내](https://github.com/pypa/manylinux)를 참고하세요.
 
 ## macOS 서명 설정
 

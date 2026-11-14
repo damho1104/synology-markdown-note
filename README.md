@@ -6,6 +6,18 @@ Synology가 제작하거나 지원하는 공식 제품이 아닌 독립적인 �
 
 macOS 앱에서는 기존 NAS의 책장·메모장·노트를 그대로 활용해 Markdown 편집, 노트 간 연결, 검색을 사용할 수 있습니다. 변경 내용은 NAS에 자동 동기화되며 오프라인 편집도 가능합니다. 별도 제공하는 **`synonote` CLI**로는 터미널에서 Markdown 파일을 업로드·다운로드하고 노트를 탐색할 수 있습니다.
 
+[다운로드](https://github.com/damho1104/synology-markdown-note/releases/latest) · [설치](#설치) · [사용 방법](#사용-방법) · [CLI 상세 안내](cli/README.md)
+
+## 화면 미리보기
+
+**Markdown 원문과 미리보기를 나란히 보며 편집합니다.** Mermaid 다이어그램과 수식을 미리보기에서 확인하고, 오른쪽 패널에서 노트 정보·연결·첨부파일을 관리할 수 있습니다.
+
+![Markdown 분할 편집 화면: 왼쪽 원문, 오른쪽 Mermaid 다이어그램과 수식 미리보기](docs/images/markdown-split-preview.png)
+
+**노트 간 연결을 전체 그래프로 탐색합니다.** 노트를 선택해 연결 관계를 확인하고 제목·메모장·태그로 원하는 노트를 찾을 수 있습니다.
+
+![전체 노트 그래프 화면: 노트와 연결 관계를 시각화하고 선택한 노트의 연결 목록 표시](docs/images/note-connection-graph.png)
+
 ## 주요 기능
 
 ### macOS 앱
@@ -25,70 +37,58 @@ macOS 앱에서는 기존 NAS의 책장·메모장·노트를 그대로 활용�
 - **지식 인덱스 생성** — 일일 요약 노트를 프로젝트·주제·연관 지식별로 정리하고, 적용 전에 변경 사항 미리 확인.
 - **스크립트 연동** — JSON 출력, 2단계 인증 및 로그인 정보 저장 지원.
 
-## 설치 및 소스 빌드
+## 설치
 
-정식 릴리스 소스는 [GitHub 저장소](https://github.com/damho1104/synology-markdown-note)의 `main`, 개발·통합 작업은 `develop` 브랜치를 사용합니다. 직접 빌드하려면 먼저 저장소를 내려받으세요.
+[최신 릴리스](https://github.com/damho1104/synology-markdown-note/releases/latest)의 **Assets**에서 아래 표에 맞는 파일과 체크섬을 다운로드하세요. **완성된 앱·CLI를 설치할 때는 소스 코드, Python, uv를 설치할 필요가 없습니다.**
 
-```shell
-git clone --branch main https://github.com/damho1104/synology-markdown-note.git
-cd synology-markdown-note
+공통으로 Synology NAS의 **Note Station**과 NAS 접속 계정이 필요합니다. 앱은 macOS용이며, Linux에서는 터미널용 CLI를 제공합니다.
+
+### 어떤 파일을 받으면 되나요?
+
+`<VERSION_TAG>`는 `v1.2.17`, `<VERSION>`은 `1.2.17`처럼 릴리스에 표시된 값으로 바꿉니다. `amd64`와 `x86_64`는 같은 CPU 아키텍처를 뜻합니다.
+
+| 사용 환경 | 다운로드 파일 | 체크섬 파일 |
+| --- | --- | --- |
+| macOS 14+ / Apple Silicon — 앱 | `SynologyMarkdownNote-<VERSION>-arm64.dmg` | `SHA256SUMS-macos-arm64` |
+| macOS / Apple Silicon — CLI | `synonote-cli-<VERSION_TAG>-macos-arm64` | `SHA256SUMS-macos-arm64` |
+| Linux / x86_64 / glibc 2.28+ — 공용 CLI | `synonote-cli-<VERSION_TAG>-linux-glibc2.28-amd64` | `SHA256SUMS-linux-glibc2.28-amd64` |
+| Ubuntu 22.04 / x86_64 — 전용 CLI | `synonote-cli-<VERSION_TAG>-ubuntu-22.04-amd64` | `SHA256SUMS-ubuntu-22.04-amd64` |
+| Ubuntu 24.04 / x86_64 — 전용 CLI | `synonote-cli-<VERSION_TAG>-ubuntu-24.04-amd64` | `SHA256SUMS-ubuntu-24.04-amd64` |
+
+**Linux 공용 CLI는 여러 배포판에서 같은 실행 파일 하나를 사용합니다.** Debian·AlmaLinux·Rocky Linux·Fedora·openSUSE 사용자는 `linux-glibc2.28-amd64` 파일을 선택하세요. Ubuntu에서도 공용 파일을 사용할 수 있으며, 22.04·24.04용 전용 파일도 별도로 제공합니다. 배포판마다 이름이 다른 실행 파일을 받을 필요는 없습니다.
+
+공용 CLI는 Debian 11·12·13, Ubuntu 20.04·22.04·24.04, AlmaLinux 8·9, Rocky Linux 8·9, Fedora 43, openSUSE Leap 16.0의 **12개 컨테이너 환경에서 기본 실행을 검증**합니다. 검사 항목은 버전·도움말·한글 설정 경로·로그아웃·SSL 클라이언트 초기화입니다. 실제 NAS 로그인·업로드·다운로드 검증은 별도입니다. Alpine(musl), Linux ARM64, 32비트용 릴리스 파일은 제공하지 않습니다.
+
+### macOS 앱 설치
+
+1. 최신 릴리스에서 `SynologyMarkdownNote-<VERSION>-arm64.dmg`를 다운로드합니다.
+2. DMG를 열고 **Synology Markdown Note.app**을 **Applications(응용 프로그램)** 폴더로 드래그합니다.
+3. 앱을 실행하고 설정에서 NAS에 로그인합니다.
+
+macOS 체크섬 파일에는 앱·CLI 등 여러 파일이 포함됩니다. DMG만 받은 경우에는 `SHA256SUMS-macos-arm64`에서 해당 DMG의 해시를 찾아 `shasum -a 256 '다운로드한 파일.dmg'` 출력과 비교하세요. 목록의 파일을 전부 받았다면 `shasum -a 256 -c SHA256SUMS-macos-arm64`로 일괄 확인할 수 있습니다.
+
+> 릴리스 앱은 자체 서명 인증서로 서명하며 Apple Developer ID 서명·공증을 받지 않았습니다. macOS가 실행을 차단하면 파일 출처를 확인한 뒤 **시스템 설정 → 개인정보 보호 및 보안**의 열기 안내를 따르세요. [설치·배포 상세 안내](docs/distribution.ko.md)
+
+### Linux CLI 설치
+
+먼저 대상 환경을 확인합니다.
+
+```sh
+uname -m                 # x86_64
+getconf GNU_LIBC_VERSION # glibc 2.28 이상
 ```
 
-[Releases](https://github.com/damho1104/synology-markdown-note/releases)에 설치 파일이 게시되어 있다면 해당 릴리스의 대상 환경·체크섬·서명 안내를 확인해 사용할 수 있습니다. 설치 파일이 없으면 아래 절차로 소스에서 빌드하세요.
+아래는 **v1.2.17 공용 CLI** 예시입니다. 선택한 릴리스의 실행 파일과 체크섬을 같은 폴더에 받은 뒤 실행합니다. 다른 버전은 파일명의 태그를 바꾸세요.
 
-### macOS 앱
-
-**필요 환경:** macOS 14 이상, Apple Silicon(M1 이상) Mac, Synology NAS의 Note Station 및 NAS 접속 계정.
-
-소스 빌드에는 macOS의 Swift 개발 도구(Xcode 또는 Command Line Tools)와 Python 3가 필요합니다. 저장소 루트에서 다음 명령을 실행합니다.
-
-```shell
-./script/build_and_run.sh --build
-```
-
-기본 빌드 결과는 `dist/Synology Markdown Note.app`입니다. 다음 명령으로 실행할 수 있습니다.
-
-```shell
-open "dist/Synology Markdown Note.app"
-```
-
-앱 번들 빌드 과정에는 키체인 접근용 Credential Helper와 로컬 개발 인증서를 이용한 서명이 포함됩니다. 서명 설정과 동작은 [개발 빌드 안내](docs/development-signing.ko.md)를 확인하세요.
-
-DMG가 릴리스에 게시된 경우에는 파일을 열고 **Synology Markdown Note.app**을 **Applications(응용 프로그램)** 폴더로 드래그한 뒤 실행하면 됩니다.
-
-> 로컬 개발 인증서로 서명한 빌드는 Apple Developer ID 서명·공증을 받은 배포판이 아닙니다. macOS가 실행을 차단하는 경우, 파일 출처를 확인한 뒤 **시스템 설정 → 개인정보 보호 및 보안** 안내를 따르세요. 자세한 내용은 [설치·배포 안내](docs/distribution.ko.md)를 참고하세요.
-
-### CLI
-
-CLI는 **PyInstaller `--onefile`로 빌드한 단일 실행 파일**로 사용할 수 있습니다. 완성된 실행 파일을 사용할 때는 Python이나 uv를 별도로 설치할 필요가 없습니다.
-
-#### 소스에서 onefile 빌드
-
-직접 빌드하려면 [uv](https://docs.astral.sh/uv/getting-started/installation/) 설치 후 저장소 루트에서 다음 명령을 실행하세요. Python 3.13을 설치하고, `build_onefile.py`가 PyInstaller에 `--onefile` 옵션을 전달해 빌드 버전을 포함합니다.
-
-```shell
-cd cli
-uv python install 3.13
-uv sync --locked
-uv run --locked python build_onefile.py
-```
-
-빌드 결과는 `cli/dist/synonote`(macOS/Linux), `cli/dist/synonote.exe`(Windows)입니다. 사용할 OS·아키텍처에서 빌드해야 합니다. macOS/Linux에서는 위의 `cli/` 폴더에서 다음과 같이 설치하면 어디서든 `synonote`로 실행할 수 있습니다.
-
-```shell
+```sh
+sha256sum --check SHA256SUMS-linux-glibc2.28-amd64
 mkdir -p "$HOME/.local/bin"
-install -m 755 ./dist/synonote "$HOME/.local/bin/synonote"
+install -m 755 ./synonote-cli-v1.2.17-linux-glibc2.28-amd64 "$HOME/.local/bin/synonote"
 export PATH="$HOME/.local/bin:$PATH"
 synonote version
 ```
 
-`PATH` 설정은 사용하는 셸의 설정 파일에도 추가하세요.
-
-#### 릴리스 실행 파일 설치
-
-[Releases](https://github.com/damho1104/synology-markdown-note/releases)에 CLI 실행 파일이 게시되어 있다면 자신의 OS·버전·아키텍처에 맞는 파일을 선택하고 제공된 SHA-256 체크섬을 확인하세요. 기존 Ubuntu 전용 파일 외에 `v1.2.17` 재빌드부터 **Linux x86_64 / glibc 2.28 이상용 공용 실행 파일**을 추가합니다. Debian·Ubuntu·AlmaLinux·Rocky Linux·Fedora·openSUSE의 12개 컨테이너 환경을 검사합니다. 대상 버전과 설치 방법은 [Linux CLI 설치 안내](cli/README.md#여러-linux-배포판용-x86_64-실행-파일)를 참고하세요.
-
-자세한 내용은 [CLI 설치·빌드 안내](cli/README.md#설치)를 참고하세요.
+`PATH` 설정은 사용하는 셸의 설정 파일에도 추가하세요. Ubuntu 전용 파일과 macOS CLI의 설치 절차는 [CLI 설치 안내](cli/README.md#설치)를 참고하세요.
 
 ## 사용 방법
 
@@ -121,8 +121,37 @@ synonote download --id NOTE_ID --output ./downloaded-report.md
 - Note Station이 설치된 NAS를 사용하며, 별도의 로컬 전용 메모장 모드는 제공하지 않습니다.
 - NAS 주소는 **HTTPS URL**을 입력해야 합니다. QuickConnect ID만으로 접속하거나 인증서 검증을 우회하는 방식은 지원하지 않습니다.
 - 암호화된 Note Station 노트의 본문 편집은 지원하지 않습니다.
-- 로그인 비밀번호와 기기 인증 정보는 macOS **키체인**에 보관할 수 있습니다.
+- macOS 앱·CLI의 로그인 비밀번호와 기기 인증 정보는 **키체인**에 보관할 수 있습니다. Linux CLI에서 `login --remember`를 사용하면 비밀번호·신뢰 기기 정보를 `~/.config/synonote/credentials.json`에 **평문으로 저장**합니다(`XDG_CONFIG_HOME` 지정 시 해당 경로 사용). 디렉터리는 `0700`, 파일은 `0600` 권한으로 제한하며 `logout`으로 삭제할 수 있습니다. [인증 정보 저장 방식](cli/README.md#로그인과-자동-로그인)
 - CLI는 파일 단위 업로드·다운로드 도구로, macOS 앱과 같은 자동 동기화·자동 병합 기능은 제공하지 않습니다.
+
+## 소스에서 빌드하기
+
+일반 설치는 위의 릴리스 파일을 사용하세요. 직접 빌드하거나 개발하려면 저장소를 복제합니다. `main`은 정식 배포 기준, `develop`은 개발·통합 브랜치입니다.
+
+```sh
+git clone --branch main https://github.com/damho1104/synology-markdown-note.git
+cd synology-markdown-note
+```
+
+macOS 앱은 호환되는 Xcode 또는 Command Line Tools와 Python 3가 필요합니다.
+
+```sh
+./script/build_and_run.sh --build
+open "dist/Synology Markdown Note.app"
+```
+
+빌드 과정의 Credential Helper·로컬 개발 인증서 설정은 [개발 빌드 안내](docs/development-signing.ko.md)를 참고하세요.
+
+CLI는 [uv](https://docs.astral.sh/uv/) 설치 후 사용할 OS·아키텍처에서 빌드합니다.
+
+```sh
+cd cli
+uv python install 3.13
+uv sync --locked
+uv run --locked python build_onefile.py
+```
+
+결과는 `cli/dist/synonote`(macOS/Linux), `cli/dist/synonote.exe`(Windows)입니다. Windows용 소스 빌드 안내는 [CLI 문서](cli/README.md#소스에서-onefile-빌드-선택)를 참고하세요. 게시된 릴리스 파일의 지원 환경은 위 다운로드 표를 기준으로 합니다.
 
 ## 개발 및 테스트
 

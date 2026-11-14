@@ -25,46 +25,46 @@ macOS 앱에서는 기존 NAS의 책장·메모장·노트를 그대로 활용�
 - **지식 인덱스 생성** — 일일 요약 노트를 프로젝트·주제·연관 지식별로 정리하고, 적용 전에 변경 사항 미리 확인.
 - **스크립트 연동** — JSON 출력, 2단계 인증 및 로그인 정보 저장 지원.
 
-## 설치 방법
+## 설치 및 소스 빌드
+
+소스와 개발 작업은 [GitHub 저장소](https://github.com/damho1104/synology-markdown-note)의 `develop` 브랜치를 기준으로 합니다. 직접 빌드하려면 먼저 저장소를 내려받으세요.
+
+```shell
+git clone --branch develop https://github.com/damho1104/synology-markdown-note.git
+cd synology-markdown-note
+```
+
+[Releases](https://github.com/damho1104/synology-markdown-note/releases)에 설치 파일이 게시되어 있다면 해당 릴리스의 대상 환경·체크섬·서명 안내를 확인해 사용할 수 있습니다. 설치 파일이 없으면 아래 절차로 소스에서 빌드하세요.
 
 ### macOS 앱
 
 **필요 환경:** macOS 14 이상, Apple Silicon(M1 이상) Mac, Synology NAS의 Note Station 및 NAS 접속 계정.
 
-1. [Releases](https://github.com/damho1104/synology-markdown-note/releases)에서 배포 파일이 게시된 경우 **macOS arm64 DMG** 파일을 다운로드합니다. 릴리스가 아직 없다면 아래의 소스 빌드 안내를 참고하세요.
-2. DMG 파일을 열고 **Synology Markdown Note.app**을 **Applications(응용 프로그램)** 폴더로 드래그합니다.
-3. 응용 프로그램 폴더에서 앱을 실행합니다.
+소스 빌드에는 macOS의 Swift 개발 도구(Xcode 또는 Command Line Tools)와 Python 3가 필요합니다. 저장소 루트에서 다음 명령을 실행합니다.
 
-> 현재 배포 앱은 개발용 인증서로 서명되어 있으며 Apple 공증을 받지 않았습니다. macOS가 실행을 차단하는 경우, 파일 출처를 확인한 뒤 **시스템 설정 → 개인정보 보호 및 보안**에서 열기를 허용할 수 있습니다. 자세한 내용은 [설치·배포 안내](docs/distribution.ko.md)를 참고하세요.
+```shell
+./script/build_and_run.sh --build
+```
+
+기본 빌드 결과는 `dist/Synology Markdown Note.app`입니다. 다음 명령으로 실행할 수 있습니다.
+
+```shell
+open "dist/Synology Markdown Note.app"
+```
+
+앱 번들 빌드 과정에는 키체인 접근용 Credential Helper와 로컬 개발 인증서를 이용한 서명이 포함됩니다. 서명 설정과 동작은 [개발 빌드 안내](docs/development-signing.ko.md)를 확인하세요.
+
+DMG가 릴리스에 게시된 경우에는 파일을 열고 **Synology Markdown Note.app**을 **Applications(응용 프로그램)** 폴더로 드래그한 뒤 실행하면 됩니다.
+
+> 로컬 개발 인증서로 서명한 빌드는 Apple Developer ID 서명·공증을 받은 배포판이 아닙니다. macOS가 실행을 차단하는 경우, 파일 출처를 확인한 뒤 **시스템 설정 → 개인정보 보호 및 보안** 안내를 따르세요. 자세한 내용은 [설치·배포 안내](docs/distribution.ko.md)를 참고하세요.
 
 ### CLI
 
-CLI는 **PyInstaller `--onefile`로 빌드한 단일 실행 파일**로 사용합니다. 실행할 때 Python이나 uv를 별도로 설치할 필요가 없습니다.
+CLI는 **PyInstaller `--onefile`로 빌드한 단일 실행 파일**로 사용할 수 있습니다. 완성된 실행 파일을 사용할 때는 Python이나 uv를 별도로 설치할 필요가 없습니다.
 
-#### Ubuntu 22.04·24.04: 릴리스 파일 설치 (권장)
+#### 소스에서 onefile 빌드
 
-[Releases](https://github.com/damho1104/synology-markdown-note/releases)에 실행 파일이 게시된 경우 **사용 중인 Ubuntu 버전에 맞는 amd64 실행 파일과 체크섬 파일**을 다운로드하세요. 릴리스가 아직 없다면 아래의 소스 빌드 안내를 참고하세요.
-
-| 환경 | 실행 파일 | 체크섬 |
-| --- | --- | --- |
-| Ubuntu 22.04 amd64 | `synonote-cli-<VERSION_TAG>-ubuntu-22.04-amd64` | `SHA256SUMS-ubuntu-22.04-amd64` |
-| Ubuntu 24.04 amd64 | `synonote-cli-<VERSION_TAG>-ubuntu-24.04-amd64` | `SHA256SUMS-ubuntu-24.04-amd64` |
-
-다운로드 폴더에서 다음과 같이 설치합니다. 아래는 Ubuntu 22.04 예시이며, `<VERSION_TAG>`는 다운로드한 버전으로 바꾸세요. Ubuntu 24.04에서는 두 파일명의 `22.04`를 `24.04`로 바꿉니다.
-
-```shell
-sha256sum --check SHA256SUMS-ubuntu-22.04-amd64
-mkdir -p "$HOME/.local/bin"
-install -m 755 './synonote-cli-<VERSION_TAG>-ubuntu-22.04-amd64' "$HOME/.local/bin/synonote"
-export PATH="$HOME/.local/bin:$PATH"
-synonote version
-```
-
-`PATH` 설정은 사용하는 셸의 설정 파일에도 추가하세요. macOS arm64용 CLI 실행 파일도 Releases에서 받을 수 있습니다.
-
-#### 소스에서 onefile 빌드 (선택)
-
-직접 빌드하려면 [uv](https://docs.astral.sh/uv/getting-started/installation/) 설치 후 저장소 루트에서 다음 명령을 실행하세요. `build_onefile.py`가 PyInstaller에 `--onefile` 옵션을 전달하고 빌드 버전을 포함합니다.
+직접 빌드하려면 [uv](https://docs.astral.sh/uv/getting-started/installation/) 설치 후 저장소 루트에서 다음 명령을 실행하세요. Python 3.13을 설치하고, `build_onefile.py`가 PyInstaller에 `--onefile` 옵션을 전달해 빌드 버전을 포함합니다.
 
 ```shell
 cd cli
@@ -79,7 +79,14 @@ uv run --locked python build_onefile.py
 mkdir -p "$HOME/.local/bin"
 install -m 755 ./dist/synonote "$HOME/.local/bin/synonote"
 export PATH="$HOME/.local/bin:$PATH"
+synonote version
 ```
+
+`PATH` 설정은 사용하는 셸의 설정 파일에도 추가하세요.
+
+#### 릴리스 실행 파일 설치
+
+[Releases](https://github.com/damho1104/synology-markdown-note/releases)에 CLI 실행 파일이 게시되어 있다면 자신의 OS·버전·아키텍처에 맞는 파일을 선택하고 제공된 SHA-256 체크섬을 확인하세요. Ubuntu용 파일은 릴리스에서 명시한 Ubuntu 버전과 아키텍처에 맞춰 선택해야 합니다. 파일명과 설치 절차는 해당 릴리스 안내를 따르세요.
 
 자세한 내용은 [CLI 설치·빌드 안내](cli/README.md#설치)를 참고하세요.
 
@@ -117,6 +124,30 @@ synonote download --id NOTE_ID --output ./downloaded-report.md
 - 로그인 비밀번호와 기기 인증 정보는 macOS **키체인**에 보관할 수 있습니다.
 - CLI는 파일 단위 업로드·다운로드 도구로, macOS 앱과 같은 자동 동기화·자동 병합 기능은 제공하지 않습니다.
 
+## 개발 및 테스트
+
+저장소 루트에서 Swift 테스트를 실행합니다. Swift Testing을 포함하고 선택한 컴파일러와 호환되는 Xcode 또는 Command Line Tools가 필요합니다.
+
+```shell
+./script/test.sh
+```
+
+CLI 테스트는 저장소 루트에서 다음과 같이 실행합니다.
+
+```shell
+cd cli
+uv python install 3.13
+uv sync --locked
+uv run --locked pytest -q tests
+```
+
+[GitHub Actions CI](.github/workflows/ci.yml)는 `develop` 브랜치에 대한 push, Pull Request, 수동 실행 시 GitHub 호스팅 러너에서 다음을 검사합니다.
+
+- **macOS:** Swift 테스트 실행.
+- **Ubuntu 24.04 / Python 3.13:** CLI 잠금 파일 확인 및 테스트 실행.
+
+현재 자동 릴리스·코드 서명·공증·설치 파일 업로드는 구성되어 있지 않습니다. CI 테스트 통과와 배포 파일의 설치·NAS 동작 검증은 별개입니다.
+
 ## 추가 문서
 
 - [설치·배포 상세 안내](docs/distribution.ko.md)
@@ -124,8 +155,6 @@ synonote download --id NOTE_ID --output ./downloaded-report.md
 - [동기화·저장 동작](docs/nas-contract.ko.md)
 - [진단 로그](docs/diagnostics.ko.md)
 - [CLI 사용법](cli/README.md) — 설치·빌드 및 인증·탐색·업로드·다운로드·인덱스 명령 상세 안내
-
-소스에서 앱을 빌드하려면 macOS의 Swift 개발 도구(Xcode 또는 Command Line Tools)가 필요합니다. 저장소 루트에서 `./script/build_and_run.sh --build`를 실행하세요.
 
 ## 라이선스
 

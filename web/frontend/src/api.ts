@@ -2,6 +2,7 @@ export type Status = { configured: boolean; nas_url: string | null; source: 'env
 export type Session = { username: string; remember: boolean; csrf_token: string }
 
 const messages: Record<string, string> = {
+  MARKDOWN_UNSUPPORTED: '수식 PNG 내보내기 또는 첨부·보존 블록을 지원하지 않는 변경입니다. 원문을 유지했습니다.',
   SECURE_COOKIE_REQUIRES_HTTPS: 'HTTP 접속에서는 현재 Secure 로그인 쿠키를 사용할 수 없습니다. HTTPS로 접속하거나, 신뢰하는 내부망에서 HTTP를 사용하려면 서버의 WEB_COOKIE_SECURE=false 설정 후 웹 컨테이너를 재생성하세요.',
   LOGIN_COOKIE_MISSING: '브라우저가 로그인 쿠키를 유지하지 못했습니다. HTTP 접속이라면 WEB_COOKIE_SECURE=false 설정 후 컨테이너를 재생성하세요. HTTPS 접속이라면 브라우저의 쿠키 차단과 프록시 설정을 확인하세요.',
   INVALID_NAS_URL: 'NAS 주소는 사용자 정보·쿼리 없이 HTTP 또는 HTTPS 주소로 입력하세요.',

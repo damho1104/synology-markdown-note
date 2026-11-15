@@ -24,7 +24,7 @@ class Settings:
     allow_private_nas: bool = False
     nas_ca_file: str | None = None
     public_origin: str | None = None
-    secure_cookies: bool = True
+    secure_cookies: bool | None = None
     idle_seconds: int = 12 * 3600
     session_seconds: int = 24 * 3600
     remember_seconds: int = 30 * 24 * 3600
@@ -38,8 +38,6 @@ class Settings:
                     or parsed.username or parsed.password or parsed.query or parsed.fragment
                     or parsed.path not in {"", "/"}):
                 raise ValueError("WEB_PUBLIC_ORIGIN must be an origin without a path")
-            if parsed.scheme != "https" and parsed.hostname not in {"localhost", "127.0.0.1", "[::1]"}:
-                raise ValueError("WEB_PUBLIC_ORIGIN must use HTTPS except on localhost")
         if min(self.idle_seconds, self.session_seconds, self.remember_seconds,
                self.remember_idle_seconds, self.rotate_seconds) <= 0:
             raise ValueError("Session lifetimes must be positive")
@@ -56,5 +54,6 @@ class Settings:
             allow_private_nas=_bool_env("NAS_ALLOW_PRIVATE", False),
             nas_ca_file=os.getenv("NAS_CA_FILE") or None,
             public_origin=os.getenv("WEB_PUBLIC_ORIGIN") or None,
-            secure_cookies=_bool_env("WEB_COOKIE_SECURE", True),
+            secure_cookies=(None if os.getenv("WEB_COOKIE_SECURE", "auto").lower() in {"", "auto"}
+                            else _bool_env("WEB_COOKIE_SECURE", True)),
         )

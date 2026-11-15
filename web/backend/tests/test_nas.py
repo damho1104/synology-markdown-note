@@ -189,3 +189,17 @@ def test_fetch_restores_missing_metadata_and_accepts_null_attachment(monkeypatch
     assert note["locked"] is locked and note["trashed"] is trashed
     assert note["editable"] is (not locked and not trashed)
     assert note["attachments"] == []
+
+
+def test_authenticated_discovery_carries_sid_across_fresh_http_clients(monkeypatch):
+    from urllib.parse import parse_qs
+    from synonote_web.nas import NOTE, NasLogin
+    def handler(request):
+        form={k:v[0] for k,v in parse_qs(request.content.decode()).items()}
+        if form['api']=='SYNO.API.Info':
+            if form.get('_sid')!='sid':return httpx.Response(200,json={'success':False,'error':{'code':119}})
+            data={NOTE:{'path':'entry.cgi','minVersion':1,'maxVersion':3}}
+        else:data={'total':0,'offset':0,'notes':[]}
+        return httpx.Response(200,json={'success':True,'data':data})
+    monkeypatch.setattr(NasClient,'_client',lambda self:httpx.Client(transport=httpx.MockTransport(handler)))
+    assert NasClient().notes('https://nas.example',NasLogin('sid',None))==[]

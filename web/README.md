@@ -1,40 +1,49 @@
-# Synology Markdown Note — Web
+# Synology Markdown Note Web
 
-React/TypeScript/Vite + Tailwind/shadcn/ui 기반 화면과 FastAPI/SQLite 서버의 **첫 개발 버전**입니다. NAS 최초 설정·아이디/비밀번호/OTP 로그인·로그인 유지와 함께 책장·메모장 탐색, 노트 제목 검색, 본문 조회, 첨부파일 다운로드, 단순 HTML 노트 생성·편집·NAS 저장을 지원합니다. 암호화·휴지통·첨부파일·복합 HTML 노트는 읽기 전용이며, Markdown 원문 첨부파일의 편집과 오프라인 동기화는 아직 지원하지 않습니다.
+macOS 앱의 `LibraryView`·`EditorView`를 기준으로 만든 웹 클라이언트입니다. 책장 아래 메모장을 펼치는 사이드바, 제목·추가 날짜·수정 날짜 정렬, 원문·분할·읽기 보기, CodeMirror Markdown 편집, Mermaid 손그림 다이어그램, KaTeX 미리보기, 노트 정보 패널과 첨부 다운로드를 제공합니다.
 
-## Docker Compose 실행
+## 실행
 
-프로젝트 루트의 `web/` 디렉터리에서 `docker-compose.yaml`을 실행합니다. 기본 설정은 개인 Registry에서 이미지를 내려받습니다. Registry 인증이 필요한 서버에서는 먼저 `docker login dr.dmomo.net`을 실행하세요.
+`web/`에서 실행합니다. NAS 주소는 실행 후 웹에서 한 번 입력해도 됩니다.
 
 ```sh
-cd web
-cp -n .env.example .env  # 최초 실행 시 1회; 기존 .env는 유지
-# .env의 WEB_IMAGE 및 HTTPS 프록시 설정을 배포 환경에 맞게 수정
-docker compose pull
 docker compose up -d
-docker compose ps
 docker compose exec web cat /data/setup-code
 ```
 
-웹 작업 공간 이미지 태그는 `dr.dmomo.net/damho1104/synonote-web:0.2.1`입니다. `.env`의 `WEB_IMAGE`로 태그를 변경할 수 있습니다. 기존 `0.1.1-p1`은 최초 설정·인증 UI 단계입니다.
+브라우저에서 `http://localhost:8787`을 열고 NAS 주소와 위 초기 설정 코드를 입력합니다. 다른 PC에서 접근하려면 `.env.example`을 `.env`로 복사하고 `WEB_BIND_ADDRESS=0.0.0.0`을 설정하거나 기존 HTTPS 프록시를 연결하세요. Registry 인증이 필요한 서버는 먼저 `docker login dr.dmomo.net`을 실행합니다.
 
-소스에서 이미지를 직접 빌드하려면 `web/` 디렉터리에서 `docker build -t synonote-web:local .`을 실행한 뒤 `WEB_IMAGE=synonote-web:local docker compose up -d`로 시작할 수 있습니다. Synology Container Manager에서는 `docker-compose.yaml` 내용을 프로젝트 YAML로 입력하고, NAS에 Registry 접근 권한을 설정하세요.
+**HTTP/HTTPS 쿠키와 접속 origin은 자동 처리합니다. `WEB_PUBLIC_ORIGIN`, `WEB_COOKIE_SECURE`를 일반 설치에서 설정할 필요가 없습니다.** HTTP 접속은 일반 HttpOnly 쿠키, HTTPS 접속은 Secure/HttpOnly `__Host-` 쿠키를 사용합니다. 상태 변경 요청은 브라우저 Origin의 호스트·포트와 요청 Host가 같아야 하며 CSRF 토큰도 검사합니다. HTTPS 역방향 프록시는 브라우저가 사용한 Host를 그대로 전달하세요. 임의 `X-Forwarded-*` 헤더를 신뢰하지 않습니다.
 
-기본 공개 포트는 **호스트 `127.0.0.1:8787`**입니다. 브라우저의 `http://localhost:8787`에서 초기 설정을 진행할 때에는 `.env`에서 `WEB_COOKIE_SECURE=false`로 변경해야 합니다. 운영에서는 외부 HTTPS 역방향 프록시를 구성하고 `WEB_COOKIE_SECURE=true`, `WEB_PUBLIC_ORIGIN=https://실제-웹-도메인`을 설정하세요. `WEB_PUBLIC_ORIGIN`은 브라우저에서 접근하는 **origin**으로, 끝에 경로를 붙이지 않습니다. 프록시는 원래 Host를 전달해야 하고 앱은 임의 `X-Forwarded-*` 헤더를 신뢰하지 않습니다.
+0.2.x의 Compose를 재사용한다면 새 `docker-compose.yaml`로 교체하세요. 예전 YAML을 유지해야 하면 `WEB_COOKIE_SECURE=auto`, `WEB_PUBLIC_ORIGIN=`으로 두어 자동 모드를 선택할 수 있습니다. 프록시가 Host를 바꿔야 하는 특수 배포만 컨테이너 환경변수 `WEB_PUBLIC_ORIGIN`에 프로토콜을 포함한 정확한 origin을 지정합니다. 이전의 명시적 `WEB_COOKIE_SECURE=true/false`도 호환용으로 지원합니다.
 
-`.env` 없이도 Compose의 기본값으로 실행할 수 있지만, 배포 환경에 맞춘 설정은 `.env.example`을 `.env`로 복사해 수정합니다. `.env`에는 실제 비밀번호 등 비밀 정보를 커밋하지 마세요. `NAS_URL`을 비워 두면 최초 설정에서 NAS HTTP 또는 HTTPS 주소와 `/data/setup-code`를 입력합니다. 서버가 NAS API에 연결되는 것을 확인해야 주소가 SQLite에 저장됩니다. 코드는 최초 설정이 완료되면 삭제되며, 다시 조회할 수 없습니다. 이미 주소가 저장되어 있으면 다른 사용자는 주소를 덮어쓸 수 없습니다. 환경변수 `NAS_URL`을 지정하면 해당 주소가 최우선이고 웹에서는 읽기 전용입니다.
+## NAS 연결
 
-IP 또는 DNS 이름이 사설 네트워크를 가리키는 NAS는 **관리자만** `NAS_ALLOW_PRIVATE=true`로 설정할 수 있습니다. 로컬·링크 로컬·메타데이터 IP 및 리디렉션은 차단합니다. DNS 조회 결과를 확인한 뒤 검증된 IP로 직접 연결하며 HTTPS에서는 원래 호스트 이름으로 TLS 인증서를 검증합니다. 공개 CA를 사용하지 않는 HTTPS NAS는 검증 가능한 CA 파일을 컨테이너에 읽기 전용으로 마운트하고 `NAS_CA_FILE`을 해당 경로로 지정해야 합니다. 인증서 검증 비활성화는 지원하지 않습니다. `localhost`는 NAS가 아니라 웹 컨테이너 자체를 뜻합니다.
+- `NAS_URL`이 비어 있으면 웹 최초 설정을 사용합니다. 설정한 NAS 주소는 SQLite에 보존됩니다. 환경변수에 주소를 지정하면 그 값이 우선입니다.
+- 내부망 NAS 또는 HTTP NAS 연결을 쓰는 경우에만 `NAS_ALLOW_PRIVATE=true`로 설정합니다. false이면 HTTP와 사설 주소 연결을 차단합니다. 웹 브라우저의 HTTP/HTTPS와 NAS 연결의 HTTP/HTTPS는 별개입니다.
+- HTTP NAS에서는 비밀번호·OTP·세션·노트 전송이 암호화되지 않습니다. 신뢰하는 내부망에서 사용하세요.
+- 사설 CA는 파일을 읽기 전용 마운트하고 `NAS_CA_FILE`을 지정합니다. HTTPS 인증서 검증을 끄는 옵션은 없습니다.
+- SSRF 방어를 위해 DNS 주소를 검증한 뒤 IP를 고정해 연결합니다. 루프백·링크 로컬·메타데이터 주소와 리디렉션은 허용하지 않습니다. 컨테이너의 `localhost`는 NAS가 아닌 컨테이너 자신입니다.
 
-NAS 주소에 `http://192.168.1.10:5000`처럼 HTTP도 지정할 수 있으며 최초 설정과 로그인 화면에 경고가 표시됩니다. **HTTP에서는 웹 서버와 NAS 사이의 비밀번호·OTP·세션 정보 및 노트 데이터가 암호화되지 않습니다.** 내부망이라도 다른 장비에서 트래픽을 볼 수 있으므로 신뢰할 수 있는 네트워크에서만 사용하고 가능하면 HTTPS를 선택하세요. HTTP는 공개/사설 주소와 관계없이 `NAS_ALLOW_PRIVATE=true`일 때만 허용됩니다. false이면 최초 설정·환경변수·기존 저장 주소 모두 연결을 차단합니다. 웹 클라이언트에 접속하는 브라우저의 HTTPS 설정(`WEB_PUBLIC_ORIGIN`, `WEB_COOKIE_SECURE`)과 NAS 연결 방식은 별개입니다.
+## 저장과 호환성
 
-로그인 유지 체크박스를 선택하면 암호화된 NAS 비밀번호와 선택한 신뢰 기기 ID가 서버의 `/data/web.sqlite3`에 저장되며, 복호화 키는 `/data/master.key`에 보관됩니다. **두 파일을 함께** 안전한 장소에 백업해야 로그인 유지 상태를 복원할 수 있습니다. 쿠키에는 불투명한 랜덤 토큰만 포함하고 서버에는 해시만 저장합니다. 로그아웃하면 현재 토큰과 저장된 자격 증명이 폐기됩니다. OTP는 저장되지 않습니다. 로그인 유지를 선택하지 않은 브라우저 세션은 컨테이너 재시작 후 재로그인이 필요합니다. 타인과 공유하는 기기에서는 로그인 유지와 오프라인 데이터 저장을 권장하지 않습니다.
+맥 앱·CLI의 `SourceEnvelope` v1/v2/v3 원문 지문을 확인해 기존 Markdown 노트를 읽습니다. 지원하는 Markdown은 임시 원문 등록 → 본문 저장 → 검증된 최종 원문 게시 순서로 저장하며, 매 단계에서 원격 버전과 본문을 다시 확인합니다. 기존 이미지 첨부와 원문 보존 블록을 유지합니다. Mermaid·KaTeX 라이브러리와 폰트는 이미지에 포함되며 CDN에 의존하지 않습니다. 미리보기 iframe은 스크립트를 실행하지 않습니다.
 
-### `/data` 저장소 권한 (Synology NAS)
+지원하지 않는 변경을 손실 없이 처리하기 위해 다음은 제한합니다.
 
-컨테이너는 **UID/GID `10001:10001`**로 실행됩니다. 기본 `WEB_DATA_PATH=synonote-web-data`는 Docker가 관리하는 **named volume**이며, 새 볼륨은 이미지의 `/data` 소유권(`10001:10001`)을 상속합니다. 가장 간단한 배포 방법은 이 기본값을 유지하는 것입니다.
+- 암호화 노트, 휴지통 노트, 검증된 원문이 없는 첨부·복합 HTML 노트의 본문 편집
+- 수식 PNG 재생성/업로드, 첨부파일 추가·삭제, 원문 보존 블록의 임의 변경
+- 그래프·백링크, 책장/메모장 관리, 태그/즐겨찾기 변경, 버전 이력 관리, 오프라인 동기화는 아직 macOS와 같은 기능 수준이 아닙니다.
 
-NAS의 특정 폴더를 사용하려면 `.env`에서 `WEB_DATA_PATH=/volume1/docker/synonote-web/data`처럼 **절대 경로**를 지정합니다. 첫 실행 전에 DSM의 SSH에서 **새 빈 폴더만** 다음과 같이 준비하세요. 상위 경로도 컨테이너 사용자가 통과할 수 있어야 합니다.
+편집본과 기준 버전은 사용자·NAS별로 현재 탭의 sessionStorage에 임시 보관하고 새로고침 후 복원합니다. 탭 종료 시 사라질 수 있습니다. 로그아웃 성공 시 해당 계정의 임시본을 지우며 로그아웃 실패 시 유지합니다. NAS 비밀번호·SID·인증 토큰은 브라우저 저장소에 보관하지 않습니다.
+
+버전 충돌은 내 편집본을 보존한 채 NAS 최신 내용과 비교합니다. 응답 유실 등 결과가 불확실하면 자동 재시도하지 않습니다. 서버에 암호화한 쓰기 의도와 대상 잠금을 보존하므로 Note Station에서 저장 결과를 확인한 뒤 보류를 해제하세요. 진행 중인 작업은 1시간 동안 해제할 수 없습니다.
+
+## 데이터 보관과 권한
+
+기본 `WEB_DATA_PATH=synonote-web-data`는 Docker named volume입니다. 컨테이너는 **UID/GID 10001:10001**로 실행합니다. 새 볼륨은 이미지의 `/data` 소유권을 상속합니다.
+
+NAS 폴더를 직접 연결하려면 새 빈 폴더만 준비하고 `.env`의 `WEB_DATA_PATH`를 지정합니다.
 
 ```sh
 sudo mkdir -p /volume1/docker/synonote-web/data
@@ -42,53 +51,29 @@ sudo chown 10001:10001 /volume1/docker/synonote-web/data
 sudo chmod 700 /volume1/docker/synonote-web/data
 ```
 
-앱은 `/data` 디렉터리를 `0700`, SQLite DB와 비밀 키 파일을 `0600` 권한으로 사용합니다. 기존 파일이 있는 폴더의 소유권을 일괄 변경하거나 `777`로 열지 마세요. 기존 데이터를 옮기거나 복구할 때는 먼저 백업하고 `web.sqlite3`, `master.key`, `setup-code` 및 SQLite의 `-wal`/`-shm` 파일까지 소유권을 개별 확인해야 합니다. 권한 오류로 컨테이너가 시작되지 않으면 `docker compose logs web`로 확인하세요. `docker compose down -v`는 named volume의 데이터를 삭제하므로 실행하지 마세요.
+`/data`는 0700, SQLite·키 파일은 0600을 사용합니다. 기존 파일의 소유권을 일괄 변경하거나 777로 열지 마세요. 업데이트·백업 전에 서비스를 중지하고 **`/data` 전체**를 보관합니다. SQLite `-wal`/`-shm`을 포함하고 `web.sqlite3`와 `master.key`를 함께 백업해야 합니다. 키를 잃으면 로그인 유지 정보와 암호화된 저장 의도를 복구할 수 없습니다. `docker compose down -v`는 데이터를 삭제하므로 실행하지 마세요.
+
+로그인 유지 사용 시에만 비밀번호·신뢰 기기 ID를 서버에 암호화해 저장합니다. OTP는 저장하지 않습니다. 일반 세션은 최대 24시간/12시간 미사용, 로그인 유지 세션은 최대 30일/7일 미사용으로 만료됩니다.
+
+## 업데이트와 검증
+
+이미지: `dr.dmomo.net/damho1104/synonote-web:0.3.0` (`linux/amd64`, `linux/arm64`). 게시 여부는 해당 작업의 빌드 결과로 확인합니다.
 
 ```sh
+docker compose pull web
+docker compose up -d --force-recreate web
 docker compose logs --tail=100 web
-docker compose ps
-docker compose down  # 영속 named volume 보존; down -v 실행 금지 (데이터 삭제)
 ```
 
-업데이트 전에 서비스를 중지한 뒤 `/data` 전체(실제 named volume 또는 바인드 마운트 디렉터리)를 백업합니다. SQLite의 `-wal` 파일이 있을 수 있으므로 **실행 중에는 파일 일부만 복사하지 마세요.** `master.key`가 유실되면 기존 로그인 유지 비밀번호는 복구되지 않습니다. 이미 저장된 `NAS_URL`을 바꾸는 관리 기능은 추후에 세션·전송 대기 작업 보호와 함께 제공합니다.
+소스 빌드: `docker build -t synonote-web:local web`. 실제 Synology Container Manager에서의 실행과 실제 NAS 쓰기는 별도 검증이 필요합니다. 모의 NAS/HTTP 계약·원문 fixture·브라우저 검증은 실제 NAS 검증과 구분합니다.
 
-## 세션·NAS 주소 정책
-
-일반 세션은 최대 24시간이며 12시간 미사용 시 만료됩니다. 로그인 유지 세션은 최대 30일이며 7일 미사용 시 만료됩니다. 로그인 유지 토큰은 7일마다 갱신되지만 최초 로그인 시점의 최대 만료일은 연장하지 않습니다. NAS 주소가 바뀌면 기존 로그인 유지 세션을 무효화하며 다른 NAS에 저장된 자격 증명을 전달하지 않습니다.
-
-`NAS_ALLOW_PRIVATE=true`는 RFC1918 사설 IPv4 범위와 IPv6 ULA 범위만 추가로 허용합니다. 특수 목적 주소, 루프백, 링크 로컬 주소는 허용하지 않습니다.
-
-## 개발 실행
+개발 실행 및 검사:
 
 ```sh
 cd web/backend
 uv sync --group dev
-WEB_DATA_DIR=/tmp/synonote-web-dev WEB_COOKIE_SECURE=false uv run uvicorn synonote_web.main:create_app --factory --host 127.0.0.1 --port 8000
-
-# 별도 터미널
-cd web/frontend
-npm ci
-npm run dev
+WEB_DATA_DIR=/tmp/synonote-web-dev uv run uvicorn synonote_web.main:create_app --factory --host 127.0.0.1 --port 8000
+# 별도 터미널: web/frontend에서 npm ci && npm run dev
+uv run pytest -q
+# web/frontend에서 npm test && npm run build
 ```
-
-백엔드 테스트: `cd web/backend && uv run pytest -q`. 프런트 동작 테스트: `cd web/frontend && npm test`. 프런트 빌드: `cd web/frontend && npm run build`.
-
-## Synology Container Manager 상태
-
-`docker-compose.yaml`은 개인 Registry 이미지를 사용하는 배포용 YAML이며, **Container Manager → 프로젝트 → 생성**에서 사용할 수 있습니다. 실제 Synology 장비에서의 구동은 아직 검증하지 않았습니다. DSM 전용 프로젝트에서는 포트 충돌·볼륨 쓰기 권한(컨테이너 UID 10001)·HTTPS 역방향 프록시·NAS 인증서 CA·NAS로의 네트워크 경로를 확인해야 합니다.
-
-## 편집과 저장 확인
-
-메모장을 선택한 뒤 + 버튼으로 새 노트를 작성합니다. 기존 노트는 본문 상단의 편집 버튼으로 HTML 원문과 제목을 수정합니다. 문단·목록·강조·제목·코드 등의 단순 HTML을 지원하며, 미리보기는 스크립트와 외부 네트워크를 차단한 iframe에서 표시합니다. 첨부파일이 포함된 기존 문서는 원문 손상을 막기 위해 읽기 전용입니다.
-
-편집 내용은 NAS 주소·사용자별로 현재 탭의 sessionStorage에 임시 보관됩니다. 새로고침 후 복원하며 원래 편집 버전도 보존합니다. 탭을 닫으면 임시본이 사라질 수 있습니다. 로그아웃 성공 시 해당 계정 임시본을 삭제하고, 로그아웃 실패 시 유지합니다. NAS 비밀번호·SID·인증 토큰은 브라우저 저장소에 보관하지 않습니다.
-
-저장 전 NAS 버전과 편집 가능 여부를 다시 확인하고 저장 후 본문·제목·버전을 다시 읽어 확인합니다. 충돌하면 내 편집본과 최신 NAS 본문을 비교할 수 있습니다. 응답 유실 등 저장 결과가 불확실하면 자동 재시도하지 않으며 서버에 암호화된 쓰기 의도와 대상 잠금을 보존합니다. Note Station에서 결과를 직접 확인한 후 화면 상단의 보류 해제를 누르세요. 전송 중인 작업은 1시간 동안 해제할 수 없습니다. 서버 재시작 후에도 보류 기록을 유지합니다.
-
-## 로그인 200 이후 조회가 401인 경우
-
-`/api/auth/login`은 200인데 `/api/notebooks`, `/api/notes`가 `{"detail":"LOGIN_REQUIRED"}`를 반환하면 브라우저의 웹 세션 쿠키가 전달되지 않은 경우를 먼저 확인합니다. 기본 `WEB_COOKIE_SECURE=true` 쿠키는 HTTPS용입니다. HTTP IP/도메인으로 접속하면 브라우저가 쿠키를 보관하지 않아 이 증상이 발생할 수 있습니다. NAS 주소의 HTTP/HTTPS와는 별개의 설정입니다.
-
-신뢰하는 내부망에서 웹도 HTTP로 사용하려면 `.env`에 `WEB_COOKIE_SECURE=false`를 설정하고 `docker compose up -d --force-recreate web`로 재생성한 뒤 다시 로그인하세요. `docker compose restart`만으로는 변경된 환경변수가 반영되지 않습니다. Compose 프로젝트 환경변수를 직접 관리한다면 해당 설정도 함께 변경하세요. 외부 HTTPS 프록시를 사용하는 경우에는 `WEB_COOKIE_SECURE=true`를 유지하고 `WEB_PUBLIC_ORIGIN=https://실제-웹-도메인`을 설정합니다.
-
-0.2.1부터 HTTP/Secure 설정 불일치는 로그인 전에 구체적인 설정 오류로 알리며, 로그인 응답 후에도 실제 쿠키로 세션 조회가 되는지 확인한 뒤 작업 공간을 엽니다. HTTPS 설정을 자동으로 HTTP로 낮추지는 않습니다.

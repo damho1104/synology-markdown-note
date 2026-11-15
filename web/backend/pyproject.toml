@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "synonote-web"
-version = "0.2.1"
+version = "0.3.0"
 description = "Self-hosted Synology Markdown Note web client API"
 requires-python = ">=3.13,<3.14"
 dependencies = [
@@ -12,6 +12,7 @@ dependencies = [
     "uvicorn>=0.34,<1",
     "httpx>=0.28,<1",
     "cryptography>=44,<47",
+    "markdown-it-py>=3,<5",
 ]
 
 [dependency-groups]

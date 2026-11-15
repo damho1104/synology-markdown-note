@@ -488,3 +488,33 @@ def test_https_proxy_origin_keeps_secure_cookie_even_on_internal_http(tmp_path):
     assert response.status_code == 200
     assert response.headers['set-cookie'].startswith('__Host-synonote_session=')
     assert 'Secure' in response.headers['set-cookie'].split('; ')
+
+
+@pytest.mark.parametrize('scheme', ['http', 'https'])
+def test_auto_transport_needs_no_cookie_or_origin_settings(tmp_path, scheme):
+    app = create_app(Settings(data_dir=tmp_path, nas_url='https://nas.example'), NotesNas())
+    client = TestClient(app, base_url=f'{scheme}://note.local.dmomo.ai.kr')
+    response = post(client, '/api/auth/login', {'username':'alice','password':'correct'}, origin=f'{scheme}://note.local.dmomo.ai.kr')
+    assert response.status_code == 200
+    secure = scheme == 'https'
+    assert response.headers['set-cookie'].startswith('__Host-synonote_session=' if secure else 'synonote_session=')
+    assert ('Secure' in response.headers['set-cookie'].split('; ')) is secure
+    assert client.get('/api/notebooks').status_code == 200
+    assert post(client, '/api/auth/logout', {}, csrf=response.json()['csrf_token'], origin=f'{scheme}://note.local.dmomo.ai.kr').status_code == 200
+    assert client.get('/api/auth/me').status_code == 401
+
+
+def test_auto_origin_accepts_https_proxy_same_host_without_forwarded_headers(tmp_path):
+    client = TestClient(create_app(Settings(data_dir=tmp_path, nas_url='https://nas.example'), NotesNas()), base_url='http://notes.example')
+    response = post(client, '/api/auth/login', {'username':'alice','password':'correct'}, origin='https://notes.example')
+    assert response.status_code == 200
+    assert 'Secure' in response.headers['set-cookie'].split('; ')
+    assert post(client, '/api/auth/login', {'username':'alice','password':'correct'}, origin='https://evil.example').status_code == 403
+
+
+@pytest.mark.parametrize('origin', ['https://[bad', 'https://attacker.example', 'null', 'https://testserver@attacker.example'])
+def test_auto_origin_rejects_malformed_and_cross_site_origins(tmp_path, origin):
+    nas=FakeNas()
+    client=TestClient(create_app(Settings(data_dir=tmp_path,nas_url='https://nas.example'),nas))
+    assert post(client,'/api/auth/login',{'username':'alice','password':'correct'},origin=origin).status_code==403
+    assert not nas.login_calls

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
-import { AlertTriangle, ArrowRight, BookOpenText, Cloud, KeyRound, LockKeyhole, RefreshCw, ServerCog, ShieldCheck } from 'lucide-react'
+import { AlertTriangle, ArrowRight, BookOpenText, KeyRound, RefreshCw, ServerCog } from 'lucide-react'
 import { Button } from './components/ui/button'
 import { ApiFailure, request, jsonRequest, type Session, type Status } from './api'
 import { Workspace } from './Workspace'
@@ -97,25 +97,10 @@ function App() {
   }
 
   return (
-    <div className="min-h-screen bg-paper">
-      <header className="border-b border-slate-200 bg-white/90">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-5">
-          <div className="flex items-center gap-3"><div className="rounded-xl bg-ink p-2.5 text-white"><BookOpenText size={22} /></div><div><h1 className="text-base font-bold tracking-tight">Synology Markdown Note</h1><p className="text-xs text-slate-500">Web Client · 초기 버전</p></div></div>
-          <span className="hidden items-center gap-2 rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-500 sm:flex"><Cloud size={15} /> Self-hosted</span>
-        </div>
-      </header>
-      <main className="mx-auto grid max-w-6xl items-center gap-12 px-6 py-12 lg:min-h-[calc(100vh-185px)] lg:grid-cols-[1fr_470px] lg:py-16">
-        <section className="max-w-xl">
-          <div className="mb-7 inline-flex items-center gap-2 rounded-full border border-[#c6dce5] bg-[#eaf4f7] px-3 py-1.5 text-xs font-semibold text-[#1c6784]"><ShieldCheck size={15} /> 내 NAS에 안전하게 연결</div>
-          <h2 className="text-4xl font-bold leading-[1.25] tracking-[-0.04em] sm:text-5xl">당신의 노트를,<br /><span className="text-marine">어디서든 이어서.</span></h2>
-          <p className="mt-6 max-w-lg text-[15px] leading-8 text-slate-600">기존 Synology Note Station 데이터를 사용하는 독립 웹 클라이언트입니다. NAS 계정으로 로그인하고, 한곳에서 관리하세요.</p>
-          <div className="mt-10 grid max-w-lg gap-4 sm:grid-cols-2">
-            <div className="rounded-2xl border border-slate-200 bg-white p-5"><ServerCog className="mb-3 text-marine" size={24} /><p className="text-sm font-semibold">설치당 NAS 한 대</p><p className="mt-2 text-xs leading-5 text-slate-500">설정한 NAS로만 접속합니다.</p></div>
-            <div className="rounded-2xl border border-slate-200 bg-white p-5"><LockKeyhole className="mb-3 text-marine" size={24} /><p className="text-sm font-semibold">계정별 보안 세션</p><p className="mt-2 text-xs leading-5 text-slate-500">비밀번호와 NAS 세션을 브라우저에 저장하지 않습니다.</p></div>
-          </div>
-          <p className="mt-8 text-xs leading-6 text-slate-500">로그인 후 책장과 노트를 검색하고, 단순 HTML 노트를 작성·편집할 수 있습니다. 복합 서식과 첨부파일이 있는 노트는 읽기 전용으로 보호됩니다.</p>
-        </section>
-        <section className="card w-full" aria-live="polite">
+    <div className="auth-shell">
+      <main className="auth-main">
+        <div className="auth-brand"><BookOpenText size={28}/><h1>Synology Markdown Note</h1></div>
+        <section className="card auth-card" aria-live="polite">
           {loading ? (
             <div className="flex items-center gap-3 py-14 text-sm text-slate-600"><RefreshCw className="animate-spin" size={18} /> 서버 상태를 확인하고 있습니다…</div>
           ) : !status ? (
@@ -157,7 +142,7 @@ function App() {
           {error && <div className="mt-5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm leading-6 text-rose-700" role="alert">{error}</div>}
         </section>
       </main>
-      <footer className="mx-auto flex max-w-6xl flex-wrap justify-between gap-3 px-6 pb-8 text-xs text-slate-500"><p>Synology Markdown Note · Web Client</p><p>안전한 연결을 위해 HTTPS를 사용하세요.</p></footer>
+
     </div>
   )
 }

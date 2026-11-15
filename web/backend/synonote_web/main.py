@@ -13,7 +13,7 @@ import uuid
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
@@ -40,7 +40,8 @@ class LoginInput(BaseModel):
 
 class WriteInput(BaseModel):
     title: str = Field(min_length=1, max_length=256)
-    html: str = Field(max_length=2_000_000)
+    html: str = Field(default="", max_length=2_000_000)
+    markdown: str | None = Field(default=None, max_length=2_000_000)
     notebook_id: str = Field(min_length=1, max_length=256)
     version: str | None = Field(default=None, max_length=128)
 
@@ -90,7 +91,19 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
     app.state.live_nas: dict[str, NasLogin] = {}
     app.state.session_lock = threading.RLock()
     app.state.attempts = Attempts()
-    cookie_name = "__Host-synonote_session" if settings.secure_cookies else "synonote_session"
+    def cookie_secure(request: Request) -> bool:
+        if settings.secure_cookies is not None:
+            return settings.secure_cookies
+        if request.headers.get("origin"):
+            return urlsplit(request.headers["origin"]).scheme == "https"
+        if "__Host-synonote_session" in request.cookies:
+            return True
+        if "synonote_session" in request.cookies:
+            return False
+        return request.url.scheme == "https"
+
+    def cookie_name(request: Request) -> str:
+        return "__Host-synonote_session" if cookie_secure(request) else "synonote_session"
 
     def allowed_url(value: str) -> str:
         url = validate_url(value)
@@ -134,7 +147,7 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
     @app.exception_handler(NasError)
     async def nas_error(_: Request, exc: NasError):
         code = exc.code
-        status = (422 if code == "INVALID_NAS_URL" else 401 if code in
+        status = (422 if code in {"INVALID_NAS_URL", "MARKDOWN_UNSUPPORTED"} else 401 if code in
                   {"AUTH_FAILED", "OTP_REQUIRED", "NAS_SESSION_EXPIRED"} else
                   403 if code in {"NAS_ADDRESS_BLOCKED", "NAS_HTTP_BLOCKED", "DOCUMENT_READ_ONLY"} else
                   409 if code in {"REMOTE_CHANGED", "WRITE_UNCERTAIN"} else
@@ -148,8 +161,18 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
     def origin_guard(request: Request) -> None:
         # No CORS: browser mutations require an explicit same-origin Origin header.
         origin = request.headers.get("origin")
-        expected = settings.public_origin or f"{request.url.scheme}://{request.headers.get('host', '')}"
-        if not origin or origin.rstrip("/") != expected.rstrip("/"):
+        # Browser Origin is checked against Host; proxies preserve Host. Never
+        # trust arbitrary X-Forwarded-* values or accept a different authority.
+        expected = settings.public_origin
+        try:
+            parsed = urlsplit(origin or "")
+        except ValueError as exc:
+            raise HTTPException(403, detail="ORIGIN_REQUIRED") from exc
+        valid = (origin.rstrip("/") == expected.rstrip("/")) if origin and expected else (
+            bool(origin) and parsed.scheme in {"http", "https"} and not parsed.username
+            and not parsed.password and not parsed.query and not parsed.fragment
+            and parsed.path == "" and parsed.netloc.lower() == request.headers.get("host", "").lower())
+        if not valid:
             raise HTTPException(403, detail="ORIGIN_REQUIRED")
         if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
             raise HTTPException(415, detail="JSON_REQUIRED")
@@ -160,14 +183,14 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
             raise HTTPException(429, detail="TOO_MANY_ATTEMPTS")
         return peer
 
-    def set_cookie(response: Response, token: str, remember: bool) -> None:
-        response.set_cookie(cookie_name, token, httponly=True, secure=settings.secure_cookies,
+    def set_cookie(request: Request, response: Response, token: str, remember: bool) -> None:
+        response.set_cookie(cookie_name(request), token, httponly=True, secure=cookie_secure(request),
                             samesite="strict", path="/",
                             max_age=settings.remember_seconds if remember else None)
 
     def clear_cookie(response: Response) -> None:
-        response.delete_cookie(cookie_name, path="/", secure=settings.secure_cookies,
-                               httponly=True, samesite="strict")
+        for name, secure in (("__Host-synonote_session", True), ("synonote_session", False)):
+            response.delete_cookie(name, path="/", secure=secure, httponly=True, samesite="strict")
 
     def logout_token(token: str) -> None:
         with app.state.session_lock:
@@ -222,7 +245,7 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
         origin_guard(request)
         # Use the validated browser origin: HTTPS proxies contact us over HTTP.
         # Do not authenticate successfully when the browser cannot retain our cookie.
-        if settings.secure_cookies and not request.headers["origin"].lower().startswith("https://"):
+        if settings.secure_cookies is True and not request.headers["origin"].lower().startswith("https://"):
             raise HTTPException(503, detail="SECURE_COOKIE_REQUIRES_HTTPS")
         peer = rate_limit(request, "login")
         url, _ = configured()
@@ -239,7 +262,7 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
         digest = token_hash(token)
         csrf = secrets.token_urlsafe(32)
         now = time.time()
-        previous_token = request.cookies.get(cookie_name)
+        previous_tokens = {request.cookies.get(name) for name in ("__Host-synonote_session", "synonote_session")}
         if body.remember:
             credential = store.encrypt_credential(body.password, result.device_id,
                                                   body.trust_device)
@@ -250,13 +273,14 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
         else:
             with app.state.session_lock:
                 app.state.transient[digest] = TransientSession(body.username, csrf, result, now, now)
-        if previous_token:
-            logout_token(previous_token)
-        set_cookie(response, token, body.remember)
+        for previous_token in previous_tokens:
+            if previous_token:
+                logout_token(previous_token)
+        set_cookie(request, response, token, body.remember)
         return {"username": body.username, "remember": body.remember, "csrf_token": csrf}
 
     def _current_session_locked(request: Request, response: Response) -> tuple[str, str, str, bool]:
-        token = request.cookies.get(cookie_name)
+        token = request.cookies.get(cookie_name(request))
         if not token or len(token) > 256:
             raise HTTPException(401, detail="LOGIN_REQUIRED")
         digest = token_hash(token)
@@ -296,7 +320,7 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
             replacement = secrets.token_urlsafe(48)
             if store.rotate_session(token, replacement, now):
                 app.state.live_nas[token_hash(replacement)] = app.state.live_nas.pop(digest)
-                set_cookie(response, replacement, True)
+                set_cookie(request, response, replacement, True)
                 token = replacement
         return token, session.username, session.csrf, True
 
@@ -408,12 +432,17 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
                                  body.model_dump()):
             raise HTTPException(409, detail="WRITE_REVIEW_REQUIRED")
         try:
-            result = nas.write(base, active, note_id=note_id, notebook_id=body.notebook_id,
-                               title=body.title, html=body.html, version=body.version)
+            if body.markdown is not None:
+                result = nas.write_markdown(base, active, note_id=note_id, notebook_id=body.notebook_id,
+                                           title=body.title, markdown=body.markdown, version=body.version,
+                                           operation_id=operation_id)
+            else:
+                result = nas.write(base, active, note_id=note_id, notebook_id=body.notebook_id,
+                                   title=body.title, html=body.html, version=body.version)
         except NasError as exc:
             # A rejected preflight/version conflict is safe to retry after refreshing.
             store.finish_write(operation_id, uncertain=exc.code not in
-                               {"REMOTE_CHANGED", "DOCUMENT_READ_ONLY", "NAS_SESSION_EXPIRED"})
+                               {"REMOTE_CHANGED", "DOCUMENT_READ_ONLY", "NAS_SESSION_EXPIRED", "MARKDOWN_UNSUPPORTED"})
             raise
         except Exception:
             store.finish_write(operation_id, uncertain=True)

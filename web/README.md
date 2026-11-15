@@ -16,7 +16,7 @@ docker compose ps
 docker compose exec web cat /data/setup-code
 ```
 
-P1 초기 이미지는 `dr.dmomo.net/damho1104/synonote-web:0.1.0-p1`이며 `linux/amd64`, `linux/arm64`용으로 게시했습니다. `.env`의 `WEB_IMAGE`로 태그를 변경할 수 있습니다. P1은 최초 설정·인증 UI 단계이며 노트 탐색·편집은 아직 제공하지 않습니다.
+P1 최신 이미지는 `dr.dmomo.net/damho1104/synonote-web:0.1.1-p1`이며 `linux/amd64`, `linux/arm64`용으로 게시했습니다. HTTP NAS 지원, 연결 경고와 초기 설정 코드 확인 안내를 포함합니다. `.env`의 `WEB_IMAGE`로 태그를 변경할 수 있습니다. P1은 최초 설정·인증 UI 단계이며 노트 탐색·편집은 아직 제공하지 않습니다.
 
 소스에서 이미지를 직접 빌드하려면 `web/` 디렉터리에서 `docker build -t synonote-web:local .`을 실행한 뒤 `WEB_IMAGE=synonote-web:local docker compose up -d`로 시작할 수 있습니다. Synology Container Manager에서는 `docker-compose.yaml` 내용을 프로젝트 YAML로 입력하고, NAS에 Registry 접근 권한을 설정하세요.
 

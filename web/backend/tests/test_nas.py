@@ -84,7 +84,7 @@ def test_http_dns_pin_still_blocks_private_without_opt_in(monkeypatch):
     with httpx.Client(transport=transport, trust_env=False) as client:
         with pytest.raises(NasError) as exc:
             client.post("http://nas.lan/webapi/query.cgi")
-    assert exc.value.code == "NAS_ADDRESS_BLOCKED"
+    assert exc.value.code == "NAS_HTTP_BLOCKED"
     assert capture.seen == []
 
 
@@ -158,3 +158,34 @@ def test_actual_auth_contract_with_mock_http(monkeypatch, base):
     assert auth[1]["session"] == "notestation"
     assert auth[1]["otp_code"] == "123456"
     assert auth[1]["enable_device_token"] == "yes"
+
+
+def test_http_public_address_requires_explicit_opt_in(monkeypatch):
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *args, **kwargs: dns("8.8.8.8"))
+    transport = PinnedTransport(False)
+    transport.transport = CaptureTransport()
+    with httpx.Client(transport=transport) as client:
+        with pytest.raises(NasError) as exc:
+            client.post("http://nas.example/webapi/query.cgi")
+    assert exc.value.code == "NAS_HTTP_BLOCKED"
+
+
+@pytest.mark.parametrize("locked,trashed", [(False, False), (True, False), (False, True)])
+def test_fetch_restores_missing_metadata_and_accepts_null_attachment(monkeypatch, locked, trashed):
+    from urllib.parse import parse_qs
+    from synonote_web.nas import NOTE, NasLogin
+    def handler(request):
+        form = {k: v[0] for k, v in parse_qs(request.content.decode()).items()}
+        if form["api"] == "SYNO.API.Info":
+            data = {NOTE: {"path": "entry.cgi", "minVersion": 1, "maxVersion": 3}}
+        elif form["method"] == "get":
+            data = {"title": "hello", "content": "<p>body</p>", "ver": "v1", "attachment": None}
+        else:
+            data = {"total": 1, "offset": 0, "notes": [{"object_id": "note1", "parent_id": "book1", "title": "hello", "ver": "v1", "encrypt": locked, "recycle": trashed}]}
+        return httpx.Response(200, json={"success": True, "data": data})
+    monkeypatch.setattr(NasClient, "_client", lambda self: httpx.Client(transport=httpx.MockTransport(handler)))
+    note = NasClient().fetch("https://nas.example", NasLogin("sid", None), "note1")
+    assert note["notebook_id"] == "book1"
+    assert note["locked"] is locked and note["trashed"] is trashed
+    assert note["editable"] is (not locked and not trashed)
+    assert note["attachments"] == []

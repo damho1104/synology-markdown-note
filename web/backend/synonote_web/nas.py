@@ -8,10 +8,13 @@ but credentials are not encrypted on that connection. CGI paths are fixed.
 from __future__ import annotations
 
 import ipaddress
+import json
 import re
 import socket
 import ssl
+import time
 from dataclasses import dataclass
+from html.parser import HTMLParser
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
@@ -19,6 +22,7 @@ import httpx
 
 AUTH = "SYNO.API.Auth"
 NOTE = "SYNO.NoteStation.Note"
+NOTEBOOK = "SYNO.NoteStation.Notebook"
 PATH = re.compile(r"^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$")
 HOST = re.compile(r"^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$", re.I)
 BASE_PATH = re.compile(r"^/(?:[A-Za-z0-9._~-]+(?:/[A-Za-z0-9._~-]+)*)?$|^$")
@@ -32,6 +36,65 @@ class NasError(Exception):
     def __init__(self, code: str):
         self.code = code
         super().__init__(code)
+
+
+class _SimpleHtmlParser(HTMLParser):
+    """Restrict early web editing to plain HTML without opaque note metadata."""
+
+    TAGS = {"p", "br", "div", "span", "h1", "h2", "h3", "h4", "h5", "h6",
+            "strong", "b", "em", "i", "u", "s", "ul", "ol", "li",
+            "blockquote", "pre", "code", "hr"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.safe = True
+
+    def handle_starttag(self, tag, attrs):
+        if tag not in self.TAGS or attrs:
+            self.safe = False
+
+    def handle_startendtag(self, tag, attrs):
+        self.handle_starttag(tag, attrs)
+
+    def handle_endtag(self, tag):
+        if tag not in self.TAGS:
+            self.safe = False
+
+    def handle_comment(self, data):
+        self.safe = False
+
+    def handle_decl(self, decl):
+        self.safe = False
+
+    def unknown_decl(self, data):
+        self.safe = False
+
+    def handle_pi(self, data):
+        self.safe = False
+
+
+def simple_html(html: str) -> bool:
+    if not isinstance(html, str) or "\x00" in html:
+        return False
+    parser = _SimpleHtmlParser()
+    try:
+        parser.feed(html)
+        parser.close()
+        return parser.safe
+    except ValueError:
+        return False
+
+
+def edit_block_reason(detail: dict) -> str | None:
+    if detail["locked"]:
+        return "LOCKED"
+    if detail["trashed"]:
+        return "TRASHED"
+    if detail["attachments"]:
+        return "ATTACHMENTS"
+    if not simple_html(detail["html"]):
+        return "COMPLEX_HTML"
+    return None
 
 
 def validate_url(value: str) -> str:
@@ -102,6 +165,8 @@ class PinnedTransport(httpx.BaseTransport):
         host = request.url.host
         if request.url.scheme not in {"https", "http"} or not host:
             raise NasError("NAS_ADDRESS_BLOCKED")
+        if request.url.scheme == "http" and not self.allow_private:
+            raise NasError("NAS_HTTP_BLOCKED")
         port = request.url.port or (443 if request.url.scheme == "https" else 80)
         try:
             resolved = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
@@ -140,7 +205,7 @@ class NasClient:
         self.ca_file = ca_file
 
     @staticmethod
-    def _data(response: httpx.Response, auth: bool = False) -> dict:
+    def _data(response: httpx.Response, auth: bool = False, empty: bool = False) -> dict:
         if response.status_code != 200:
             raise NasError("NAS_UNAVAILABLE")
         try:
@@ -154,16 +219,26 @@ class NasClient:
                     raise NasError("OTP_REQUIRED")
                 if auth and code in {400, 401, 402, 404}:
                     raise NasError("AUTH_FAILED")
+                if not auth and code in {106, 107, 119}:
+                    raise NasError("NAS_SESSION_EXPIRED")
+                if code == 1064:
+                    raise NasError("REMOTE_CHANGED")
                 raise NasError("NAS_API_ERROR")
             data = payload.get("data")
+            if empty and data is None:
+                return {}
             if not isinstance(data, dict) or data.get("has_fail") is True:
+                raise ValueError()
+            if any(not isinstance(item, dict) or item.get("success") is False
+                   for item in data.get("result", [])):
                 raise ValueError()
             return data
         except (ValueError, TypeError, AttributeError) as exc:
             raise NasError("NAS_API_ERROR") from exc
 
     @staticmethod
-    def _post(client: httpx.Client, base: str, path: str, data: dict) -> dict:
+    def _post(client: httpx.Client, base: str, path: str, data: dict,
+              *, empty: bool = False) -> dict:
         if not PATH.fullmatch(path) or any(p in {".", ".."} for p in path.split("/")):
             raise NasError("NAS_API_ERROR")
         try:
@@ -171,7 +246,7 @@ class NasClient:
             # httpx is not allowed to follow redirects, including same-origin ones.
             if response.is_redirect:
                 raise NasError("NAS_UNAVAILABLE")
-            return NasClient._data(response, auth=data.get("api") == AUTH)
+            return NasClient._data(response, auth=data.get("api") == AUTH, empty=empty)
         except (httpx.HTTPError, OSError) as exc:
             raise NasError("NAS_UNAVAILABLE") from exc
 
@@ -228,3 +303,210 @@ class NasClient:
             if did is not None and not isinstance(did, str):
                 raise NasError("NAS_API_ERROR")
             return NasLogin(sid=sid, device_id=did)
+
+    @staticmethod
+    def _info(client: httpx.Client, base: str, api: str, cap: int, minimum: int) -> tuple[str, int, bool]:
+        info = NasClient._discover(client, base, "all").get(api)
+        if not isinstance(info, dict):
+            raise NasError("NAS_API_ERROR")
+        try:
+            low, high = info["minVersion"], info["maxVersion"]
+            if isinstance(low, bool) or isinstance(high, bool):
+                raise ValueError()
+            version = min(int(high), cap)
+            path = info["path"]
+            if (version < max(minimum, int(low)) or not isinstance(path, str)
+                    or not PATH.fullmatch(path) or any(v in {".", ".."} for v in path.split("/"))):
+                raise ValueError()
+        except (ValueError, KeyError, TypeError) as exc:
+            raise NasError("NAS_API_ERROR") from exc
+        return path, version, str(info.get("requestFormat", "")).upper() == "JSON" or path == "entry.cgi"
+
+    @staticmethod
+    def _fields(api: str, method: str, version: int, sid: str, params: dict,
+                as_json: bool) -> dict[str, str]:
+        fields = {"api": api, "method": method, "version": str(version), "_sid": sid}
+        for key, value in params.items():
+            fields[key] = (json.dumps(value, separators=(",", ":"), ensure_ascii=False)
+                           if as_json or not isinstance(value, str) else value)
+        return fields
+
+    @classmethod
+    def _call(cls, client: httpx.Client, base: str, login: NasLogin, api: str,
+              method: str, cap: int, minimum: int, params: dict | None = None,
+              *, empty: bool = False) -> dict:
+        path, version, as_json = cls._info(client, base, api, cap, minimum)
+        return cls._post(client, base, path, cls._fields(
+            api, method, version, login.sid, params or {}, as_json), empty=empty)
+
+    @classmethod
+    def _list(cls, client: httpx.Client, base: str, login: NasLogin,
+              api: str, key: str, cap: int) -> list[dict]:
+        path, version, as_json = cls._info(client, base, api, cap, 2)
+        rows: list[dict] = []
+        seen: set[str] = set()
+        expected_total: int | None = None
+        while True:
+            response = cls._post(client, base, path, cls._fields(api, "list", version, login.sid,
+                {"offset": len(rows), "limit": 500}, as_json))
+            total, offset, page = response.get("total"), response.get("offset"), response.get(key)
+            if (type(total) is not int or total < 0 or total > 100000
+                    or type(offset) is not int or offset != len(rows) or not isinstance(page, list)
+                    or (expected_total is not None and total != expected_total)):
+                raise NasError("REMOTE_CHANGED" if expected_total is not None and total != expected_total
+                               else "NAS_API_ERROR")
+            expected_total = total
+            ids = [item.get("object_id") for item in page if isinstance(item, dict)]
+            if (len(ids) != len(page) or any(not isinstance(v, str) or not v for v in ids)
+                    or len(ids) != len(set(ids)) or any(v in seen for v in ids)
+                    or not page and len(rows) < total or len(rows) + len(page) > total):
+                raise NasError("NAS_API_ERROR")
+            rows.extend(page)
+            seen.update(ids)
+            if len(rows) == total:
+                return rows
+
+    @staticmethod
+    def _note(row: dict, note_id: str) -> dict:
+        if (row.get("object_id", note_id) != note_id
+                or not all(isinstance(row.get(k), str) for k in ("title", "content"))
+                or not isinstance(row.get("ver"), (str, int))
+                or row.get("attachment") is not None and not isinstance(row["attachment"], dict)
+                or not isinstance(row.get("parent_id"), str)
+                or any(type(row.get(k)) not in (bool, int) or row[k] not in (0, 1)
+                       for k in ("encrypt", "recycle"))):
+            raise NasError("NAS_API_ERROR")
+        attachments = []
+        for file_id, value in (row.get("attachment") or {}).items():
+            if (not isinstance(file_id, str) or not isinstance(value, dict)
+                    or not isinstance(value.get("name"), str)
+                    or (value.get("ref") is not None and not isinstance(value["ref"], str))):
+                raise NasError("NAS_API_ERROR")
+            attachments.append({"id": file_id, "name": value["name"], "ref": value.get("ref")})
+        detail = {"id": note_id, "notebook_id": str(row.get("parent_id", "")),
+                "title": row["title"], "version": str(row["ver"]), "html": row["content"],
+                "attachments": attachments, "locked": bool(row.get("encrypt", False)),
+                "trashed": bool(row.get("recycle", False))}
+        reason = edit_block_reason(detail)
+        return {**detail, "editable": reason is None, "read_only_reason": reason}
+
+    @classmethod
+    def _fetch(cls, client: httpx.Client, base: str, login: NasLogin, note_id: str) -> dict:
+        result = cls._call(client, base, login, NOTE, "get", 3, 2, {"object_id": note_id})
+        missing = [k for k in ("parent_id", "encrypt", "recycle") if result.get(k) is None]
+        if missing:
+            rows = cls._list(client, base, login, NOTE, "notes", 3)
+            fallback = next((row for row in rows if row["object_id"] == note_id), None)
+            if fallback is None or str(fallback.get("ver")) != str(result.get("ver")):
+                raise NasError("REMOTE_CHANGED")
+            result = {**result, **{k: fallback.get(k) for k in missing}}
+        return cls._note(result, note_id)
+
+    def notebooks(self, base: str, login: NasLogin) -> list[dict]:
+        with self._client() as client:
+            rows = self._list(client, validate_url(base), login, NOTEBOOK, "notebooks", 2)
+        if any(not isinstance(v.get("title"), str) for v in rows):
+            raise NasError("NAS_API_ERROR")
+        return [{"id": v["object_id"], "name": v["title"],
+                 "stack": v.get("stack") if isinstance(v.get("stack"), str) else ""} for v in rows]
+
+    def notes(self, base: str, login: NasLogin) -> list[dict]:
+        with self._client() as client:
+            rows = self._list(client, validate_url(base), login, NOTE, "notes", 3)
+        if any(not isinstance(v.get("title"), str) or not isinstance(v.get("ver"), (int, str))
+               for v in rows):
+            raise NasError("NAS_API_ERROR")
+        return [{"id": v["object_id"], "title": v["title"],
+                 "notebook_id": str(v.get("parent_id", "")), "version": str(v["ver"]),
+                 "locked": bool(v.get("encrypt", False)), "trashed": bool(v.get("recycle", False))}
+                for v in rows]
+
+    def fetch(self, base: str, login: NasLogin, note_id: str) -> dict:
+        with self._client() as client:
+            return self._fetch(client, validate_url(base), login, note_id)
+
+    def download(self, base: str, login: NasLogin, note_id: str, file_id: str) -> bytes:
+        base = validate_url(base)
+        with self._client() as client:
+            path, _, as_json = self._info(client, base, NOTE, 1, 1)
+            fields = self._fields(NOTE, "download", 1, login.sid,
+                {"file_id": file_id, "object_id": note_id, "format": "raw", "mode": "download"}, as_json)
+            try:
+                with client.stream("POST", f"{base}/webapi/{path}", data=fields) as response:
+                    if response.status_code != 200 or response.is_redirect:
+                        raise NasError("NAS_UNAVAILABLE")
+                    raw = bytearray()
+                    for chunk in response.iter_bytes():
+                        if len(raw) + len(chunk) > 32 * 1024 * 1024:
+                            raise NasError("ATTACHMENT_TOO_LARGE")
+                        raw.extend(chunk)
+            except (httpx.HTTPError, OSError) as exc:
+                raise NasError("NAS_UNAVAILABLE") from exc
+        # Synology can return an error envelope with a misleading Content-Type.
+        try:
+            envelope = json.loads(raw)
+        except (ValueError, UnicodeError):
+            envelope = None
+        if isinstance(envelope, dict) and envelope.get("success") is False:
+            code = (envelope.get("error") or {}).get("code")
+            raise NasError("NAS_SESSION_EXPIRED" if code in {106, 107, 119} else "NAS_API_ERROR")
+        return bytes(raw)
+
+    def write(self, base: str, login: NasLogin, *, note_id: str | None,
+              notebook_id: str | None, title: str, html: str, version: str | None) -> dict:
+        """One remote write per invocation; never retry on a lost receipt."""
+        base = validate_url(base)
+        with self._client() as client:
+            if note_id:
+                current = self._fetch(client, base, login, note_id)
+                if current["version"] != version:
+                    raise NasError("REMOTE_CHANGED")
+                if current["locked"] or current["trashed"] or current["notebook_id"] != notebook_id:
+                    raise NasError("DOCUMENT_READ_ONLY")
+                if edit_block_reason(current) is not None:
+                    raise NasError("DOCUMENT_READ_ONLY")
+                if not simple_html(html):
+                    raise NasError("DOCUMENT_READ_ONLY")
+                if current["title"] == title and current["html"] == html:
+                    return current
+            elif not simple_html(html):
+                raise NasError("DOCUMENT_READ_ONLY")
+            fields = {"mtime": int(time.time()),
+                      "commit_msg": {"device": "web", "listable": False},
+                      "title": title, "content": html, "brief": html[:180]}
+            if note_id:
+                fields.update(object_id=note_id, ver=version, check_conflict=True)
+            else:
+                if not notebook_id:
+                    raise NasError("NAS_API_ERROR")
+                fields.update(parent_id=notebook_id, encrypt=False, ctime=int(time.time()),
+                              latitude=0, longitude=0)
+            # Once a mutation begins, even a transport failure may mean success.
+            try:
+                receipt = self._call(client, base, login, NOTE,
+                                     "set" if note_id else "create", 3, 2, fields)
+            except NasError as exc:
+                if exc.code in {"NAS_UNAVAILABLE", "NAS_API_ERROR", "NAS_SESSION_EXPIRED"}:
+                    raise NasError("WRITE_UNCERTAIN") from exc
+                raise
+            row = receipt
+            if note_id:
+                records = receipt.get("data")
+                row = records[0] if isinstance(records, list) and len(records) == 1 else None
+            if not isinstance(row, dict):
+                raise NasError("WRITE_UNCERTAIN")
+            returned_id = row.get("object_id") or note_id
+            returned_version = row.get("ver")
+            if (not isinstance(returned_id, str) or not returned_id or
+                    not isinstance(returned_version, str) or note_id and returned_id != note_id):
+                raise NasError("WRITE_UNCERTAIN")
+            try:
+                verified = self._fetch(client, base, login, returned_id)
+            except NasError as exc:
+                raise NasError("WRITE_UNCERTAIN") from exc
+            if (verified["version"] != returned_version or verified["title"] != title
+                    or verified["html"] != html or verified["notebook_id"] != notebook_id
+                    or verified["locked"] or verified["trashed"]
+                    or note_id and verified["attachments"] != current["attachments"]):
+                raise NasError("WRITE_UNCERTAIN")
+            return verified

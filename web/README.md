@@ -1,6 +1,6 @@
-# Synology Markdown Note — Web (초기 구현)
+# Synology Markdown Note — Web
 
-React/TypeScript/Vite + Tailwind/shadcn/ui 기반 화면과 FastAPI/SQLite 서버의 **첫 개발 버전**입니다. 현재는 NAS 최초 설정·연결 확인·아이디/비밀번호/OTP 로그인·로그인 유지·로그아웃만 지원합니다. 노트 읽기·편집·오프라인 저장·동기화·NAS 쓰기는 아직 구현하지 않았습니다.
+React/TypeScript/Vite + Tailwind/shadcn/ui 기반 화면과 FastAPI/SQLite 서버의 **첫 개발 버전**입니다. NAS 최초 설정·아이디/비밀번호/OTP 로그인·로그인 유지와 함께 책장·메모장 탐색, 노트 제목 검색, 본문 조회, 첨부파일 다운로드, 단순 HTML 노트 생성·편집·NAS 저장을 지원합니다. 암호화·휴지통·첨부파일·복합 HTML 노트는 읽기 전용이며, Markdown 원문 첨부파일의 편집과 오프라인 동기화는 아직 지원하지 않습니다.
 
 ## Docker Compose 실행
 
@@ -16,7 +16,7 @@ docker compose ps
 docker compose exec web cat /data/setup-code
 ```
 
-P1 최신 이미지는 `dr.dmomo.net/damho1104/synonote-web:0.1.1-p1`이며 `linux/amd64`, `linux/arm64`용으로 게시했습니다. HTTP NAS 지원, 연결 경고와 초기 설정 코드 확인 안내를 포함합니다. `.env`의 `WEB_IMAGE`로 태그를 변경할 수 있습니다. P1은 최초 설정·인증 UI 단계이며 노트 탐색·편집은 아직 제공하지 않습니다.
+웹 작업 공간 이미지 태그는 `dr.dmomo.net/damho1104/synonote-web:0.2.0`입니다. `.env`의 `WEB_IMAGE`로 태그를 변경할 수 있습니다. 기존 `0.1.1-p1`은 최초 설정·인증 UI 단계입니다.
 
 소스에서 이미지를 직접 빌드하려면 `web/` 디렉터리에서 `docker build -t synonote-web:local .`을 실행한 뒤 `WEB_IMAGE=synonote-web:local docker compose up -d`로 시작할 수 있습니다. Synology Container Manager에서는 `docker-compose.yaml` 내용을 프로젝트 YAML로 입력하고, NAS에 Registry 접근 권한을 설정하세요.
 
@@ -26,7 +26,7 @@ P1 최신 이미지는 `dr.dmomo.net/damho1104/synonote-web:0.1.1-p1`이며 `lin
 
 IP 또는 DNS 이름이 사설 네트워크를 가리키는 NAS는 **관리자만** `NAS_ALLOW_PRIVATE=true`로 설정할 수 있습니다. 로컬·링크 로컬·메타데이터 IP 및 리디렉션은 차단합니다. DNS 조회 결과를 확인한 뒤 검증된 IP로 직접 연결하며 HTTPS에서는 원래 호스트 이름으로 TLS 인증서를 검증합니다. 공개 CA를 사용하지 않는 HTTPS NAS는 검증 가능한 CA 파일을 컨테이너에 읽기 전용으로 마운트하고 `NAS_CA_FILE`을 해당 경로로 지정해야 합니다. 인증서 검증 비활성화는 지원하지 않습니다. `localhost`는 NAS가 아니라 웹 컨테이너 자체를 뜻합니다.
 
-NAS 주소에 `http://192.168.1.10:5000`처럼 HTTP도 지정할 수 있으며 최초 설정과 로그인 화면에 경고가 표시됩니다. **HTTP에서는 웹 서버와 NAS 사이의 비밀번호·OTP·세션 정보 및 노트 데이터가 암호화되지 않습니다.** 내부망이라도 다른 장비에서 트래픽을 볼 수 있으므로 신뢰할 수 있는 네트워크에서만 사용하고 가능하면 HTTPS를 선택하세요. NAS가 사설 주소라면 HTTP에서도 `NAS_ALLOW_PRIVATE=true`가 필요합니다. 웹 클라이언트에 접속하는 브라우저의 HTTPS 설정(`WEB_PUBLIC_ORIGIN`, `WEB_COOKIE_SECURE`)과 NAS 연결 방식은 별개입니다.
+NAS 주소에 `http://192.168.1.10:5000`처럼 HTTP도 지정할 수 있으며 최초 설정과 로그인 화면에 경고가 표시됩니다. **HTTP에서는 웹 서버와 NAS 사이의 비밀번호·OTP·세션 정보 및 노트 데이터가 암호화되지 않습니다.** 내부망이라도 다른 장비에서 트래픽을 볼 수 있으므로 신뢰할 수 있는 네트워크에서만 사용하고 가능하면 HTTPS를 선택하세요. HTTP는 공개/사설 주소와 관계없이 `NAS_ALLOW_PRIVATE=true`일 때만 허용됩니다. false이면 최초 설정·환경변수·기존 저장 주소 모두 연결을 차단합니다. 웹 클라이언트에 접속하는 브라우저의 HTTPS 설정(`WEB_PUBLIC_ORIGIN`, `WEB_COOKIE_SECURE`)과 NAS 연결 방식은 별개입니다.
 
 로그인 유지 체크박스를 선택하면 암호화된 NAS 비밀번호와 선택한 신뢰 기기 ID가 서버의 `/data/web.sqlite3`에 저장되며, 복호화 키는 `/data/master.key`에 보관됩니다. **두 파일을 함께** 안전한 장소에 백업해야 로그인 유지 상태를 복원할 수 있습니다. 쿠키에는 불투명한 랜덤 토큰만 포함하고 서버에는 해시만 저장합니다. 로그아웃하면 현재 토큰과 저장된 자격 증명이 폐기됩니다. OTP는 저장되지 않습니다. 로그인 유지를 선택하지 않은 브라우저 세션은 컨테이너 재시작 후 재로그인이 필요합니다. 타인과 공유하는 기기에서는 로그인 유지와 오프라인 데이터 저장을 권장하지 않습니다.
 
@@ -71,8 +71,16 @@ npm ci
 npm run dev
 ```
 
-백엔드 테스트: `cd web/backend && uv run pytest -q`. 프런트 빌드: `cd web/frontend && npm run build`.
+백엔드 테스트: `cd web/backend && uv run pytest -q`. 프런트 동작 테스트: `cd web/frontend && npm test`. 프런트 빌드: `cd web/frontend && npm run build`.
 
 ## Synology Container Manager 상태
 
 `docker-compose.yaml`은 개인 Registry 이미지를 사용하는 배포용 YAML이며, **Container Manager → 프로젝트 → 생성**에서 사용할 수 있습니다. 실제 Synology 장비에서의 구동은 아직 검증하지 않았습니다. DSM 전용 프로젝트에서는 포트 충돌·볼륨 쓰기 권한(컨테이너 UID 10001)·HTTPS 역방향 프록시·NAS 인증서 CA·NAS로의 네트워크 경로를 확인해야 합니다.
+
+## 편집과 저장 확인
+
+메모장을 선택한 뒤 + 버튼으로 새 노트를 작성합니다. 기존 노트는 본문 상단의 편집 버튼으로 HTML 원문과 제목을 수정합니다. 문단·목록·강조·제목·코드 등의 단순 HTML을 지원하며, 미리보기는 스크립트와 외부 네트워크를 차단한 iframe에서 표시합니다. 첨부파일이 포함된 기존 문서는 원문 손상을 막기 위해 읽기 전용입니다.
+
+편집 내용은 NAS 주소·사용자별로 현재 탭의 sessionStorage에 임시 보관됩니다. 새로고침 후 복원하며 원래 편집 버전도 보존합니다. 탭을 닫으면 임시본이 사라질 수 있습니다. 로그아웃 성공 시 해당 계정 임시본을 삭제하고, 로그아웃 실패 시 유지합니다. NAS 비밀번호·SID·인증 토큰은 브라우저 저장소에 보관하지 않습니다.
+
+저장 전 NAS 버전과 편집 가능 여부를 다시 확인하고 저장 후 본문·제목·버전을 다시 읽어 확인합니다. 충돌하면 내 편집본과 최신 NAS 본문을 비교할 수 있습니다. 응답 유실 등 저장 결과가 불확실하면 자동 재시도하지 않으며 서버에 암호화된 쓰기 의도와 대상 잠금을 보존합니다. Note Station에서 결과를 직접 확인한 후 화면 상단의 보류 해제를 누르세요. 전송 중인 작업은 1시간 동안 해제할 수 없습니다. 서버 재시작 후에도 보류 기록을 유지합니다.

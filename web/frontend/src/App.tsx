@@ -1,44 +1,8 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
-import { AlertTriangle, ArrowRight, BookOpenText, CheckCircle2, Cloud, KeyRound, LockKeyhole, LogOut, RefreshCw, ServerCog, ShieldCheck } from 'lucide-react'
+import { AlertTriangle, ArrowRight, BookOpenText, Cloud, KeyRound, LockKeyhole, RefreshCw, ServerCog, ShieldCheck } from 'lucide-react'
 import { Button } from './components/ui/button'
-
-type Status = { configured: boolean; nas_url: string | null; source: 'environment' | 'database' | 'setup'; read_only: boolean }
-type Session = { username: string; remember: boolean; csrf_token: string }
-type ApiError = { error?: string; detail?: string }
-
-const messages: Record<string, string> = {
-  INVALID_NAS_URL: 'NAS 주소는 사용자 정보·쿼리 없이 HTTP 또는 HTTPS 주소로 입력하세요.',
-  NAS_ADDRESS_BLOCKED: '해당 NAS 주소의 네트워크 연결이 차단되었습니다. 사설망 NAS라면 관리자가 NAS_ALLOW_PRIVATE 설정을 확인해야 합니다.',
-  NAS_UNAVAILABLE: 'NAS와 통신하지 못했습니다. 주소·포트·인증서(HTTPS)·방화벽을 확인하세요.',
-  NAS_API_ERROR: 'NAS가 예상한 Note Station API 응답을 반환하지 않았습니다.',
-  INVALID_SETUP_CODE: '초기 설정 코드가 일치하지 않습니다.',
-  ALREADY_CONFIGURED: '이 설치의 NAS 주소는 이미 설정되어 있습니다.',
-  AUTH_FAILED: '사용자 이름이나 비밀번호, 인증 정보를 확인하세요.',
-  OTP_REQUIRED: 'NAS의 2단계 인증 코드를 입력하세요.',
-  TOO_MANY_ATTEMPTS: '인증 시도가 너무 많습니다. 잠시 후 다시 시도하세요.',
-  RELOGIN_REQUIRED: 'NAS 재인증이 필요합니다. 다시 로그인하세요.',
-  INVALID_NAS_CONFIGURATION: 'NAS_URL 환경변수의 주소가 올바르지 않습니다.',
-  LOCAL_STORE_ERROR: '서버의 암호화 저장소를 열 수 없습니다. 관리자에게 문의하세요.',
-  ORIGIN_REQUIRED: '보안 확인에 실패했습니다. 웹 주소와 WEB_PUBLIC_ORIGIN 설정을 확인하세요.',
-}
-
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  let response: Response
-  try {
-    response = await fetch(path, { credentials: 'same-origin', cache: 'no-store', ...init })
-  } catch {
-    throw new Error('웹 서버에 연결할 수 없습니다. 네트워크를 확인하세요.')
-  }
-  if (!response.ok) {
-    const data = await response.json().catch(() => ({})) as ApiError
-    throw new Error(messages[data.error ?? data.detail ?? ''] ?? '요청을 처리하지 못했습니다.')
-  }
-  return response.json() as Promise<T>
-}
-
-function jsonRequest(body: unknown, headers: Record<string, string> = {}): RequestInit {
-  return { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) }
-}
+import { request, jsonRequest, type Session, type Status } from './api'
+import { Workspace } from './Workspace'
 
 function InsecureNasWarning() {
   return (
@@ -101,7 +65,7 @@ function App() {
       setPassword(''); setOtp('')
     } catch (err) {
       const message = (err as Error).message
-      if (message === messages.OTP_REQUIRED) setOtpVisible(true)
+      if (message === 'NAS의 2단계 인증 코드를 입력하세요.') setOtpVisible(true)
       setError(message)
     } finally { setBusy(false) }
   }
@@ -112,8 +76,16 @@ function App() {
     try {
       await request('/api/auth/logout', jsonRequest({}, { 'X-CSRF-Token': session.csrf_token }))
       setSession(null); setPassword(''); setOtp(''); setOtpVisible(false)
-    } catch (err) { setError((err as Error).message) }
-    finally { setBusy(false) }
+    } finally { setBusy(false) }
+  }
+
+  const sessionExpired = useCallback(() => {
+    setSession(null); setError('로그인 세션이 만료되었습니다. 다시 로그인하세요.')
+  }, [])
+
+  if (!loading && session && status?.configured) {
+    return <Workspace session={session} status={status} onLogout={logout}
+      onSessionExpired={sessionExpired} />
   }
 
   return (
@@ -133,7 +105,7 @@ function App() {
             <div className="rounded-2xl border border-slate-200 bg-white p-5"><ServerCog className="mb-3 text-marine" size={24} /><p className="text-sm font-semibold">설치당 NAS 한 대</p><p className="mt-2 text-xs leading-5 text-slate-500">설정한 NAS로만 접속합니다.</p></div>
             <div className="rounded-2xl border border-slate-200 bg-white p-5"><LockKeyhole className="mb-3 text-marine" size={24} /><p className="text-sm font-semibold">계정별 보안 세션</p><p className="mt-2 text-xs leading-5 text-slate-500">비밀번호와 NAS 세션을 브라우저에 저장하지 않습니다.</p></div>
           </div>
-          <p className="mt-8 text-xs leading-6 text-slate-500">이 개발 단계에서는 초기 설정과 인증만 제공됩니다. 노트 탐색·편집·오프라인 동기화는 후속 단계에 추가됩니다.</p>
+          <p className="mt-8 text-xs leading-6 text-slate-500">로그인 후 책장과 노트를 검색하고, 단순 HTML 노트를 작성·편집할 수 있습니다. 복합 서식과 첨부파일이 있는 노트는 읽기 전용으로 보호됩니다.</p>
         </section>
         <section className="card w-full" aria-live="polite">
           {loading ? (
@@ -157,16 +129,7 @@ function App() {
                 </div>
                 <Button className="w-full" disabled={busy} type="submit">{busy ? 'NAS 연결 확인 중…' : '연결 확인 및 설정 저장'} <ArrowRight size={17} /></Button>
               </form>
-              <p className="mt-5 text-xs leading-5 text-slate-500">자체 서명 인증서는 NAS_CA_FILE로 신뢰 CA를 설정하세요. 사설 IP는 NAS_ALLOW_PRIVATE 설정이 필요합니다.</p>
-            </>
-          ) : session ? (
-            <>
-              <div className="mb-6 flex items-center gap-3"><div className="rounded-xl bg-emerald-50 p-3 text-emerald-700"><CheckCircle2 size={24} /></div><div><p className="text-xs font-semibold text-emerald-700">CONNECTED</p><h3 className="text-xl font-bold">로그인되었습니다</h3></div></div>
-              <p className="text-sm text-slate-600"><b className="text-ink">{session.username}</b> 계정으로 접속했습니다.</p>
-              <div className="mt-6 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm"><p className="text-xs font-semibold text-slate-500">연결된 NAS</p><p className="mt-2 break-all font-medium">{status.nas_url}</p><p className="mt-2 text-xs text-slate-500">{session.remember ? '로그인 유지 사용 중' : '브라우저 세션에서만 로그인 유지'}</p></div>
-              {status.nas_url?.toLowerCase().startsWith('http://') && <div className="mt-4"><InsecureNasWarning /></div>}
-              <div className="mt-5 rounded-xl border border-dashed border-slate-300 p-5 text-sm leading-6 text-slate-600">노트 목록·편집 UI는 다음 구현 단계에서 연결됩니다.</div>
-              <Button className="mt-6 w-full" variant="outline" onClick={() => void logout()} disabled={busy}><LogOut size={16} /> 로그아웃</Button>
+              <p className="mt-5 text-xs leading-5 text-slate-500">자체 서명 인증서는 NAS_CA_FILE로 신뢰 CA를 설정하세요. HTTP 연결과 사설 IP는 NAS_ALLOW_PRIVATE=true 설정이 필요합니다.</p>
             </>
           ) : (
             <>

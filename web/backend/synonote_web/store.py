@@ -103,6 +103,28 @@ class Store:
                     expires REAL NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS sessions_expires ON sessions(expires);
+                CREATE TABLE IF NOT EXISTS write_operations (
+                    operation_id TEXT PRIMARY KEY,
+                    owner TEXT NOT NULL,
+                    target TEXT NOT NULL,
+                    note_id TEXT,
+                    title TEXT NOT NULL,
+                    intent BLOB NOT NULL,
+                    status TEXT NOT NULL,
+                    created REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS writes_owner_target
+                    ON write_operations(owner, target, status);
+                -- One active reservation per NAS account and target, including
+                -- databases created before reservations were introduced.
+                CREATE TABLE IF NOT EXISTS write_target_locks (
+                    owner TEXT NOT NULL,
+                    target TEXT NOT NULL,
+                    PRIMARY KEY (owner, target)
+                );
+                INSERT OR IGNORE INTO write_target_locks(owner, target)
+                    SELECT DISTINCT owner, target FROM write_operations
+                    WHERE status IN ('pending', 'uncertain');
             """)
             # Support databases created by the initial development build.
             columns = {row["name"] for row in db.execute("PRAGMA table_info(sessions)")}
@@ -211,3 +233,59 @@ class Store:
         with self.connect() as db:
             db.execute("UPDATE sessions SET credential=? WHERE token_hash=?",
                        (credential, token_hash(token)))
+
+    def start_write(self, operation_id: str, owner: str, target: str,
+                    note_id: str | None, title: str, intent: dict) -> bool:
+        """Durably record a one-shot mutation before sending it to the NAS."""
+        encrypted = self.cipher.encrypt(json.dumps(intent, ensure_ascii=False).encode())
+        with self.connect() as db:
+            # INSERT obtains SQLite's writer lock. A second process cannot
+            # reserve this target while the first reservation is committing.
+            reserved = db.execute("""INSERT OR IGNORE INTO write_target_locks(owner, target)
+                VALUES (?, ?)""", (owner, target))
+            if reserved.rowcount != 1:
+                return False
+            db.execute("""INSERT INTO write_operations
+                (operation_id, owner, target, note_id, title, intent, status, created)
+                VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)""",
+                (operation_id, owner, target, note_id, title, encrypted, time.time()))
+        return True
+
+    def finish_write(self, operation_id: str, *, uncertain: bool) -> None:
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if uncertain:
+                db.execute("UPDATE write_operations SET status='uncertain' WHERE operation_id=?",
+                           (operation_id,))
+            else:
+                row = db.execute("SELECT owner, target FROM write_operations WHERE operation_id=?",
+                                 (operation_id,)).fetchone()
+                db.execute("DELETE FROM write_operations WHERE operation_id=?", (operation_id,))
+                if row:
+                    self._release_target_if_clear(db, row["owner"], row["target"])
+
+    @staticmethod
+    def _release_target_if_clear(db: sqlite3.Connection, owner: str, target: str) -> None:
+        db.execute("""DELETE FROM write_target_locks WHERE owner=? AND target=?
+            AND NOT EXISTS (SELECT 1 FROM write_operations WHERE owner=? AND target=?
+                AND status IN ('pending', 'uncertain'))""", (owner, target, owner, target))
+
+    def pending_writes(self, owner: str) -> list[dict]:
+        with self.connect() as db:
+            return [dict(row) for row in db.execute("""SELECT operation_id, target,
+                note_id, title, status, created FROM write_operations
+                WHERE owner=? ORDER BY created DESC""", (owner,))]
+
+    def acknowledge_write(self, owner: str, operation_id: str) -> bool:
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("""SELECT target FROM write_operations
+                WHERE owner=? AND operation_id=? AND
+                    (status='uncertain' OR (status='pending' AND created<=?))""",
+                (owner, operation_id, time.time() - 3600)).fetchone()
+            if not row:
+                return False
+            db.execute("DELETE FROM write_operations WHERE owner=? AND operation_id=?",
+                       (owner, operation_id))
+            self._release_target_if_clear(db, owner, row["target"])
+            return True

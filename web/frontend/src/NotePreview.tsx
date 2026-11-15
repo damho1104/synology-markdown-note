@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { previewNonce, canonicalNoteLink } from "./previewSecurity";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 import katex from "katex";
@@ -7,6 +8,14 @@ const EMPTY_BLOCKS: Block[] = [];
 // Strip resource URLs before assigning sanitized HTML to even a detached DOM.
 DOMPurify.addHook("uponSanitizeAttribute", (node, data) => {
   const tag = node.nodeName.toLowerCase();
+  if (tag === "a" && data.attrName === "href") {
+    const canonical = canonicalNoteLink(data.attrValue);
+    if (canonical) {
+      node.setAttribute("href", canonical);
+      data.attrValue = canonical;
+      data.forceKeepAttr = true;
+    }
+  }
   if (
     tag === "img" &&
     data.attrName === "src" &&
@@ -42,7 +51,9 @@ export function NotePreview({
   version,
   attachments,
   bindings,
+  onOpenLink,
 }: {
+  onOpenLink?: (destination: string) => void;
   html: string;
   markdown?: string;
   blocks?: Block[];
@@ -54,10 +65,29 @@ export function NotePreview({
 }) {
   const [page, setPage] = useState("");
   const serial = useRef(0);
+  const frame = useRef<HTMLIFrameElement>(null);
+  const linkNonce = useRef("");
+  const linkEnabled = !!onOpenLink;
+  useEffect(() => {
+    const receive = (event: MessageEvent) => {
+      if (
+        event.source === frame.current?.contentWindow &&
+        event.data?.kind === "synonote:link" &&
+        event.data.nonce === linkNonce.current &&
+        typeof event.data.href === "string" &&
+        canonicalNoteLink(event.data.href)
+      )
+        onOpenLink?.(canonicalNoteLink(event.data.href)!);
+    };
+    window.addEventListener("message", receive);
+    return () => window.removeEventListener("message", receive);
+  }, [onOpenLink]);
   const images = useRef(new Map<string, string>());
   useEffect(() => {
     let active = true;
     const id = ++serial.current;
+    const nonce = previewNonce();
+    linkNonce.current = nonce;
     async function render() {
       let source = markdown === undefined ? html : await marked.parse(markdown);
       if (markdown !== undefined)
@@ -200,23 +230,37 @@ export function NotePreview({
         a.removeAttribute("target");
         a.setAttribute("rel", "noreferrer noopener");
       }
-      const csp = `default-src 'none'; script-src 'none'; connect-src 'none'; form-action 'none'; base-uri 'none'; img-src data: blob:; style-src 'unsafe-inline'; font-src ${window.location.origin} data:`;
+      const csp = `default-src 'none'; script-src ${linkEnabled ? `'nonce-${nonce}'` : "'none'"}; connect-src 'none'; form-action 'none'; base-uri 'none'; img-src data: blob:; style-src 'unsafe-inline'; font-src ${window.location.origin} data:`;
       const css = `:root{color-scheme:${dark ? "dark" : "light"}}body{margin:24px;font:15px/1.75 -apple-system,BlinkMacSystemFont,sans-serif;color:${dark ? "#eee" : "#222"};overflow-wrap:anywhere}pre,code{font-family:ui-monospace,monospace}pre{padding:14px;background:${dark ? "#292929" : "#f4f5f7"};border-radius:6px;white-space:pre-wrap}img,svg{max-width:100%;height:auto}.mermaid{text-align:center;overflow:auto}.mermaid svg text{fill:${dark ? "#eee" : "#222"}}.mermaid svg .node rect,.mermaid svg .node polygon{stroke:${dark ? "#aaa" : "#555"};fill:${dark ? "#242424" : "#fafafa"}}table{border-collapse:collapse}td,th{border:1px solid #888;padding:6px 10px}blockquote{border-left:3px solid #888;margin-left:0;padding-left:16px}a{color:#3989e8}.diagram-error{color:#c75c49}`;
       const fonts = `<style>${katexCss}</style>`;
+      const linkScript = linkEnabled
+        ? `<script nonce="${nonce}">document.addEventListener('click',event=>{const link=event.target.closest?.('a');const href=link?.getAttribute('href');if(href?.startsWith('synology-note://')){event.preventDefault();parent.postMessage({kind:'synonote:link',nonce:'${nonce}',href},${JSON.stringify(window.location.origin)})}})</script>`
+        : "";
       if (active)
         setPage(
-          `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}">${fonts}<style>${css}</style></head><body>${body.innerHTML}</body></html>`,
+          `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}">${fonts}<style>${css}</style></head><body>${body.innerHTML}${linkScript}</body></html>`,
         );
     }
     void render();
     return () => {
       active = false;
     };
-  }, [html, markdown, blocks, dark, noteId, version, attachments, bindings]);
+  }, [
+    html,
+    markdown,
+    blocks,
+    dark,
+    noteId,
+    version,
+    attachments,
+    bindings,
+    linkEnabled,
+  ]);
   return (
     <iframe
+      ref={frame}
       title="노트 HTML 미리보기"
-      sandbox=""
+      sandbox={linkEnabled ? "allow-scripts" : ""}
       referrerPolicy="no-referrer"
       className="note-preview"
       srcDoc={page}

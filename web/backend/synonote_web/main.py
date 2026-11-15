@@ -38,10 +38,16 @@ class LoginInput(BaseModel):
     trust_device: bool = False
 
 
+class TextChange(BaseModel):
+    index: int = Field(ge=0)
+    text: str = Field(max_length=2_000_000)
+
+
 class WriteInput(BaseModel):
     title: str = Field(min_length=1, max_length=256)
     html: str = Field(default="", max_length=2_000_000)
     markdown: str | None = Field(default=None, max_length=2_000_000)
+    text_changes: list[TextChange] | None = Field(default=None, max_length=10000)
     notebook_id: str = Field(min_length=1, max_length=256)
     version: str | None = Field(default=None, max_length=128)
 
@@ -139,6 +145,11 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
             except HTTPException as exc:
                 return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
         response = await call_next(request)
+        # Preserve authentication cookie changes even when a later NAS operation
+        # returns an exception response instead of FastAPI's injected Response.
+        for header in getattr(request.state, "session_cookie_headers", []):
+            if header not in response.raw_headers:
+                response.raw_headers.append(header)
         if request.url.path.startswith("/api/"):
             response.headers["Cache-Control"] = "no-store"
             response.headers["X-Content-Type-Options"] = "nosniff"
@@ -147,7 +158,7 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
     @app.exception_handler(NasError)
     async def nas_error(_: Request, exc: NasError):
         code = exc.code
-        status = (422 if code in {"INVALID_NAS_URL", "MARKDOWN_UNSUPPORTED"} else 401 if code in
+        status = (422 if code in {"INVALID_NAS_URL", "MARKDOWN_UNSUPPORTED", "HTML_PATCH_INVALID"} else 401 if code in
                   {"AUTH_FAILED", "OTP_REQUIRED", "NAS_SESSION_EXPIRED"} else
                   403 if code in {"NAS_ADDRESS_BLOCKED", "NAS_HTTP_BLOCKED", "DOCUMENT_READ_ONLY"} else
                   409 if code in {"REMOTE_CHANGED", "WRITE_UNCERTAIN"} else
@@ -187,10 +198,12 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
         response.set_cookie(cookie_name(request), token, httponly=True, secure=cookie_secure(request),
                             samesite="strict", path="/",
                             max_age=settings.remember_seconds if remember else None)
+        request.state.session_cookie_headers = [h for h in response.raw_headers if h[0] == b"set-cookie"]
 
-    def clear_cookie(response: Response) -> None:
+    def clear_cookie(request: Request, response: Response) -> None:
         for name, secure in (("__Host-synonote_session", True), ("synonote_session", False)):
             response.delete_cookie(name, path="/", secure=secure, httponly=True, samesite="strict")
+        request.state.session_cookie_headers = [h for h in response.raw_headers if h[0] == b"set-cookie"]
 
     def logout_token(token: str) -> None:
         with app.state.session_lock:
@@ -280,7 +293,7 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
         return {"username": body.username, "remember": body.remember, "csrf_token": csrf}
 
     def _current_session_locked(request: Request, response: Response) -> tuple[str, str, str, bool]:
-        token = request.cookies.get(cookie_name(request))
+        token = getattr(request.state, "session_token_override", None) or request.cookies.get(cookie_name(request))
         if not token or len(token) > 256:
             raise HTTPException(401, detail="LOGIN_REQUIRED")
         digest = token_hash(token)
@@ -308,7 +321,7 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
             except NasError as exc:
                 if exc.code in {"AUTH_FAILED", "OTP_REQUIRED"}:
                     logout_token(token)
-                    clear_cookie(response)
+                    clear_cookie(request, response)
                     raise HTTPException(401, detail="RELOGIN_REQUIRED") from exc
                 raise
             app.state.live_nas[digest] = active
@@ -322,6 +335,7 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
                 app.state.live_nas[token_hash(replacement)] = app.state.live_nas.pop(digest)
                 set_cookie(request, response, replacement, True)
                 token = replacement
+                request.state.session_token_override = replacement
         return token, session.username, session.csrf, True
 
     def current_session(request: Request, response: Response) -> tuple[str, str, str, bool]:
@@ -432,7 +446,12 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
                                  body.model_dump()):
             raise HTTPException(409, detail="WRITE_REVIEW_REQUIRED")
         try:
-            if body.markdown is not None:
+            if body.text_changes is not None:
+                if not note_id or not body.version or body.markdown is not None:
+                    raise NasError("HTML_PATCH_INVALID")
+                result = nas.write_html_text(base, active, note_id=note_id, notebook_id=body.notebook_id,
+                    title=body.title, version=body.version, changes=[v.model_dump() for v in body.text_changes])
+            elif body.markdown is not None:
                 result = nas.write_markdown(base, active, note_id=note_id, notebook_id=body.notebook_id,
                                            title=body.title, markdown=body.markdown, version=body.version,
                                            operation_id=operation_id)
@@ -442,7 +461,7 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
         except NasError as exc:
             # A rejected preflight/version conflict is safe to retry after refreshing.
             store.finish_write(operation_id, uncertain=exc.code not in
-                               {"REMOTE_CHANGED", "DOCUMENT_READ_ONLY", "NAS_SESSION_EXPIRED", "MARKDOWN_UNSUPPORTED"})
+                               {"REMOTE_CHANGED", "DOCUMENT_READ_ONLY", "NAS_SESSION_EXPIRED", "MARKDOWN_UNSUPPORTED", "HTML_PATCH_INVALID"})
             raise
         except Exception:
             store.finish_write(operation_id, uncertain=True)
@@ -479,8 +498,14 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
             if not hmac.compare_digest(supplied, csrf):
                 raise HTTPException(403, detail="CSRF_REQUIRED")
             logout_token(token)
-        clear_cookie(response)
+        clear_cookie(request, response)
         return {"ok": True}
+
+    from .library_api import install_library_routes
+    install_library_routes(app, nas=nas, read_nas=read_nas, nas_access=nas_access,
+                           csrf_guard=csrf_guard, checked_id=checked_id, store=store)
+    from .graph_api import register_graph_routes
+    register_graph_routes(app, read_nas=read_nas, nas=nas)
 
     static_dir = Path(os.getenv("WEB_STATIC_DIR", Path(__file__).parents[2] / "frontend" / "dist"))
     if static_dir.is_dir():

@@ -23,6 +23,8 @@ import httpx
 from .compat.source_envelope import SourceEnvelope
 from .compat.markdown import render as render_markdown
 from .compat.errors import CLIError
+from .html_text import annotate, patch as patch_html_text
+from .library_nas import LibraryNasOperations
 
 
 AUTH = "SYNO.API.Auth"
@@ -204,7 +206,7 @@ class NasLogin:
     device_id: str | None
 
 
-class NasClient:
+class NasClient(LibraryNasOperations):
     def __init__(self, *, allow_private: bool = False, ca_file: str | None = None):
         self.allow_private = allow_private
         self.ca_file = ca_file
@@ -451,6 +453,7 @@ class NasClient:
         if detail["locked"]:
             return detail
         candidates = []
+        staged_source = False
         for file in detail["attachments"]:
             if not file["name"].endswith(".md"):
                 continue
@@ -458,6 +461,8 @@ class NasClient:
                 source = SourceEnvelope.decode(self.download(base, login, note_id, file["id"]))
             except CLIError:
                 continue
+            if source.is_staging:
+                staged_source = True
             if source.matches(detail["html"]):
                 candidates.append((source, file["id"]))
         if len(candidates) == 1:
@@ -468,6 +473,12 @@ class NasClient:
             # Existing math image bindings require the original app's PNG export.
             detail["editable"] = not detail["trashed"] and not source.math_attachments
             detail["read_only_reason"] = "TRASHED" if detail["trashed"] else "MATH_EXPORT" if source.math_attachments else None
+        elif len(candidates) > 1:
+            detail.update(editable=False, read_only_reason="AMBIGUOUS_SOURCE")
+        elif not detail["trashed"] and not staged_source:
+            detail.update(annotate(detail["html"]))
+        if staged_source:
+            detail.update(editable=False, read_only_reason="WRITE_IN_PROGRESS", write_in_progress=True)
         return detail
 
     def download(self, base: str, login: NasLogin, note_id: str, file_id: str) -> bytes:
@@ -662,4 +673,32 @@ class NasClient:
             return verified
         except (NasError, CLIError) as exc:
             # Every failure after staging starts may already have changed the NAS.
+            raise NasError("WRITE_UNCERTAIN") from exc
+
+
+    def write_html_text(self, base: str, login: NasLogin, *, note_id: str, notebook_id: str,
+                        title: str, version: str, changes: list[dict]) -> dict:
+        current = self.fetch(base, login, note_id)
+        if current["version"] != version:
+            raise NasError("REMOTE_CHANGED")
+        if current["locked"] or current["trashed"] or current["notebook_id"] != notebook_id or "markdown" in current or current.get("write_in_progress") or "html_text_preview" not in current:
+            raise NasError("DOCUMENT_READ_ONLY")
+        try:
+            if any("\x00" in change["text"] for change in changes):
+                raise ValueError()
+            html = patch_html_text(current["html"], changes)
+        except (ValueError, KeyError, TypeError) as exc:
+            raise NasError("HTML_PATCH_INVALID") from exc
+        if html == current["html"] and title == current["title"]:
+            return current
+        try:
+            _, next_version = self._mutate_markdown(base, login, note_id=note_id, version=version,
+                notebook_id=notebook_id, title=title, html=html)
+            result = self.fetch(base, login, note_id)
+            if (result["version"] != next_version or result["html"] != html or result["title"] != title
+                    or result["notebook_id"] != notebook_id or result["locked"] or result["trashed"]
+                    or sorted(result["attachments"],key=lambda f:f["id"]) != sorted(current["attachments"],key=lambda f:f["id"])):
+                raise NasError("WRITE_UNCERTAIN")
+            return result
+        except NasError as exc:
             raise NasError("WRITE_UNCERTAIN") from exc

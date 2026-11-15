@@ -24,3 +24,10 @@ it("uses natural title sorting", () => {
     "b",
   ]);
 });
+
+it("escapes internal link labels and preserves remote IDs", async () => {
+  const { remoteNoteLink } = await import("./library");
+  expect(remoteNoteLink("[한글]", "note 1")).toBe(
+    "[\\[한글\\]](synology-note://remote/note%201)",
+  );
+});

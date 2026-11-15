@@ -33,6 +33,8 @@ import {
   ChevronDown,
   Code,
   Eye,
+  Network,
+  Link2,
 } from "lucide-react";
 import {
   ApiFailure,
@@ -41,12 +43,25 @@ import {
   type Session,
   type Status,
 } from "./api";
-import CodeMirror from "@uiw/react-codemirror";
+import { NoteGraph } from "./NoteGraph";
+import {
+  LibraryDialog,
+  type DialogAction,
+  type LibraryAction,
+} from "./LibraryDialog";
+import {
+  OriginalEditor,
+  changedHtmlPreview,
+  type TextChange,
+} from "./OriginalEditor";
+import { NoteLinkPicker } from "./NoteLinkPicker";
+import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { tags as syntaxTags } from "@lezer/highlight";
 import { markdown as markdownLanguage } from "@codemirror/lang-markdown";
 import { NotePreview } from "./NotePreview";
 import {
+  remoteNoteLink,
   sortNotes,
   preference,
   savePreference,
@@ -71,6 +86,9 @@ type NoteSummary = {
 };
 type Attachment = { id: string; name: string; ref: string | null };
 type NoteDetail = NoteSummary & {
+  html_text_preview?: string;
+  html_text_token?: string;
+  html_text_blocks?: TextChange[];
   attachment_bindings?: Record<string, string>;
   markdown?: string;
   blocks?: { id: string; html: string; label: string }[];
@@ -95,6 +113,7 @@ type Route = {
   filter?: string;
 };
 type Draft = {
+  text_changes?: TextChange[];
   key: string;
   title: string;
   html: string;
@@ -115,6 +134,10 @@ const EDITOR_EXTENSIONS = [
 ];
 const BLANK_HTML = "<p></p>";
 const readOnlyReasons: Record<string, string> = {
+  AMBIGUOUS_SOURCE:
+    "본문과 일치하는 Markdown 원문이 여러 개 있어 편집할 원문을 안전하게 결정할 수 없습니다.",
+  WRITE_IN_PROGRESS:
+    "NAS에 완료되지 않은 Markdown 저장 원문이 있습니다. 저장 확인 대기 작업을 먼저 확인하세요.",
   LOCKED: "암호화된 노트는 이 웹 버전에서 편집할 수 없습니다.",
   TRASHED: "휴지통에 있는 노트는 편집할 수 없습니다.",
   ATTACHMENTS:
@@ -231,6 +254,16 @@ export function Workspace({
   const [viewMode, setViewMode] = useState<"source" | "split" | "read">(() =>
     preference("editorMode", "read"),
   );
+  const editorRef = useRef<ReactCodeMirrorRef>(null);
+  const [showLinkPicker, setShowLinkPicker] = useState(false);
+  const [showLocalGraph, setShowLocalGraph] = useState(false);
+  const [dialogAction, setDialogAction] = useState<DialogAction | null>(null);
+  const [contextMenu, setContextMenu] = useState<{
+    kind: "notebook" | "stack";
+    id: string;
+    x: number;
+    y: number;
+  } | null>(null);
   const [inspector, setInspector] = useState(false);
   const [dark, setDark] = useState(
     () => window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false,
@@ -270,7 +303,8 @@ export function Workspace({
       : original &&
         (original.title !== draft.title ||
           original.html !== draft.html ||
-          original.markdown !== draft.markdown))
+          original.markdown !== draft.markdown ||
+          !!draft.text_changes?.length))
   );
   navigating.current = {
     route,
@@ -424,7 +458,7 @@ export function Workspace({
           saved &&
           saved.key === activeKey &&
           saved.notebook_id === note.notebook_id &&
-          note.editable
+          (note.editable || !!note.html_text_preview)
         ) {
           setDraft(saved);
           setEditing(true);
@@ -438,6 +472,7 @@ export function Workspace({
             notebook_id: note.notebook_id,
             version: note.version,
             markdown: note.markdown,
+            text_changes: note.html_text_preview ? [] : undefined,
           });
         }
       })
@@ -531,16 +566,18 @@ export function Workspace({
     ],
   );
   const listTitle =
-    selectedNotebook?.name ??
-    (selectedShelf !== null
-      ? selectedShelf || "책장 밖 메모장"
-      : route.filter === "favorites"
-        ? "즐겨찾기"
-        : route.filter === "trash"
-          ? "휴지통"
-          : route.filter?.startsWith("tag:")
-            ? "#" + route.filter.slice(4)
-            : "전체 노트");
+    route.filter === "graph"
+      ? "전체 그래프"
+      : (selectedNotebook?.name ??
+        (selectedShelf !== null
+          ? selectedShelf || "책장 밖 메모장"
+          : route.filter === "favorites"
+            ? "즐겨찾기"
+            : route.filter === "trash"
+              ? "휴지통"
+              : route.filter?.startsWith("tag:")
+                ? "#" + route.filter.slice(4)
+                : "전체 노트"));
   function toggleStack(name: string) {
     setExpandedStacks((current) => {
       const next = current.includes(name)
@@ -562,7 +599,12 @@ export function Workspace({
   function chooseMode(mode: "source" | "split" | "read") {
     setViewMode(mode);
     savePreference("editorMode", mode);
-    if (mode !== "read" && !editing && detail?.editable) startEdit();
+    if (
+      mode !== "read" &&
+      !editing &&
+      (detail?.editable || detail?.html_text_preview)
+    )
+      startEdit();
   }
 
   function navigate(next: Route, replace = false) {
@@ -586,7 +628,12 @@ export function Workspace({
   }
 
   function startEdit() {
-    if (!detail || !detail.editable || !activeKey) return;
+    if (
+      !detail ||
+      (!detail.editable && !detail.html_text_preview) ||
+      !activeKey
+    )
+      return;
     setDraft({
       key: activeKey,
       title: detail.title,
@@ -594,6 +641,7 @@ export function Workspace({
       notebook_id: detail.notebook_id,
       version: detail.version,
       markdown: detail.markdown,
+      text_changes: detail.html_text_preview ? [] : undefined,
     });
     setEditing(true);
     setMessage("");
@@ -618,6 +666,7 @@ export function Workspace({
           notebook_id: detail.notebook_id,
           version: detail.version,
           markdown: detail.markdown,
+          text_changes: detail.html_text_preview ? [] : undefined,
         });
       setEditing(false);
       setMessage("편집을 취소했습니다.");
@@ -627,7 +676,11 @@ export function Workspace({
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!draft || !activeDraftKey || saving || !draft.title.trim()) return;
-    if (!route.compose && (!detail?.editable || !dirty)) return;
+    if (
+      !route.compose &&
+      ((!detail?.editable && !detail?.html_text_preview) || !dirty)
+    )
+      return;
     const isNew = route.compose;
     setSaving(true);
     setNoteError("");
@@ -642,9 +695,11 @@ export function Workspace({
         jsonRequest(
           {
             title: draft.title.trim(),
-            ...(draft.markdown !== undefined
-              ? { markdown: draft.markdown }
-              : { html: draft.html }),
+            ...(draft.text_changes !== undefined
+              ? { text_changes: draft.text_changes }
+              : draft.markdown !== undefined
+                ? { markdown: draft.markdown }
+                : { html: draft.html }),
             notebook_id: draft.notebook_id,
             ...(!isNew
               ? { version: draft.version ?? "unknown-draft-base" }
@@ -677,6 +732,7 @@ export function Workspace({
           notebook_id: next.notebook_id,
           version: next.version,
           markdown: next.markdown,
+          text_changes: next.html_text_preview ? [] : undefined,
         });
       }
       await Promise.all([loadLists(), loadPending()]);
@@ -746,11 +802,86 @@ export function Workspace({
       .catch((error) => handleError(error, setNoteError));
   }
 
-  const previewHtml = editing && draft ? draft.html : (detail?.html ?? "");
+  async function openInternalLink(destination: string) {
+    try {
+      const result = await request<{ note_id: string }>(
+        "/api/resolve-note?target=" + encodeURIComponent(destination),
+      );
+      navigate({
+        shelf: null,
+        notebook: null,
+        note: result.note_id,
+        compose: false,
+      });
+    } catch (error) {
+      handleError(error, setNoteError);
+    }
+  }
+  async function libraryAction(action: LibraryAction) {
+    if (saving) return;
+    if (dirty)
+      throw new Error("편집 내용을 저장하거나 취소한 다음 실행하세요.");
+    setSaving(true);
+    setPendingError("");
+    try {
+      await request(
+        "/api/library/action",
+        jsonRequest(action, { "X-CSRF-Token": session.csrf_token }),
+      );
+      await Promise.all([loadLists(), loadPending()]);
+      if (action.kind === "note") setRevision((n) => n + 1);
+    } catch (error) {
+      handleError(error, setPendingError);
+      void loadPending();
+      throw error;
+    } finally {
+      setSaving(false);
+    }
+  }
+  function exportNote() {
+    const body =
+      draft?.markdown ?? detail?.markdown ?? draft?.html ?? detail?.html;
+    if (body === undefined) return;
+    const isMarkdown = (draft?.markdown ?? detail?.markdown) !== undefined;
+    const url = URL.createObjectURL(
+      new Blob([body], {
+        type: isMarkdown
+          ? "text/markdown;charset=utf-8"
+          : "text/html;charset=utf-8",
+      }),
+    );
+    const link = document.createElement("a");
+    link.href = url;
+    link.download =
+      (draft?.title ?? detail?.title ?? "note").replace(/[\/\\:*?"<>|]/g, "_") +
+      (isMarkdown ? ".md" : ".html");
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+  const selectedSummary = notes.find((n) => n.id === route.note);
+  const previewHtml =
+    editing && draft?.text_changes && detail?.html_text_preview
+      ? changedHtmlPreview(
+          detail.html_text_preview,
+          detail.html_text_token!,
+          draft.text_changes,
+        )
+      : editing && draft
+        ? draft.html
+        : (detail?.html ?? "");
   const previewMarkdown = editing && draft ? draft.markdown : detail?.markdown;
   const renderNotebook = (book: Notebook) => (
     <button
       key={book.id}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        setContextMenu({
+          kind: "notebook",
+          id: book.id,
+          x: e.clientX,
+          y: e.clientY,
+        });
+      }}
       className={`native-nav notebook ${route.notebook === book.id ? "selected" : ""}`}
       onClick={() =>
         navigate({
@@ -929,9 +1060,29 @@ export function Workspace({
               <Star size={16} />
               <span>즐겨찾기</span>
             </button>
+            <button
+              className={`native-nav ${route.filter === "graph" ? "selected" : ""}`}
+              onClick={() => selectFilter("graph")}
+            >
+              <Network size={16} />
+              <span>전체 그래프</span>
+            </button>
             <div className="sidebar-section">책장 · 메모장</div>
             {shelves.filter(Boolean).map((stack) => (
-              <div key={stack} className="stack-group">
+              <div
+                key={stack}
+                className="stack-group"
+                onContextMenu={(e) => {
+                  if ((e.target as HTMLElement).closest(".notebook")) return;
+                  e.preventDefault();
+                  setContextMenu({
+                    kind: "stack",
+                    id: stack,
+                    x: e.clientX,
+                    y: e.clientY,
+                  });
+                }}
+              >
                 <div
                   className={`stack-row ${selectedShelf === stack && !route.notebook ? "selected" : ""}`}
                 >
@@ -986,6 +1137,34 @@ export function Workspace({
               )
               .map(renderNotebook)}
             {listLoading && <p className="sidebar-status">불러오는 중…</p>}
+            <button
+              className="native-nav"
+              disabled={saving}
+              onClick={() =>
+                setDialogAction({
+                  request: { kind: "stack", action: "create" },
+                  title: "새 책장 만들기",
+                  mode: "createStack",
+                })
+              }
+            >
+              <Book size={16} />
+              <span>책장 만들기</span>
+            </button>
+            <button
+              className="native-nav"
+              disabled={saving}
+              onClick={() =>
+                setDialogAction({
+                  request: { kind: "notebook", action: "create" },
+                  title: "메모장 추가",
+                  mode: "name",
+                })
+              }
+            >
+              <FilePlus2 size={16} />
+              <span>노트북 추가</span>
+            </button>
             {!!tags.length && (
               <>
                 <div className="sidebar-section">태그</div>
@@ -1123,7 +1302,19 @@ export function Workspace({
           </footer>
         </section>
         <main className="native-detail" aria-label="노트 본문">
-          {!activeKey ? (
+          {route.filter === "graph" ? (
+            <NoteGraph
+              key={"graph-" + revision}
+              onOpenNote={(id) =>
+                navigate({
+                  shelf: null,
+                  notebook: null,
+                  note: id,
+                  compose: false,
+                })
+              }
+            />
+          ) : !activeKey ? (
             <div className="native-empty">
               <BookOpenText size={40} />
               <h2>노트를 선택하세요</h2>
@@ -1155,18 +1346,134 @@ export function Workspace({
                     <h1>{detail?.title || "제목 없음"}</h1>
                   )}
                   <div className="editor-tools">
-                    {!editing && detail?.editable && (
+                    {editing && draft?.markdown !== undefined && (
                       <button
-                        className="native-button"
-                        onClick={() => {
-                          setViewMode("split");
-                          startEdit();
-                        }}
+                        className="icon-button"
+                        aria-label="노트 연결"
+                        disabled={saving || viewMode === "read"}
+                        onClick={() => setShowLinkPicker(true)}
                       >
-                        <Pencil size={13} />
-                        편집
+                        <Link2 size={17} />
                       </button>
                     )}
+                    {detail && (
+                      <>
+                        <button
+                          className="icon-button"
+                          aria-label={
+                            selectedSummary?.favorite
+                              ? "즐겨찾기 해제"
+                              : "즐겨찾기"
+                          }
+                          disabled={saving || dirty}
+                          onClick={() =>
+                            void libraryAction({
+                              kind: "note",
+                              id: detail.id,
+                              action: "favorite",
+                              version: detail.version,
+                              value: !selectedSummary?.favorite,
+                            }).catch(() => {})
+                          }
+                        >
+                          <Star
+                            size={17}
+                            fill={
+                              selectedSummary?.favorite
+                                ? "currentColor"
+                                : "none"
+                            }
+                          />
+                        </button>
+                        <details className="editor-menu">
+                          <summary
+                            className="icon-button"
+                            aria-label="노트 작업"
+                          >
+                            ···
+                          </summary>
+                          <div>
+                            <button
+                              disabled={saving || dirty}
+                              onClick={() =>
+                                setDialogAction({
+                                  request: {
+                                    kind: "note",
+                                    id: detail.id,
+                                    action: "move",
+                                    version: detail.version,
+                                  },
+                                  title: "노트 이동",
+                                  mode: "notebook",
+                                  initial: detail.notebook_id,
+                                })
+                              }
+                            >
+                              다른 메모장으로 이동…
+                            </button>
+                            <button
+                              disabled={saving || dirty}
+                              onClick={() =>
+                                setDialogAction({
+                                  request: {
+                                    kind: "note",
+                                    id: detail.id,
+                                    action: "tags",
+                                    version: detail.version,
+                                  },
+                                  title: "태그 편집",
+                                  mode: "tags",
+                                  initial: (
+                                    detail.tags ??
+                                    selectedSummary?.tags ??
+                                    []
+                                  ).join(", "),
+                                })
+                              }
+                            >
+                              태그 편집…
+                            </button>
+                            <button onClick={exportNote}>내보내기…</button>
+                            <button
+                              disabled={saving || dirty}
+                              onClick={() => {
+                                if (
+                                  window.confirm(
+                                    detail.trashed
+                                      ? "이 노트를 복원할까요?"
+                                      : "이 노트를 휴지통으로 이동할까요?",
+                                  )
+                                )
+                                  void libraryAction({
+                                    kind: "note",
+                                    id: detail.id,
+                                    action: detail.trashed
+                                      ? "restore"
+                                      : "trash",
+                                    version: detail.version,
+                                  }).catch(() => {});
+                              }}
+                            >
+                              {detail.trashed ? "복원" : "휴지통으로 이동"}
+                            </button>
+                          </div>
+                        </details>
+                      </>
+                    )}
+
+                    {!editing &&
+                      (detail?.editable || detail?.html_text_preview) && (
+                        <button
+                          className="native-button"
+                          onClick={() => {
+                            setViewMode("split");
+                            startEdit();
+                          }}
+                        >
+                          <Pencil size={13} />
+                          편집
+                        </button>
+                      )}
                     {editing && (
                       <>
                         <button
@@ -1211,13 +1518,16 @@ export function Workspace({
                   {noteError}
                 </div>
               )}
-              {!route.compose && detail && !detail.editable && (
-                <div className="workspace-alert warning">
-                  <ShieldAlert size={15} />
-                  {readOnlyReasons[detail.read_only_reason ?? ""] ??
-                    "이 문서는 읽기 전용입니다."}
-                </div>
-              )}
+              {!route.compose &&
+                detail &&
+                !detail.editable &&
+                !detail.html_text_preview && (
+                  <div className="workspace-alert warning">
+                    <ShieldAlert size={15} />
+                    {readOnlyReasons[detail.read_only_reason ?? ""] ??
+                      "이 문서는 읽기 전용입니다."}
+                  </div>
+                )}
               {compare && draft && (
                 <div className="workspace-alert warning">
                   <div>
@@ -1264,8 +1574,35 @@ export function Workspace({
                           ? "MARKDOWN"
                           : "HTML 원문"}
                       </div>
-                      {previewMarkdown !== undefined ? (
+                      {detail?.html_text_preview &&
+                      draft?.text_changes !== undefined ? (
+                        <OriginalEditor
+                          html={detail.html_text_preview}
+                          token={detail.html_text_token!}
+                          blocks={detail.html_text_blocks ?? []}
+                          changes={draft.text_changes}
+                          editable={editing && !saving}
+                          dark={dark}
+                          onChange={(change) => {
+                            const original = detail.html_text_blocks?.find(
+                              (b) => b.index === change.index,
+                            );
+                            setDraft({
+                              ...draft,
+                              text_changes: [
+                                ...draft.text_changes!.filter(
+                                  (c) => c.index !== change.index,
+                                ),
+                                ...(original?.text === change.text
+                                  ? []
+                                  : [change]),
+                              ],
+                            });
+                          }}
+                        />
+                      ) : previewMarkdown !== undefined ? (
                         <CodeMirror
+                          ref={editorRef}
                           aria-label="Markdown 본문"
                           value={previewMarkdown}
                           extensions={EDITOR_EXTENSIONS}
@@ -1314,6 +1651,9 @@ export function Workspace({
                         version={detail?.version}
                         attachments={detail?.attachments}
                         bindings={detail?.attachment_bindings}
+                        onOpenLink={(destination) =>
+                          void openInternalLink(destination)
+                        }
                       />
                     </section>
                   )}
@@ -1385,6 +1725,31 @@ export function Workspace({
                   ))
                 : "첨부파일 없음"}
             </div>
+            <h3>로컬 그래프 · 백링크</h3>
+            {showLocalGraph && detail ? (
+              <div style={{ height: 420 }}>
+                <NoteGraph
+                  key={"graph-" + revision}
+                  focusId={detail.id}
+                  onOpenNote={(id) =>
+                    navigate({
+                      shelf: null,
+                      notebook: null,
+                      note: id,
+                      compose: false,
+                    })
+                  }
+                />
+              </div>
+            ) : (
+              <button
+                className="native-button"
+                disabled={!detail}
+                onClick={() => setShowLocalGraph(true)}
+              >
+                연결 확인
+              </button>
+            )}
             <h3>화면</h3>
             <label className="inspector-card theme-choice">
               <input
@@ -1402,6 +1767,95 @@ export function Workspace({
           </aside>
         )}
       </div>
+      {contextMenu && (
+        <div
+          className="native-context-menu"
+          role="menu"
+          style={{
+            left: Math.min(contextMenu.x, window.innerWidth - 190),
+            top: Math.min(contextMenu.y, window.innerHeight - 150),
+          }}
+          onMouseLeave={() => setContextMenu(null)}
+        >
+          <button
+            onClick={() => {
+              setDialogAction({
+                request: {
+                  kind: contextMenu.kind,
+                  id: contextMenu.id,
+                  action: "rename",
+                },
+                title:
+                  contextMenu.kind === "stack"
+                    ? "책장 이름 변경"
+                    : "메모장 이름 변경",
+                mode: "name",
+                initial:
+                  contextMenu.kind === "stack"
+                    ? contextMenu.id
+                    : notebookById.get(contextMenu.id)?.name,
+              });
+              setContextMenu(null);
+            }}
+          >
+            이름 변경…
+          </button>
+          {contextMenu.kind === "notebook" && (
+            <button
+              onClick={() => {
+                setDialogAction({
+                  request: {
+                    kind: "notebook",
+                    id: contextMenu.id,
+                    action: "move",
+                  },
+                  title: "책장으로 이동",
+                  mode: "stack",
+                  initial: notebookById.get(contextMenu.id)?.stack,
+                });
+                setContextMenu(null);
+              }}
+            >
+              책장으로 이동…
+            </button>
+          )}
+          <button onClick={() => setContextMenu(null)}>닫기</button>
+        </div>
+      )}
+      {showLinkPicker && (
+        <NoteLinkPicker
+          notes={notes}
+          notebooks={notebooks}
+          current={detail?.id}
+          onClose={() => setShowLinkPicker(false)}
+          onSelect={(note) => {
+            const view = editorRef.current?.view;
+            if (view) {
+              const range = view.state.selection.main;
+              const label = range.empty
+                ? note.title
+                : view.state.doc.sliceString(range.from, range.to);
+              const insert = remoteNoteLink(label, note.id);
+              view.dispatch({
+                changes: { from: range.from, to: range.to, insert },
+                selection: { anchor: range.from + insert.length },
+              });
+              view.focus();
+            }
+            setShowLinkPicker(false);
+          }}
+        />
+      )}
+      {dialogAction && (
+        <LibraryDialog
+          key={JSON.stringify(dialogAction)}
+          config={dialogAction}
+          notebooks={notebooks}
+          busy={saving}
+          onSubmit={libraryAction}
+          onClose={() => setDialogAction(null)}
+        />
+      )}
     </div>
   );
 }

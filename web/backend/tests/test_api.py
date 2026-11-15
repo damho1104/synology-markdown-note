@@ -518,3 +518,29 @@ def test_auto_origin_rejects_malformed_and_cross_site_origins(tmp_path, origin):
     client=TestClient(create_app(Settings(data_dir=tmp_path,nas_url='https://nas.example'),nas))
     assert post(client,'/api/auth/login',{'username':'alice','password':'correct'},origin=origin).status_code==403
     assert not nas.login_calls
+
+
+def test_library_repeated_session_checks_use_the_rotated_token(tmp_path):
+    from types import SimpleNamespace
+    class LibraryNas(NotesNas):
+        def preflight_library_action(self,base,login,command):return SimpleNamespace(base=base)
+        def apply_library_action(self,base,login,plan):self.write_calls+=1
+    nas=LibraryNas();app=app_at(tmp_path,nas,nas_url='https://nas.example');client=TestClient(app)
+    csrf=post(client,'/api/auth/login',{'username':'alice','password':'correct','remember':True}).json()['csrf_token']
+    with sqlite3.connect(tmp_path/'web.sqlite3') as db:db.execute('UPDATE sessions SET rotated=0')
+    response=post(client,'/api/library/action',{'kind':'note','action':'tags','id':'note1','version':'v1','value':[]},csrf=csrf)
+    assert response.status_code==200,response.text
+    assert nas.write_calls==1
+    assert client.get('/api/auth/me').status_code==200
+
+
+def test_failed_nas_read_still_delivers_the_rotated_cookie(tmp_path):
+    class UnavailableNas(NotesNas):
+        def notes(self,*args):raise NasError('NAS_UNAVAILABLE')
+    client=TestClient(app_at(tmp_path,UnavailableNas(),nas_url='https://nas.example'))
+    post(client,'/api/auth/login',{'username':'alice','password':'correct','remember':True})
+    with sqlite3.connect(tmp_path/'web.sqlite3') as db:db.execute('UPDATE sessions SET rotated=0')
+    response=client.get('/api/notes')
+    assert response.status_code==503
+    assert 'set-cookie' in response.headers
+    assert client.get('/api/auth/me').status_code==200

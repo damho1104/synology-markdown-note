@@ -4,7 +4,8 @@ from synonote_web.nas import NasClient, NasLogin, NOTE
 from synonote_web.compat.source_envelope import SourceEnvelope
 
 
-def test_fetch_uses_verified_mac_source_and_preserves_markdown(monkeypatch):
+@pytest.mark.parametrize("ambiguous", [False, True])
+def test_fetch_uses_verified_mac_source_and_preserves_markdown(monkeypatch, ambiguous):
     from urllib.parse import parse_qs
     markdown = '# hello\n\n```mermaid\nflowchart LR\n A-->B\n```\n'
     html = '<h1>hello</h1>\n<pre><code class="language-mermaid">flowchart LR\n A--&gt;B\n</code></pre>\n'
@@ -15,9 +16,15 @@ def test_fetch_uses_verified_mac_source_and_preserves_markdown(monkeypatch):
             data={NOTE:{'path':'entry.cgi','minVersion':1,'maxVersion':3}}
         elif form['method']=='download': return httpx.Response(200,content=source)
         else: data={'object_id':'n1','parent_id':'b1','title':'hello','ver':'v1','encrypt':False,'recycle':False,'content':html,'attachment':{'f1':{'name':'synology-note-source.md','ref':None}}}
+        if ambiguous and form['method']=='get':data['attachment']['f2']={'name':'another-source.md','ref':None}
         return httpx.Response(200,json={'success':True,'data':data})
     monkeypatch.setattr(NasClient,'_client',lambda self:httpx.Client(transport=httpx.MockTransport(handler)))
     detail=NasClient().fetch('https://nas.example',NasLogin('sid',None),'n1')
+    if ambiguous:
+        assert detail['editable'] is False
+        assert detail['read_only_reason']=='AMBIGUOUS_SOURCE'
+        assert 'html_text_preview' not in detail
+        return
     assert detail['markdown']==markdown
     assert detail['editable'] is True
     assert detail['source_file_id']=='f1'

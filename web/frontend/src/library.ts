@@ -54,3 +54,7 @@ export function dateLabel(value?: number | null): string {
       })
     : "날짜 없음";
 }
+
+export function remoteNoteLink(label: string, id: string): string {
+  return `[${label.replace(/\\/g, "\\\\").replace(/\[/g, "\\[").replace(/\]/g, "\\]")}](synology-note://remote/${encodeURIComponent(id)})`;
+}

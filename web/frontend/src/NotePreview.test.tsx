@@ -65,3 +65,69 @@ it("loads bound attachment images only through the authenticated local API", asy
     vi.unstubAllGlobals();
   }
 });
+
+it("forwards internal note links only from its own nonce-protected preview", async () => {
+  const { vi } = await import("vitest");
+  vi.stubGlobal("crypto", {
+    getRandomValues: (bytes: Uint8Array) => bytes.fill(1),
+  });
+  const open = vi.fn();
+  try {
+    render(
+      <NotePreview
+        html={
+          '<a href="synology-note://remote/note1">linked</a><script>bad()</script>'
+        }
+        onOpenLink={open}
+      />,
+    );
+    const frame = screen.getByTitle("노트 HTML 미리보기") as HTMLIFrameElement;
+    await waitFor(() =>
+      expect(frame.getAttribute("srcdoc")).toContain(
+        "synology-note://remote/note1",
+      ),
+    );
+    expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(frame.getAttribute("srcdoc")).not.toContain("bad()");
+    const data = {
+      kind: "synonote:link",
+      nonce: "01".repeat(16),
+      href: "synology-note://remote/note1",
+    };
+    window.dispatchEvent(new MessageEvent("message", { source: window, data }));
+    expect(open).not.toHaveBeenCalled();
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        data: { ...data, href: "https://evil.example" },
+      }),
+    );
+    expect(open).not.toHaveBeenCalled();
+    window.dispatchEvent(
+      new MessageEvent("message", { source: frame.contentWindow, data }),
+    );
+    expect(open).toHaveBeenCalledWith("synology-note://remote/note1");
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+it.each([
+  ["SYNOLOGY-NOTE://REMOTE/note1", "synology-note://remote/note1"],
+  [
+    encodeURIComponent(
+      "synology-note://note/12345678-1234-4321-ABCD-123456789ABC",
+    ),
+    "synology-note://note/12345678-1234-4321-abcd-123456789abc",
+  ],
+])(
+  "retains and normalizes supported note links in sanitized output: %s",
+  async (input, expected) => {
+    render(<NotePreview html={`<a href="${input}">linked</a>`} />);
+    await waitFor(() =>
+      expect(
+        screen.getByTitle("노트 HTML 미리보기").getAttribute("srcdoc"),
+      ).toContain(`href="${expected}"`),
+    );
+  },
+);

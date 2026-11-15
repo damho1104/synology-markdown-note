@@ -2,32 +2,23 @@
 
 React/TypeScript/Vite + Tailwind/shadcn/ui 기반 화면과 FastAPI/SQLite 서버의 **첫 개발 버전**입니다. 현재는 NAS 최초 설정·연결 확인·아이디/비밀번호/OTP 로그인·로그인 유지·로그아웃만 지원합니다. 노트 읽기·편집·오프라인 저장·동기화·NAS 쓰기는 아직 구현하지 않았습니다.
 
-## 로컬 Docker Compose
+## Docker Compose 실행
 
-프로젝트 루트의 `web/` 디렉터리에서 실행합니다.
+프로젝트 루트의 `web/` 디렉터리에서 `docker-compose.yaml`을 실행합니다. 기본 설정은 개인 Registry에서 이미지를 내려받습니다. Registry 인증이 필요한 서버에서는 먼저 `docker login dr.dmomo.net`을 실행하세요.
 
 ```sh
 cd web
-cp .env.example .env  # 최초 실행 시 1회; 기존 .env가 있으면 덮어쓰지 마세요
-# localhost HTTP 테스트 시 .env에서 WEB_COOKIE_SECURE=false로 변경
-docker compose build
+cp -n .env.example .env  # 최초 실행 시 1회; 기존 .env는 유지
+# .env의 WEB_IMAGE 및 HTTPS 프록시 설정을 배포 환경에 맞게 수정
+docker compose pull
 docker compose up -d
 docker compose ps
 docker compose exec web cat /data/setup-code
 ```
 
-소스 없이 개인 Registry 이미지로 실행하려면 `compose.registry.yaml`을 사용합니다. P1 초기 버전은 `dr.dmomo.net/damho1104/synonote-web:0.1.0-p1`이며 `linux/amd64`, `linux/arm64`용으로 게시합니다. Registry 인증이 필요한 서버에서는 먼저 `docker login dr.dmomo.net`을 실행하세요.
+P1 초기 이미지는 `dr.dmomo.net/damho1104/synonote-web:0.1.0-p1`이며 `linux/amd64`, `linux/arm64`용으로 게시했습니다. `.env`의 `WEB_IMAGE`로 태그를 변경할 수 있습니다. P1은 최초 설정·인증 UI 단계이며 노트 탐색·편집은 아직 제공하지 않습니다.
 
-```sh
-cd web
-cp .env.example .env  # 최초 실행 시 1회; 기존 .env가 있으면 덮어쓰지 마세요
-# .env의 WEB_IMAGE 및 HTTPS 프록시 설정을 배포 환경에 맞게 수정
-docker compose -f compose.registry.yaml pull
-docker compose -f compose.registry.yaml up -d
-docker compose -f compose.registry.yaml exec web cat /data/setup-code
-```
-
-이 Compose 파일은 로컬 빌드 없이 이미지를 내려받으며, `web/.env.example`에 기본 이미지 주소가 포함되어 있고 `.env`의 `WEB_IMAGE`로 태그를 바꿀 수 있습니다. Synology Container Manager에서 사용할 때는 `compose.registry.yaml` 내용을 프로젝트 YAML로 입력하고, NAS에 Registry 접근 권한을 설정하세요. P1은 최초 설정·인증 UI 단계이며 노트 탐색·편집은 아직 제공하지 않습니다.
+소스에서 이미지를 직접 빌드하려면 `web/` 디렉터리에서 `docker build -t synonote-web:local .`을 실행한 뒤 `WEB_IMAGE=synonote-web:local docker compose up -d`로 시작할 수 있습니다. Synology Container Manager에서는 `docker-compose.yaml` 내용을 프로젝트 YAML로 입력하고, NAS에 Registry 접근 권한을 설정하세요.
 
 기본 공개 포트는 **호스트 `127.0.0.1:8787`**입니다. 브라우저의 `http://localhost:8787`에서 초기 설정을 진행할 때에는 `.env`에서 `WEB_COOKIE_SECURE=false`로 변경해야 합니다. 운영에서는 외부 HTTPS 역방향 프록시를 구성하고 `WEB_COOKIE_SECURE=true`, `WEB_PUBLIC_ORIGIN=https://실제-웹-도메인`을 설정하세요. `WEB_PUBLIC_ORIGIN`은 브라우저에서 접근하는 **origin**으로, 끝에 경로를 붙이지 않습니다. 프록시는 원래 Host를 전달해야 하고 앱은 임의 `X-Forwarded-*` 헤더를 신뢰하지 않습니다.
 
@@ -68,4 +59,4 @@ npm run dev
 
 ## Synology Container Manager 상태
 
-`compose.yaml`은 **소스 빌드 방식**이므로 Git 작업 공간의 `web/` 폴더 전체가 필요합니다. `compose.registry.yaml`은 개인 Registry 이미지를 사용하는 배포용 YAML이며, **Container Manager → 프로젝트 → 생성**에서 사용할 수 있습니다. 실제 Synology 장비에서의 구동은 아직 검증하지 않았습니다. DSM 전용 프로젝트에서는 포트 충돌·볼륨 쓰기 권한(컨테이너 UID 10001)·HTTPS 역방향 프록시·NAS 인증서 CA·NAS로의 네트워크 경로를 확인해야 합니다.
+`docker-compose.yaml`은 개인 Registry 이미지를 사용하는 배포용 YAML이며, **Container Manager → 프로젝트 → 생성**에서 사용할 수 있습니다. 실제 Synology 장비에서의 구동은 아직 검증하지 않았습니다. DSM 전용 프로젝트에서는 포트 충돌·볼륨 쓰기 권한(컨테이너 UID 10001)·HTTPS 역방향 프록시·NAS 인증서 CA·NAS로의 네트워크 경로를 확인해야 합니다.

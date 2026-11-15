@@ -467,3 +467,24 @@ def test_attachment_download_preserves_rotated_login_cookie(tmp_path):
     assert result.content == b'file-content'
     assert 'set-cookie' in result.headers
     assert client.get('/api/auth/me').status_code == 200
+
+
+def test_http_login_reports_secure_cookie_mismatch_before_nas_auth(tmp_path):
+    nas = FakeNas()
+    app = create_app(Settings(data_dir=tmp_path, nas_url='https://nas.example', secure_cookies=True), nas)
+    client = TestClient(app)
+    response = post(client, '/api/auth/login', {'username': 'alice', 'password': 'correct'})
+    assert response.status_code == 503
+    assert response.json() == {'detail': 'SECURE_COOKIE_REQUIRES_HTTPS'}
+    assert not nas.login_calls
+    assert not app.state.transient
+
+
+def test_https_proxy_origin_keeps_secure_cookie_even_on_internal_http(tmp_path):
+    nas = FakeNas()
+    app = create_app(Settings(data_dir=tmp_path, nas_url='https://nas.example', secure_cookies=True, public_origin='https://notes.example'), nas)
+    client = TestClient(app, base_url='http://backend')
+    response = post(client, '/api/auth/login', {'username': 'alice', 'password': 'correct'}, origin='https://notes.example')
+    assert response.status_code == 200
+    assert response.headers['set-cookie'].startswith('__Host-synonote_session=')
+    assert 'Secure' in response.headers['set-cookie'].split('; ')

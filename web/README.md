@@ -16,7 +16,7 @@ docker compose ps
 docker compose exec web cat /data/setup-code
 ```
 
-웹 작업 공간 이미지 태그는 `dr.dmomo.net/damho1104/synonote-web:0.2.0`입니다. `.env`의 `WEB_IMAGE`로 태그를 변경할 수 있습니다. 기존 `0.1.1-p1`은 최초 설정·인증 UI 단계입니다.
+웹 작업 공간 이미지 태그는 `dr.dmomo.net/damho1104/synonote-web:0.2.1`입니다. `.env`의 `WEB_IMAGE`로 태그를 변경할 수 있습니다. 기존 `0.1.1-p1`은 최초 설정·인증 UI 단계입니다.
 
 소스에서 이미지를 직접 빌드하려면 `web/` 디렉터리에서 `docker build -t synonote-web:local .`을 실행한 뒤 `WEB_IMAGE=synonote-web:local docker compose up -d`로 시작할 수 있습니다. Synology Container Manager에서는 `docker-compose.yaml` 내용을 프로젝트 YAML로 입력하고, NAS에 Registry 접근 권한을 설정하세요.
 
@@ -84,3 +84,11 @@ npm run dev
 편집 내용은 NAS 주소·사용자별로 현재 탭의 sessionStorage에 임시 보관됩니다. 새로고침 후 복원하며 원래 편집 버전도 보존합니다. 탭을 닫으면 임시본이 사라질 수 있습니다. 로그아웃 성공 시 해당 계정 임시본을 삭제하고, 로그아웃 실패 시 유지합니다. NAS 비밀번호·SID·인증 토큰은 브라우저 저장소에 보관하지 않습니다.
 
 저장 전 NAS 버전과 편집 가능 여부를 다시 확인하고 저장 후 본문·제목·버전을 다시 읽어 확인합니다. 충돌하면 내 편집본과 최신 NAS 본문을 비교할 수 있습니다. 응답 유실 등 저장 결과가 불확실하면 자동 재시도하지 않으며 서버에 암호화된 쓰기 의도와 대상 잠금을 보존합니다. Note Station에서 결과를 직접 확인한 후 화면 상단의 보류 해제를 누르세요. 전송 중인 작업은 1시간 동안 해제할 수 없습니다. 서버 재시작 후에도 보류 기록을 유지합니다.
+
+## 로그인 200 이후 조회가 401인 경우
+
+`/api/auth/login`은 200인데 `/api/notebooks`, `/api/notes`가 `{"detail":"LOGIN_REQUIRED"}`를 반환하면 브라우저의 웹 세션 쿠키가 전달되지 않은 경우를 먼저 확인합니다. 기본 `WEB_COOKIE_SECURE=true` 쿠키는 HTTPS용입니다. HTTP IP/도메인으로 접속하면 브라우저가 쿠키를 보관하지 않아 이 증상이 발생할 수 있습니다. NAS 주소의 HTTP/HTTPS와는 별개의 설정입니다.
+
+신뢰하는 내부망에서 웹도 HTTP로 사용하려면 `.env`에 `WEB_COOKIE_SECURE=false`를 설정하고 `docker compose up -d --force-recreate web`로 재생성한 뒤 다시 로그인하세요. `docker compose restart`만으로는 변경된 환경변수가 반영되지 않습니다. Compose 프로젝트 환경변수를 직접 관리한다면 해당 설정도 함께 변경하세요. 외부 HTTPS 프록시를 사용하는 경우에는 `WEB_COOKIE_SECURE=true`를 유지하고 `WEB_PUBLIC_ORIGIN=https://실제-웹-도메인`을 설정합니다.
+
+0.2.1부터 HTTP/Secure 설정 불일치는 로그인 전에 구체적인 설정 오류로 알리며, 로그인 응답 후에도 실제 쿠키로 세션 조회가 되는지 확인한 뒤 작업 공간을 엽니다. HTTPS 설정을 자동으로 HTTP로 낮추지는 않습니다.

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { AlertTriangle, ArrowRight, BookOpenText, Cloud, KeyRound, LockKeyhole, RefreshCw, ServerCog, ShieldCheck } from 'lucide-react'
 import { Button } from './components/ui/button'
-import { request, jsonRequest, type Session, type Status } from './api'
+import { ApiFailure, request, jsonRequest, type Session, type Status } from './api'
 import { Workspace } from './Workspace'
 
 function InsecureNasWarning() {
@@ -59,9 +59,17 @@ function App() {
     event.preventDefault()
     setBusy(true); setError('')
     try {
-      setSession(await request<Session>('/api/auth/login', jsonRequest({
+      await request<Session>('/api/auth/login', jsonRequest({
         username, password, otp: otp || null, remember, trust_device: remember && trustDevice,
-      })))
+      }))
+      try {
+        setSession(await request<Session>('/api/auth/me'))
+      } catch (error) {
+        if (error instanceof ApiFailure && error.code === 'LOGIN_REQUIRED') {
+          throw new ApiFailure('LOGIN_COOKIE_MISSING', 401)
+        }
+        throw error
+      }
       setPassword(''); setOtp('')
     } catch (err) {
       const message = (err as Error).message

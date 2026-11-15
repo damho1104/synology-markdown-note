@@ -220,6 +220,10 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
     @app.post("/api/auth/login")
     def login(body: LoginInput, request: Request, response: Response):
         origin_guard(request)
+        # Use the validated browser origin: HTTPS proxies contact us over HTTP.
+        # Do not authenticate successfully when the browser cannot retain our cookie.
+        if settings.secure_cookies and not request.headers["origin"].lower().startswith("https://"):
+            raise HTTPException(503, detail="SECURE_COOKIE_REQUIRES_HTTPS")
         peer = rate_limit(request, "login")
         url, _ = configured()
         if url is None:

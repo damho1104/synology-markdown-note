@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type FormEvent,
+  type CSSProperties,
 } from "react";
 import {
   AlertTriangle,
@@ -55,7 +56,9 @@ import {
   type TextChange,
 } from "./OriginalEditor";
 import { NoteLinkPicker } from "./NoteLinkPicker";
-import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
+import { SettingsDialog } from "./SettingsDialog";
+import { loadPreferences, savePreferences } from "./preferences";
+import CodeMirror, { EditorView, type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { tags as syntaxTags } from "@lezer/highlight";
 import { markdown as markdownLanguage } from "@codemirror/lang-markdown";
@@ -265,9 +268,26 @@ export function Workspace({
     y: number;
   } | null>(null);
   const [inspector, setInspector] = useState(false);
-  const [dark, setDark] = useState(
+  const [preferences, setPreferences] = useState(loadPreferences);
+  const [showSettings, setShowSettings] = useState(false);
+  const [systemDark, setSystemDark] = useState(
     () => window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false,
   );
+  const dark = preferences.appearance === "system" ? systemDark : preferences.appearance === "dark";
+  const editorExtensions = useMemo(() => [
+    ...EDITOR_EXTENSIONS,
+    ...(preferences.lineWrapping ? [EditorView.lineWrapping] : []),
+  ], [preferences.lineWrapping]);
+  const mermaidPreferences = { mermaidStyle: preferences.mermaidStyle, mermaidTheme: preferences.mermaidTheme };
+  useEffect(() => { savePreferences(preferences); }, [preferences]);
+  useEffect(() => {
+    const media = window.matchMedia?.("(prefers-color-scheme: dark)");
+    if (!media) return;
+    const update = () => setSystemDark(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
   const [revision, setRevision] = useState(0);
   const historyIndex = useRef<number>(
     typeof window.history.state?.__synonote_index === "number"
@@ -897,7 +917,8 @@ export function Workspace({
     </button>
   );
   return (
-    <div className={`native-app ${dark ? "native-dark" : ""}`}>
+    <div className={`native-app ${dark ? "native-dark" : ""}`}
+      style={{ "--editor-font-size": `${preferences.editorFontSize}px` } as CSSProperties}>
       <header className="native-toolbar">
         <div className="toolbar-sidebar">
           <button
@@ -1197,7 +1218,9 @@ export function Workspace({
             <button
               className="icon-button"
               aria-label="설정"
-              onClick={() => setInspector(!inspector)}
+              aria-haspopup="dialog"
+              aria-expanded={showSettings}
+              onClick={() => setShowSettings(true)}
             >
               <Settings size={17} />
             </button>
@@ -1605,7 +1628,7 @@ export function Workspace({
                           ref={editorRef}
                           aria-label="Markdown 본문"
                           value={previewMarkdown}
-                          extensions={EDITOR_EXTENSIONS}
+                          extensions={editorExtensions}
                           theme={dark ? "dark" : "light"}
                           editable={editing && !saving}
                           onChange={(value) => {
@@ -1613,7 +1636,7 @@ export function Workspace({
                               setDraft({ ...draft, markdown: value });
                           }}
                           basicSetup={{
-                            lineNumbers: false,
+                            lineNumbers: preferences.lineNumbers,
                             foldGutter: false,
                             highlightActiveLine: false,
                           }}
@@ -1647,6 +1670,7 @@ export function Workspace({
                         markdown={previewMarkdown}
                         blocks={detail?.blocks}
                         dark={dark}
+                        {...mermaidPreferences}
                         noteId={detail?.id}
                         version={detail?.version}
                         attachments={detail?.attachments}
@@ -1751,17 +1775,8 @@ export function Workspace({
               </button>
             )}
             <h3>화면</h3>
-            <label className="inspector-card theme-choice">
-              <input
-                type="checkbox"
-                checked={dark}
-                onChange={(e) => setDark(e.target.checked)}
-              />
-              어두운 화면
-            </label>
+            <button className="native-button" onClick={() => setShowSettings(true)}>화면·편집기 설정…</button>
             <p className="inspector-help">
-              Mermaid · 손그림 스타일
-              <br />
               원문과 미리보기는 같은 노트 내용을 표시합니다.
             </p>
           </aside>
@@ -1846,6 +1861,7 @@ export function Workspace({
           }}
         />
       )}
+      {showSettings && <SettingsDialog preferences={preferences} onChange={setPreferences} onClose={() => setShowSettings(false)} />}
       {dialogAction && (
         <LibraryDialog
           key={JSON.stringify(dialogAction)}

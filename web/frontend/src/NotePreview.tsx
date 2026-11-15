@@ -1,10 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import { previewNonce, canonicalNoteLink } from "./previewSecurity";
 import DOMPurify from "dompurify";
+import { sanitizeMermaidSvg } from "./mermaidSvg";
 import { marked } from "marked";
 import katex from "katex";
 import katexCss from "katex/dist/katex.min.css?inline";
 const EMPTY_BLOCKS: Block[] = [];
+// Mermaid has global configuration and a shared render queue. Keep initialize
+// and render together so a stale effect cannot render with newer preferences.
+let diagramQueue: Promise<unknown> = Promise.resolve();
+function queueDiagram<T>(render: () => Promise<T>): Promise<T> {
+  const next = diagramQueue.then(render, render);
+  diagramQueue = next.catch(() => {});
+  return next;
+}
 // Strip resource URLs before assigning sanitized HTML to even a detached DOM.
 DOMPurify.addHook("uponSanitizeAttribute", (node, data) => {
   const tag = node.nodeName.toLowerCase();
@@ -47,6 +56,8 @@ export function NotePreview({
   markdown,
   blocks = EMPTY_BLOCKS,
   dark = false,
+  mermaidStyle = "handDrawn",
+  mermaidTheme = "system",
   noteId,
   version,
   attachments,
@@ -58,6 +69,8 @@ export function NotePreview({
   markdown?: string;
   blocks?: Block[];
   dark?: boolean;
+  mermaidStyle?: "classic" | "handDrawn";
+  mermaidTheme?: "system" | "default" | "dark" | "neutral" | "forest";
   noteId?: string;
   version?: string;
   attachments?: { id: string; ref: string | null; name: string }[];
@@ -158,32 +171,37 @@ export function NotePreview({
             /* Keep alternate text when an attachment cannot be read. */
           }
         }
-      // Render only in a detached sanitized document. The iframe itself never executes scripts.
+      // Render diagrams outside the iframe, then keep only safe SVG presentation.
       const diagrams = Array.from(
         body.querySelectorAll("pre > code.language-mermaid"),
       );
       if (diagrams.length) {
         const { default: mermaid } = await import("mermaid");
-        mermaid.initialize({
-          startOnLoad: false,
-          securityLevel: "strict",
-          htmlLabels: false,
-          look: "handDrawn",
-          theme: dark ? "dark" : "default",
-          suppressErrorRendering: true,
-        });
         for (const [index, code] of diagrams.entries()) {
           try {
-            const result = await mermaid.render(
-              `synonote-${id}-${index}-${Math.random().toString(36).slice(2)}`,
-              code.textContent ?? "",
-            );
+            const svg = await queueDiagram(async () => {
+              if (!active) return null;
+              mermaid.initialize({
+                startOnLoad: false,
+                securityLevel: "strict",
+                htmlLabels: false,
+                look: mermaidStyle,
+                handDrawnSeed: 42,
+                theme: mermaidTheme === "system" ? (dark ? "dark" : "default") : mermaidTheme,
+                fontFamily: "Arial, sans-serif",
+                fontSize: 16,
+                suppressErrorRendering: true,
+              });
+              const result = await mermaid.render(
+                `synonote-${id}-${index}-${previewNonce()}`,
+                code.textContent ?? "",
+              );
+              return sanitizeMermaidSvg(result.svg);
+            });
+            if (!active || svg === null) return;
             const container = document.createElement("div");
             container.className = "mermaid";
-            container.innerHTML = DOMPurify.sanitize(result.svg, {
-              USE_PROFILES: { svg: true, svgFilters: true },
-              FORBID_TAGS: ["style", "foreignObject"],
-            });
+            container.innerHTML = svg;
             code.parentElement?.replaceWith(container);
           } catch {
             const error = document.createElement("p");
@@ -231,7 +249,7 @@ export function NotePreview({
         a.setAttribute("rel", "noreferrer noopener");
       }
       const csp = `default-src 'none'; script-src ${linkEnabled ? `'nonce-${nonce}'` : "'none'"}; connect-src 'none'; form-action 'none'; base-uri 'none'; img-src data: blob:; style-src 'unsafe-inline'; font-src ${window.location.origin} data:`;
-      const css = `:root{color-scheme:${dark ? "dark" : "light"}}body{margin:24px;font:15px/1.75 -apple-system,BlinkMacSystemFont,sans-serif;color:${dark ? "#eee" : "#222"};overflow-wrap:anywhere}pre,code{font-family:ui-monospace,monospace}pre{padding:14px;background:${dark ? "#292929" : "#f4f5f7"};border-radius:6px;white-space:pre-wrap}img,svg{max-width:100%;height:auto}.mermaid{text-align:center;overflow:auto}.mermaid svg text{fill:${dark ? "#eee" : "#222"}}.mermaid svg .node rect,.mermaid svg .node polygon{stroke:${dark ? "#aaa" : "#555"};fill:${dark ? "#242424" : "#fafafa"}}table{border-collapse:collapse}td,th{border:1px solid #888;padding:6px 10px}blockquote{border-left:3px solid #888;margin-left:0;padding-left:16px}a{color:#3989e8}.diagram-error{color:#c75c49}`;
+      const css = `:root{color-scheme:${dark ? "dark" : "light"}}body{margin:24px;font:15px/1.75 -apple-system,BlinkMacSystemFont,sans-serif;color:${dark ? "#eee" : "#222"};overflow-wrap:anywhere}pre,code{font-family:ui-monospace,monospace}pre{padding:14px;background:${dark ? "#292929" : "#f4f5f7"};border-radius:6px;white-space:pre-wrap}img,svg{max-width:100%;height:auto}.mermaid{text-align:center;overflow:auto}table{border-collapse:collapse}td,th{border:1px solid #888;padding:6px 10px}blockquote{border-left:3px solid #888;margin-left:0;padding-left:16px}a{color:#3989e8}.diagram-error{color:#c75c49}`;
       const fonts = `<style>${katexCss}</style>`;
       const linkScript = linkEnabled
         ? `<script nonce="${nonce}">document.addEventListener('click',event=>{const link=event.target.closest?.('a');const href=link?.getAttribute('href');if(href?.startsWith('synology-note://')){event.preventDefault();parent.postMessage({kind:'synonote:link',nonce:'${nonce}',href},${JSON.stringify(window.location.origin)})}})</script>`
@@ -250,6 +268,8 @@ export function NotePreview({
     markdown,
     blocks,
     dark,
+    mermaidStyle,
+    mermaidTheme,
     noteId,
     version,
     attachments,

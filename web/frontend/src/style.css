@@ -52,6 +52,7 @@ input {
   --muted: #737373;
   --selection: #dce6f1;
   --accent: #1675d1;
+  --editor-font-size: 14px;
   height: 100dvh;
   display: flex;
   flex-direction: column;
@@ -476,7 +477,7 @@ input {
   background: var(--surface);
   color: var(--text);
   font:
-    13px/1.8 ui-monospace,
+    var(--editor-font-size, 14px)/1.8 ui-monospace,
     monospace;
 }
 .source-pane > .cm-theme,
@@ -489,7 +490,7 @@ input {
 .source-pane .cm-editor {
   height: 100%;
   font:
-    13px/1.9 ui-monospace,
+    var(--editor-font-size, 14px)/1.9 ui-monospace,
     monospace;
   background: var(--surface);
 }
@@ -951,7 +952,7 @@ input {
   min-height: 0;
   overflow: auto;
   padding: 24px;
-  font-size: 15px;
+  font-size: var(--editor-font-size, 14px);
   line-height: 1.75;
   overflow-wrap: anywhere;
 }
@@ -974,4 +975,106 @@ input {
   display: inline-block;
   min-width: 1ch;
   min-height: 1em;
+}
+
+/* General settings follow the native grouped form and system palette. */
+.native-settings-dialog {
+  width: min(560px, calc(100vw - 32px));
+  max-width: none;
+  max-height: calc(100dvh - 32px);
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--sidebar);
+  color: var(--text);
+  box-shadow: 0 24px 80px #0005, 0 2px 8px #0002;
+  overflow: hidden;
+  font: inherit;
+  color-scheme: light;
+}
+.native-dark .native-settings-dialog { color-scheme: dark; }
+.native-settings-dialog::backdrop { background: #0005; }
+.settings-window {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100dvh - 34px);
+}
+.settings-titlebar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 10px;
+  flex-shrink: 0;
+  padding: 12px 44px;
+  border-bottom: 1px solid var(--line);
+  background: var(--toolbar);
+}
+.settings-titlebar h2 { margin: 0; font-size: 13px; font-weight: 600; }
+.settings-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  color: var(--accent);
+  background: var(--selection);
+  font-size: 12px;
+}
+.settings-close {
+  position: absolute;
+  left: 14px;
+  top: 12px;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid #d9524b;
+  border-radius: 50%;
+  background: #ff6058;
+  color: #6f1713;
+}
+.settings-content { padding: 18px 24px 8px; overflow-y: auto; min-height: 0; }
+.settings-description, .settings-help { color: var(--muted); font-size: 12px; line-height: 1.6; }
+.settings-description { margin: 0 0 18px; }
+.settings-help { margin: 8px 8px 18px; }
+.settings-content h3 { font-size: 13px; font-weight: 600; margin: 0 8px 8px; }
+.settings-group { border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 43px;
+  padding: 8px 12px;
+  font-size: 13px;
+}
+.settings-row + .settings-row { border-top: 1px solid var(--line); }
+.settings-row select {
+  max-width: 58%;
+  padding: 3px 6px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--toolbar);
+  color: var(--text);
+}
+.settings-size-control { display: flex; align-items: center; gap: 10px; width: 58%; }
+.settings-size-control input { width: 100%; min-width: 0; accent-color: var(--accent); }
+.settings-size-control output { min-width: 34px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.settings-toggle input { width: 15px; height: 15px; accent-color: var(--accent); }
+.settings-row input:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.settings-footer {
+  display: flex;
+  justify-content: space-between;
+  flex-shrink: 0;
+  gap: 10px;
+  padding: 12px 24px;
+  border-top: 1px solid var(--line);
+  background: var(--toolbar);
+}
+@media (max-width: 480px) {
+  .settings-content { padding: 16px 12px 4px; }
+  .settings-footer { padding: 12px; }
 }

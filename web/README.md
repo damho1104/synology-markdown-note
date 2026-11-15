@@ -8,6 +8,8 @@ React/TypeScript/Vite + Tailwind/shadcn/ui 기반 화면과 FastAPI/SQLite 서�
 
 ```sh
 cd web
+cp .env.example .env  # 최초 실행 시 1회; 기존 .env가 있으면 덮어쓰지 마세요
+# localhost HTTP 테스트 시 .env에서 WEB_COOKIE_SECURE=false로 변경
 docker compose build
 docker compose up -d
 docker compose ps
@@ -18,16 +20,18 @@ docker compose exec web cat /data/setup-code
 
 ```sh
 cd web
+cp .env.example .env  # 최초 실행 시 1회; 기존 .env가 있으면 덮어쓰지 마세요
+# .env의 WEB_IMAGE 및 HTTPS 프록시 설정을 배포 환경에 맞게 수정
 docker compose -f compose.registry.yaml pull
 docker compose -f compose.registry.yaml up -d
 docker compose -f compose.registry.yaml exec web cat /data/setup-code
 ```
 
-이 Compose 파일은 로컬 빌드 없이 이미지를 내려받으며, `WEB_IMAGE`로 이미지 태그를 바꿀 수 있습니다. Synology Container Manager에서 사용할 때는 `compose.registry.yaml` 내용을 프로젝트 YAML로 입력하고, NAS에 Registry 접근 권한을 설정하세요. P1은 최초 설정·인증 UI 단계이며 노트 탐색·편집은 아직 제공하지 않습니다.
+이 Compose 파일은 로컬 빌드 없이 이미지를 내려받으며, `web/.env.example`에 기본 이미지 주소가 포함되어 있고 `.env`의 `WEB_IMAGE`로 태그를 바꿀 수 있습니다. Synology Container Manager에서 사용할 때는 `compose.registry.yaml` 내용을 프로젝트 YAML로 입력하고, NAS에 Registry 접근 권한을 설정하세요. P1은 최초 설정·인증 UI 단계이며 노트 탐색·편집은 아직 제공하지 않습니다.
 
 기본 공개 포트는 **호스트 `127.0.0.1:8787`**입니다. 브라우저의 `http://localhost:8787`에서 초기 설정을 진행할 때에는 `.env`에서 `WEB_COOKIE_SECURE=false`로 변경해야 합니다. 운영에서는 외부 HTTPS 역방향 프록시를 구성하고 `WEB_COOKIE_SECURE=true`, `WEB_PUBLIC_ORIGIN=https://실제-웹-도메인`을 설정하세요. `WEB_PUBLIC_ORIGIN`은 브라우저에서 접근하는 **origin**으로, 끝에 경로를 붙이지 않습니다. 프록시는 원래 Host를 전달해야 하고 앱은 임의 `X-Forwarded-*` 헤더를 신뢰하지 않습니다.
 
-`.env`는 필수 파일이 아니며, 원할 때 `.env.example`을 복사해 수정할 수 있습니다. `NAS_URL`을 비워 두면 최초 설정에서 NAS HTTPS 주소와 `/data/setup-code`를 입력합니다. 서버가 NAS API에 연결되는 것을 확인해야 주소가 SQLite에 저장됩니다. 코드는 최초 설정이 완료되면 삭제되며, 다시 조회할 수 없습니다. 이미 주소가 저장되어 있으면 다른 사용자는 주소를 덮어쓸 수 없습니다. 환경변수 `NAS_URL`을 지정하면 해당 주소가 최우선이고 웹에서는 읽기 전용입니다.
+`.env` 없이도 Compose의 기본값으로 실행할 수 있지만, 배포 환경에 맞춘 설정은 `.env.example`을 `.env`로 복사해 수정합니다. `.env`에는 실제 비밀번호 등 비밀 정보를 커밋하지 마세요. `NAS_URL`을 비워 두면 최초 설정에서 NAS HTTPS 주소와 `/data/setup-code`를 입력합니다. 서버가 NAS API에 연결되는 것을 확인해야 주소가 SQLite에 저장됩니다. 코드는 최초 설정이 완료되면 삭제되며, 다시 조회할 수 없습니다. 이미 주소가 저장되어 있으면 다른 사용자는 주소를 덮어쓸 수 없습니다. 환경변수 `NAS_URL`을 지정하면 해당 주소가 최우선이고 웹에서는 읽기 전용입니다.
 
 IP 또는 DNS 이름이 사설 네트워크를 가리키는 NAS는 **관리자만** `NAS_ALLOW_PRIVATE=true`로 설정할 수 있습니다. 로컬·링크 로컬·메타데이터 IP 및 리디렉션은 차단합니다. DNS 조회 결과를 확인한 뒤 검증된 IP로 직접 HTTPS 연결하며 원래 호스트 이름을 인증서 검증에 사용합니다. 공개 CA를 사용하지 않는 NAS는 검증 가능한 CA 파일을 컨테이너에 읽기 전용으로 마운트하고 `NAS_CA_FILE`을 해당 경로로 지정해야 합니다. 인증서 검증 비활성화는 지원하지 않습니다. `localhost`는 NAS가 아니라 웹 컨테이너 자체를 뜻합니다.
 

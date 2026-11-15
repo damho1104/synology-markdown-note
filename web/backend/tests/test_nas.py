@@ -9,11 +9,13 @@ from synonote_web.nas import NasClient, NasError, PinnedTransport, validate_url
 
 
 @pytest.mark.parametrize("url", [
-    "http://nas.example", "https://user:pw@nas.example", "https://nas.example?url=1",
+    "ftp://nas.example", "https://user:pw@nas.example", "https://nas.example?url=1",
     "https://nas.example#fragment", "https://nas.example/path/../admin",
     "https://nas.example/%2e%2e", "https://nas.example\\@evil.example",
     "https://nas.example:0", "https://nas.example:99999", "https://nas.example//proxy",
     "https://fe80::1", "https://fe80::1%eth0", " https://nas.example",
+    "http://user:pw@nas.example", "http://nas.example?token=1",
+    "http://nas.example/path/../admin", "http://nas.example:0",
 ])
 def test_reject_unsafe_urls(url):
     with pytest.raises(NasError) as exc:
@@ -24,6 +26,8 @@ def test_reject_unsafe_urls(url):
 def test_validate_proxy_prefix_and_ipv6():
     assert validate_url("https://nas.example/nas/") == "https://nas.example/nas"
     assert validate_url("https://[2001:db8::1]:5001/nas") == "https://[2001:db8::1]:5001/nas"
+    assert validate_url("http://NAS.EXAMPLE:5000/nas/") == "http://nas.example:5000/nas"
+    assert validate_url("http://192.168.1.10:5000") == "http://192.168.1.10:5000"
 
 
 class CaptureTransport(httpx.BaseTransport):
@@ -50,6 +54,38 @@ def test_dns_pin_keeps_host_and_tls_identity(monkeypatch):
     assert sent.url.host == "8.8.8.8"
     assert sent.headers["host"] == "nas.example"
     assert sent.extensions["sni_hostname"] == "nas.example"
+
+
+def test_http_dns_pin_uses_port_80_and_preserves_host(monkeypatch):
+    resolved_ports = []
+
+    def resolve(host, port, **kwargs):
+        resolved_ports.append((host, port))
+        return dns("192.168.1.15")
+
+    monkeypatch.setattr(socket, "getaddrinfo", resolve)
+    transport = PinnedTransport(True)
+    capture = CaptureTransport()
+    transport.transport = capture
+    with httpx.Client(transport=transport, trust_env=False) as client:
+        assert client.post("http://nas.lan/webapi/query.cgi").status_code == 200
+    assert resolved_ports == [("nas.lan", 80)]
+    sent = capture.seen[0]
+    assert sent.url.scheme == "http" and sent.url.host == "192.168.1.15"
+    assert sent.headers["host"] == "nas.lan"
+    assert "sni_hostname" not in sent.extensions
+
+
+def test_http_dns_pin_still_blocks_private_without_opt_in(monkeypatch):
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *args, **kwargs: dns("192.168.1.15"))
+    transport = PinnedTransport(False)
+    capture = CaptureTransport()
+    transport.transport = capture
+    with httpx.Client(transport=transport, trust_env=False) as client:
+        with pytest.raises(NasError) as exc:
+            client.post("http://nas.lan/webapi/query.cgi")
+    assert exc.value.code == "NAS_ADDRESS_BLOCKED"
+    assert capture.seen == []
 
 
 @pytest.mark.parametrize("addresses", [
@@ -96,7 +132,8 @@ def test_private_nas_opt_in_never_allows_special_purpose_networks(monkeypatch, a
     assert capture.seen == []
 
 
-def test_actual_auth_contract_with_mock_http(monkeypatch):
+@pytest.mark.parametrize("base", ["https://nas.example", "http://nas.example:5000"])
+def test_actual_auth_contract_with_mock_http(monkeypatch, base):
     calls = []
 
     def handler(request):
@@ -112,8 +149,8 @@ def test_actual_auth_contract_with_mock_http(monkeypatch):
 
     monkeypatch.setattr(NasClient, "_client", lambda self: httpx.Client(transport=httpx.MockTransport(handler)))
     client = NasClient()
-    client.probe("https://nas.example")
-    result = client.login("https://nas.example", "alice", "secret", "123456", True)
+    client.probe(base)
+    result = client.login(base, "alice", "secret", "123456", True)
     assert result.sid == "sid" and result.device_id == "device"
     auth = calls[-2]
     assert auth[0] == "/webapi/auth.cgi"

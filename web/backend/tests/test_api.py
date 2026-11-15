@@ -57,7 +57,7 @@ def test_setup_code_is_private_and_single_use(tmp_path):
     }
     assert post(client, "/api/setup", {"code": "wrong", "nas_url": "https://nas.example"}).status_code == 403
     assert not nas.probed
-    assert post(client, "/api/setup", {"code": code, "nas_url": "http://nas.example"}).status_code == 422
+    assert post(client, "/api/setup", {"code": code, "nas_url": "ftp://nas.example"}).status_code == 422
     assert not nas.probed
     response = post(client, "/api/setup", {"code": code, "nas_url": "https://nas.example"})
     assert response.status_code == 200
@@ -85,8 +85,28 @@ def test_environment_url_wins_without_overwriting_saved_address(tmp_path):
     assert TestClient(app_at(tmp_path, nas)).get("/api/status").json()["nas_url"] == "https://saved.example"
 
 
+def test_http_nas_setup_and_login(tmp_path):
+    nas = FakeNas()
+    first = TestClient(app_at(tmp_path, nas))
+    code = tmp_path.joinpath("setup-code").read_text().strip()
+    response = post(first, "/api/setup", {
+        "code": code, "nas_url": "http://NAS.EXAMPLE:5000/nas/",
+    })
+    assert response.status_code == 200
+    assert response.json()["nas_url"] == "http://nas.example:5000/nas"
+    assert nas.probed == ["http://nas.example:5000/nas"]
+    resumed = TestClient(app_at(tmp_path, nas))
+    login = post(resumed, "/api/auth/login", {
+        "username": "alice", "password": "correct",
+    })
+    assert login.status_code == 200
+    assert nas.login_calls[0][0] == "http://nas.example:5000/nas"
+    from_env = TestClient(app_at(tmp_path, nas, nas_url="http://nas.internal:5000"))
+    assert from_env.get("/api/status").json()["nas_url"] == "http://nas.internal:5000"
+
+
 def test_malformed_nonempty_environment_url_is_not_ignored(tmp_path):
-    client = TestClient(app_at(tmp_path, nas_url="http://nas.example"))
+    client = TestClient(app_at(tmp_path, nas_url="ftp://nas.example"))
     assert client.get("/api/status").status_code == 503
     assert client.get("/api/ready").status_code == 503
     assert client.get("/api/health").status_code == 200

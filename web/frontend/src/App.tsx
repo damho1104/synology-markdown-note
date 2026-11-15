@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
-import { ArrowRight, BookOpenText, CheckCircle2, Cloud, KeyRound, LockKeyhole, LogOut, RefreshCw, ServerCog, ShieldCheck } from 'lucide-react'
+import { AlertTriangle, ArrowRight, BookOpenText, CheckCircle2, Cloud, KeyRound, LockKeyhole, LogOut, RefreshCw, ServerCog, ShieldCheck } from 'lucide-react'
 import { Button } from './components/ui/button'
 
 type Status = { configured: boolean; nas_url: string | null; source: 'environment' | 'database' | 'setup'; read_only: boolean }
@@ -7,9 +7,9 @@ type Session = { username: string; remember: boolean; csrf_token: string }
 type ApiError = { error?: string; detail?: string }
 
 const messages: Record<string, string> = {
-  INVALID_NAS_URL: 'NAS 주소는 사용자 정보·쿼리 없이 HTTPS 주소로 입력하세요.',
+  INVALID_NAS_URL: 'NAS 주소는 사용자 정보·쿼리 없이 HTTP 또는 HTTPS 주소로 입력하세요.',
   NAS_ADDRESS_BLOCKED: '해당 NAS 주소의 네트워크 연결이 차단되었습니다. 사설망 NAS라면 관리자가 NAS_ALLOW_PRIVATE 설정을 확인해야 합니다.',
-  NAS_UNAVAILABLE: 'NAS와 HTTPS로 통신하지 못했습니다. 주소·인증서·방화벽을 확인하세요.',
+  NAS_UNAVAILABLE: 'NAS와 통신하지 못했습니다. 주소·포트·인증서(HTTPS)·방화벽을 확인하세요.',
   NAS_API_ERROR: 'NAS가 예상한 Note Station API 응답을 반환하지 않았습니다.',
   INVALID_SETUP_CODE: '초기 설정 코드가 일치하지 않습니다.',
   ALREADY_CONFIGURED: '이 설치의 NAS 주소는 이미 설정되어 있습니다.',
@@ -38,6 +38,15 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 function jsonRequest(body: unknown, headers: Record<string, string> = {}): RequestInit {
   return { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) }
+}
+
+function InsecureNasWarning() {
+  return (
+    <div className="flex items-start gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950" role="alert">
+      <AlertTriangle className="mt-0.5 shrink-0 text-amber-700" size={19} aria-hidden="true" />
+      <p><strong>HTTP 연결은 암호화되지 않습니다.</strong> 웹 서버와 NAS 사이에서 계정 정보·비밀번호·OTP 및 전송 데이터가 노출될 수 있습니다. 신뢰할 수 있는 내부망에서만 사용하고 가능하면 HTTPS를 사용하세요.</p>
+    </div>
+  )
 }
 
 function App() {
@@ -136,7 +145,8 @@ function App() {
               <div className="mb-6 flex items-center gap-3"><div className="rounded-xl bg-mist p-3 text-marine"><ServerCog size={24} /></div><div><p className="text-xs font-semibold text-marine">STEP 01</p><h3 className="text-xl font-bold">NAS 최초 설정</h3></div></div>
               <p className="mb-7 text-sm leading-6 text-slate-600">설치 관리자만 NAS 주소를 한 번 설정할 수 있습니다. 컨테이너의 <code className="rounded bg-slate-100 px-1.5 py-0.5">/data/setup-code</code> 파일에서 코드를 확인하세요.</p>
               <form className="space-y-5" onSubmit={e => void submitSetup(e)}>
-                <div><label htmlFor="nas-url" className="field-label">NAS HTTPS 주소</label><input className="field" id="nas-url" type="url" required autoComplete="url" placeholder="https://nas.example.com:5001" value={nasUrl} onChange={e => setNasUrl(e.target.value)} /></div>
+                <div><label htmlFor="nas-url" className="field-label">NAS 주소 (HTTPS / HTTP)</label><input className="field" id="nas-url" type="url" required autoComplete="url" placeholder="https://nas.example.com:5001" value={nasUrl} onChange={e => setNasUrl(e.target.value)} /></div>
+                {nasUrl.trim().toLowerCase().startsWith('http://') && <InsecureNasWarning />}
                 <div><label htmlFor="setup-code" className="field-label">초기 설정 코드</label><input className="field" id="setup-code" type="password" required autoComplete="off" value={setupCode} onChange={e => setSetupCode(e.target.value)} /></div>
                 <Button className="w-full" disabled={busy} type="submit">{busy ? 'NAS 연결 확인 중…' : '연결 확인 및 설정 저장'} <ArrowRight size={17} /></Button>
               </form>
@@ -147,6 +157,7 @@ function App() {
               <div className="mb-6 flex items-center gap-3"><div className="rounded-xl bg-emerald-50 p-3 text-emerald-700"><CheckCircle2 size={24} /></div><div><p className="text-xs font-semibold text-emerald-700">CONNECTED</p><h3 className="text-xl font-bold">로그인되었습니다</h3></div></div>
               <p className="text-sm text-slate-600"><b className="text-ink">{session.username}</b> 계정으로 접속했습니다.</p>
               <div className="mt-6 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm"><p className="text-xs font-semibold text-slate-500">연결된 NAS</p><p className="mt-2 break-all font-medium">{status.nas_url}</p><p className="mt-2 text-xs text-slate-500">{session.remember ? '로그인 유지 사용 중' : '브라우저 세션에서만 로그인 유지'}</p></div>
+              {status.nas_url?.toLowerCase().startsWith('http://') && <div className="mt-4"><InsecureNasWarning /></div>}
               <div className="mt-5 rounded-xl border border-dashed border-slate-300 p-5 text-sm leading-6 text-slate-600">노트 목록·편집 UI는 다음 구현 단계에서 연결됩니다.</div>
               <Button className="mt-6 w-full" variant="outline" onClick={() => void logout()} disabled={busy}><LogOut size={16} /> 로그아웃</Button>
             </>
@@ -154,6 +165,7 @@ function App() {
             <>
               <div className="mb-6 flex items-center gap-3"><div className="rounded-xl bg-mist p-3 text-marine"><KeyRound size={24} /></div><div><p className="text-xs font-semibold text-marine">NOTE STATION</p><h3 className="text-xl font-bold">NAS 계정 로그인</h3></div></div>
               <div className="mb-7 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3"><p className="text-[11px] font-semibold text-slate-500">연결된 NAS · {status.read_only ? '환경변수 설정' : '웹에서 저장한 설정'}</p><p className="mt-1 break-all text-sm font-medium">{status.nas_url}</p></div>
+              {status.nas_url?.toLowerCase().startsWith('http://') && <div className="mb-5"><InsecureNasWarning /></div>}
               <form className="space-y-5" onSubmit={e => void submitLogin(e)}>
                 <div><label className="field-label" htmlFor="username">사용자 이름</label><input className="field" id="username" required autoComplete="username" value={username} onChange={e => setUsername(e.target.value)} /></div>
                 <div><label className="field-label" htmlFor="password">비밀번호</label><input className="field" id="password" type="password" required autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} /></div>

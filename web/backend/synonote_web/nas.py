@@ -1,7 +1,8 @@
-"""HTTPS-only NAS bootstrap and authentication with DNS-address pinning.
+"""NAS bootstrap and authentication with DNS-address pinning.
 
 Always connect to a prevalidated resolved IP; preserve the original hostname for
-TLS SNI/certificate matching. The Synology CGI paths never come from web input.
+TLS SNI/certificate matching on HTTPS. HTTP is permitted for trusted networks,
+but credentials are not encrypted on that connection. CGI paths are fixed.
 """
 
 from __future__ import annotations
@@ -44,7 +45,7 @@ def validate_url(value: str) -> str:
         hostname = parsed.hostname
         port = parsed.port
         path = parsed.path[:-1] if parsed.path.endswith("/") else parsed.path
-        if (parsed.scheme != "https" or not hostname or parsed.username is not None
+        if (parsed.scheme not in {"https", "http"} or not hostname or parsed.username is not None
                 or parsed.password is not None or not BASE_PATH.fullmatch(path)
                 or not HOST.fullmatch(hostname) and not _is_ip(hostname)):
             raise ValueError()
@@ -57,7 +58,7 @@ def validate_url(value: str) -> str:
         # Rebuild the authority so all callers use a canonical host and port.
         host_display = f"[{hostname}]" if ":" in hostname else hostname
         authority = host_display + (f":{port}" if port is not None else "")
-        return urlunsplit(("https", authority, path, "", ""))
+        return urlunsplit((parsed.scheme, authority, path, "", ""))
     except (ValueError, AttributeError) as exc:
         raise NasError("INVALID_NAS_URL") from exc
 
@@ -99,9 +100,9 @@ class PinnedTransport(httpx.BaseTransport):
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         host = request.url.host
-        if request.url.scheme != "https" or not host:
+        if request.url.scheme not in {"https", "http"} or not host:
             raise NasError("NAS_ADDRESS_BLOCKED")
-        port = request.url.port or 443
+        port = request.url.port or (443 if request.url.scheme == "https" else 80)
         try:
             resolved = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
         except (socket.gaierror, OSError) as exc:
@@ -113,10 +114,13 @@ class PinnedTransport(httpx.BaseTransport):
         checked = [_checked_address(ip, self.allow_private) for ip in addresses]
         headers = request.headers.copy()
         headers["host"] = request.url.netloc.decode("ascii")
+        extensions = dict(request.extensions)
+        if request.url.scheme == "https":
+            extensions["sni_hostname"] = host
         pinned = httpx.Request(
             request.method, request.url.copy_with(host=checked[0]),
             headers=headers, content=request.stream,
-            extensions={**request.extensions, "sni_hostname": host},
+            extensions=extensions,
         )
         return self.transport.handle_request(pinned)
 

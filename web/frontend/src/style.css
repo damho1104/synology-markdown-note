@@ -1,0 +1,13 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { font-family: 'Apple SD Gothic Neo', Inter, sans-serif; color: #10273f; background: #f7f9fa; }
+body { margin: 0; min-width: 320px; }
+input { background: white; }
+
+@layer components {
+  .field { @apply block w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-[15px] text-ink outline-none transition focus:border-marine focus:ring-4 focus:ring-marine/10; }
+  .field-label { @apply mb-2 block text-sm font-semibold text-ink; }
+  .card { @apply rounded-2xl border border-[#dce7ec] bg-white p-7 shadow-[0_16px_54px_-34px_rgba(9,49,75,0.42)]; }
+}

@@ -1,0 +1,213 @@
+"""Private installation settings and encrypted persistent-login records."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import secrets
+import sqlite3
+import stat
+import time
+from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterator
+
+from cryptography.fernet import Fernet, InvalidToken
+
+
+class StoreError(Exception):
+    pass
+
+
+def token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _private_directory(path: Path) -> None:
+    if path.is_symlink():
+        raise StoreError("Data directory cannot be a symlink")
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if not stat.S_ISDIR(path.lstat().st_mode):
+        raise StoreError("Data directory must be a directory")
+    path.chmod(0o700)
+
+
+def _private_file(path: Path) -> bytes:
+    if path.is_symlink():
+        raise StoreError("Secret file cannot be a symlink")
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        metadata = os.fstat(fd)
+        if (not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) & 0o077
+                or metadata.st_uid != os.getuid()):
+            raise StoreError("Secret file has unsafe permissions or ownership")
+        with os.fdopen(fd, "rb", closefd=False) as stream:
+            return stream.read(4097)
+    finally:
+        os.close(fd)
+
+
+def _create_secret(path: Path, secret: bytes) -> bytes:
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    except FileExistsError:
+        return _private_file(path)
+    with os.fdopen(fd, "wb") as stream:
+        stream.write(secret)
+        stream.flush()
+        os.fsync(stream.fileno())
+    return secret
+
+
+@dataclass(frozen=True)
+class PersistedSession:
+    token_hash: str
+    username: str
+    nas_url: str
+    credential: bytes
+    csrf: str
+    created: float
+    rotated: float
+    last_seen: float
+    expires: float
+
+
+class Store:
+    def __init__(self, data_dir: Path):
+        _private_directory(data_dir)
+        self.dir = data_dir
+        self.db = data_dir / "web.sqlite3"
+        if self.db.is_symlink():
+            raise StoreError("Database cannot be a symlink")
+        key = _create_secret(data_dir / "master.key", Fernet.generate_key())
+        try:
+            self.cipher = Fernet(key)
+        except (ValueError, TypeError) as exc:
+            raise StoreError("Master key is invalid; restore it from backup") from exc
+        with self.connect() as db:
+            db.executescript("""
+                CREATE TABLE IF NOT EXISTS config (
+                    name TEXT PRIMARY KEY, value TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS sessions (
+                    token_hash TEXT PRIMARY KEY,
+                    username TEXT NOT NULL,
+                    nas_url TEXT NOT NULL DEFAULT '',
+                    credential BLOB NOT NULL,
+                    csrf TEXT NOT NULL,
+                    created REAL NOT NULL,
+                    rotated REAL NOT NULL,
+                    last_seen REAL NOT NULL,
+                    expires REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS sessions_expires ON sessions(expires);
+            """)
+            # Support databases created by the initial development build.
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(sessions)")}
+            if "nas_url" not in columns:
+                db.execute("ALTER TABLE sessions ADD COLUMN nas_url TEXT NOT NULL DEFAULT ''")
+        self.db.chmod(0o600)
+
+    @contextmanager
+    def connect(self) -> Iterator[sqlite3.Connection]:
+        db: sqlite3.Connection | None = None
+        try:
+            db = sqlite3.connect(self.db, timeout=5)
+            db.row_factory = sqlite3.Row
+            db.execute("PRAGMA journal_mode=WAL")
+            db.execute("PRAGMA synchronous=FULL")
+            with db:
+                yield db
+        except sqlite3.Error as exc:
+            raise StoreError("SQLite storage is unavailable") from exc
+        finally:
+            if db is not None:
+                db.close()
+
+    def nas_url(self) -> str | None:
+        with self.connect() as db:
+            row = db.execute("SELECT value FROM config WHERE name='nas_url'").fetchone()
+            return row["value"] if row else None
+
+    def set_first_nas_url(self, url: str) -> bool:
+        with self.connect() as db:
+            result = db.execute("INSERT OR IGNORE INTO config(name,value) VALUES ('nas_url',?)", (url,))
+            return result.rowcount == 1
+
+    def bind_nas(self, url: str) -> None:
+        """Invalidate saved credentials whenever the effective NAS changes."""
+        with self.connect() as db:
+            row = db.execute("SELECT value FROM config WHERE name='active_nas_url'").fetchone()
+            if row is None or row["value"] != url:
+                db.execute("INSERT OR REPLACE INTO config(name,value) VALUES ('active_nas_url',?)", (url,))
+                db.execute("DELETE FROM sessions")
+
+    def setup_code(self) -> str:
+        path = self.dir / "setup-code"
+        if not path.exists():
+            _create_secret(path, secrets.token_urlsafe(32).encode("ascii") + b"\n")
+        try:
+            return _private_file(path).decode("ascii").strip()
+        except UnicodeError as exc:
+            raise StoreError("Invalid setup code file") from exc
+
+    def clear_setup_code(self) -> None:
+        path = self.dir / "setup-code"
+        if path.is_symlink():
+            raise StoreError("Setup code cannot be a symlink")
+        path.unlink(missing_ok=True)
+
+    def encrypt_credential(self, password: str, device_id: str | None, trust_device: bool) -> bytes:
+        return self.cipher.encrypt(json.dumps({"password": password, "device_id": device_id,
+                                              "trust_device": trust_device}).encode())
+
+    def decrypt_credential(self, credential: bytes) -> dict:
+        try:
+            data = json.loads(self.cipher.decrypt(credential))
+            if (not isinstance(data, dict) or not isinstance(data.get("password"), str)
+                    or not isinstance(data.get("trust_device"), bool)
+                    or (data.get("device_id") is not None
+                        and not isinstance(data["device_id"], str))):
+                raise ValueError()
+            return data
+        except (InvalidToken, ValueError, TypeError, AttributeError, KeyError) as exc:
+            raise StoreError("Stored credential cannot be decrypted") from exc
+
+    def save_session(self, token: str, username: str, nas_url: str, credential: bytes,
+                     csrf: str, expires: float, now: float) -> None:
+        with self.connect() as db:
+            db.execute("DELETE FROM sessions WHERE expires<=?", (now,))
+            db.execute("""INSERT INTO sessions
+                (token_hash, username, nas_url, credential, csrf, created, rotated, last_seen, expires)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (token_hash(token), username, nas_url, credential, csrf, now, now, now, expires))
+
+    def session(self, token: str, nas_url: str, now: float, idle_seconds: int) -> PersistedSession | None:
+        digest = token_hash(token)
+        with self.connect() as db:
+            row = db.execute("SELECT * FROM sessions WHERE token_hash=?", (digest,)).fetchone()
+            if not row:
+                return None
+            if (row["nas_url"] != nas_url or row["expires"] <= now
+                    or row["last_seen"] + idle_seconds <= now):
+                db.execute("DELETE FROM sessions WHERE token_hash=?", (digest,))
+                return None
+            db.execute("UPDATE sessions SET last_seen=? WHERE token_hash=?", (now, digest))
+            return PersistedSession(**dict(row))
+
+    def rotate_session(self, old_token: str, new_token: str, now: float) -> bool:
+        with self.connect() as db:
+            result = db.execute("UPDATE sessions SET token_hash=?, rotated=? WHERE token_hash=?",
+                                (token_hash(new_token), now, token_hash(old_token)))
+            return result.rowcount == 1
+
+    def revoke(self, token: str) -> None:
+        with self.connect() as db:
+            db.execute("DELETE FROM sessions WHERE token_hash=?", (token_hash(token),))
+
+    def update_credential(self, token: str, credential: bytes) -> None:
+        with self.connect() as db:
+            db.execute("UPDATE sessions SET credential=? WHERE token_hash=?",
+                       (credential, token_hash(token)))

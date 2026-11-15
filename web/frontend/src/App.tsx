@@ -143,11 +143,18 @@ function App() {
           ) : !status.configured ? (
             <>
               <div className="mb-6 flex items-center gap-3"><div className="rounded-xl bg-mist p-3 text-marine"><ServerCog size={24} /></div><div><p className="text-xs font-semibold text-marine">STEP 01</p><h3 className="text-xl font-bold">NAS 최초 설정</h3></div></div>
-              <p className="mb-7 text-sm leading-6 text-slate-600">설치 관리자만 NAS 주소를 한 번 설정할 수 있습니다. 컨테이너의 <code className="rounded bg-slate-100 px-1.5 py-0.5">/data/setup-code</code> 파일에서 코드를 확인하세요.</p>
+              <p className="mb-7 text-sm leading-6 text-slate-600">설치 관리자만 NAS 주소를 한 번 설정할 수 있습니다. 아래에서 초기 설정 코드를 확인한 후 입력하세요.</p>
               <form className="space-y-5" onSubmit={e => void submitSetup(e)}>
                 <div><label htmlFor="nas-url" className="field-label">NAS 주소 (HTTPS / HTTP)</label><input className="field" id="nas-url" type="url" required autoComplete="url" placeholder="https://nas.example.com:5001" value={nasUrl} onChange={e => setNasUrl(e.target.value)} /></div>
                 {nasUrl.trim().toLowerCase().startsWith('http://') && <InsecureNasWarning />}
                 <div><label htmlFor="setup-code" className="field-label">초기 설정 코드</label><input className="field" id="setup-code" type="password" required autoComplete="off" value={setupCode} onChange={e => setSetupCode(e.target.value)} /></div>
+                <div className="rounded-xl border border-sky-200 bg-sky-50/70 px-4 py-3 text-xs leading-5 text-slate-700">
+                  <p className="font-semibold text-ink">초기 설정 코드는 어떻게 확인하나요?</p>
+                  <p className="mt-2">Docker Compose를 실행한 서버에 접속해 <code>docker-compose.yaml</code> 파일이 있는 폴더에서 실행하세요.</p>
+                  <code className="mt-2 block select-all overflow-x-auto rounded-lg bg-ink px-3 py-2 font-mono text-xs text-white">docker compose exec web cat /data/setup-code</code>
+                  <p className="mt-2">Synology Container Manager에서는 해당 웹 컨테이너의 터미널에서 <code className="font-semibold">cat /data/setup-code</code>를 실행할 수도 있습니다.</p>
+                  <p className="mt-2 text-slate-500">출력된 코드를 위에 입력하세요. 초기 설정이 완료되면 코드 파일은 삭제됩니다. 코드를 타인과 공유하지 마세요.</p>
+                </div>
                 <Button className="w-full" disabled={busy} type="submit">{busy ? 'NAS 연결 확인 중…' : '연결 확인 및 설정 저장'} <ArrowRight size={17} /></Button>
               </form>
               <p className="mt-5 text-xs leading-5 text-slate-500">자체 서명 인증서는 NAS_CA_FILE로 신뢰 CA를 설정하세요. 사설 IP는 NAS_ALLOW_PRIVATE 설정이 필요합니다.</p>

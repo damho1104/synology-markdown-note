@@ -28,6 +28,20 @@ IP 또는 DNS 이름이 사설 네트워크를 가리키는 NAS는 **관리자�
 
 로그인 유지 체크박스를 선택하면 암호화된 NAS 비밀번호와 선택한 신뢰 기기 ID가 서버의 `/data/web.sqlite3`에 저장되며, 복호화 키는 `/data/master.key`에 보관됩니다. **두 파일을 함께** 안전한 장소에 백업해야 로그인 유지 상태를 복원할 수 있습니다. 쿠키에는 불투명한 랜덤 토큰만 포함하고 서버에는 해시만 저장합니다. 로그아웃하면 현재 토큰과 저장된 자격 증명이 폐기됩니다. OTP는 저장되지 않습니다. 로그인 유지를 선택하지 않은 브라우저 세션은 컨테이너 재시작 후 재로그인이 필요합니다. 타인과 공유하는 기기에서는 로그인 유지와 오프라인 데이터 저장을 권장하지 않습니다.
 
+### `/data` 저장소 권한 (Synology NAS)
+
+컨테이너는 **UID/GID `10001:10001`**로 실행됩니다. 기본 `WEB_DATA_PATH=synonote-web-data`는 Docker가 관리하는 **named volume**이며, 새 볼륨은 이미지의 `/data` 소유권(`10001:10001`)을 상속합니다. 가장 간단한 배포 방법은 이 기본값을 유지하는 것입니다.
+
+NAS의 특정 폴더를 사용하려면 `.env`에서 `WEB_DATA_PATH=/volume1/docker/synonote-web/data`처럼 **절대 경로**를 지정합니다. 첫 실행 전에 DSM의 SSH에서 **새 빈 폴더만** 다음과 같이 준비하세요. 상위 경로도 컨테이너 사용자가 통과할 수 있어야 합니다.
+
+```sh
+sudo mkdir -p /volume1/docker/synonote-web/data
+sudo chown 10001:10001 /volume1/docker/synonote-web/data
+sudo chmod 700 /volume1/docker/synonote-web/data
+```
+
+앱은 `/data` 디렉터리를 `0700`, SQLite DB와 비밀 키 파일을 `0600` 권한으로 사용합니다. 기존 파일이 있는 폴더의 소유권을 일괄 변경하거나 `777`로 열지 마세요. 기존 데이터를 옮기거나 복구할 때는 먼저 백업하고 `web.sqlite3`, `master.key`, `setup-code` 및 SQLite의 `-wal`/`-shm` 파일까지 소유권을 개별 확인해야 합니다. 권한 오류로 컨테이너가 시작되지 않으면 `docker compose logs web`로 확인하세요. `docker compose down -v`는 named volume의 데이터를 삭제하므로 실행하지 마세요.
+
 ```sh
 docker compose logs --tail=100 web
 docker compose ps

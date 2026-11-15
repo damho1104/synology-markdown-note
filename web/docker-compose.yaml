@@ -12,7 +12,7 @@ services:
       WEB_PUBLIC_ORIGIN: ${WEB_PUBLIC_ORIGIN:-}
       WEB_COOKIE_SECURE: ${WEB_COOKIE_SECURE:-true}
     volumes:
-      - synonote-web-data:/data
+      - ${WEB_DATA_PATH:-synonote-web-data}:/data
     security_opt:
       - no-new-privileges:true
     cap_drop:

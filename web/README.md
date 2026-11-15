@@ -14,6 +14,17 @@ docker compose ps
 docker compose exec web cat /data/setup-code
 ```
 
+소스 없이 개인 Registry 이미지로 실행하려면 `compose.registry.yaml`을 사용합니다. P1 초기 버전은 `dr.dmomo.net/damho1104/synonote-web:0.1.0-p1`이며 `linux/amd64`, `linux/arm64`용으로 게시합니다. Registry 인증이 필요한 서버에서는 먼저 `docker login dr.dmomo.net`을 실행하세요.
+
+```sh
+cd web
+docker compose -f compose.registry.yaml pull
+docker compose -f compose.registry.yaml up -d
+docker compose -f compose.registry.yaml exec web cat /data/setup-code
+```
+
+이 Compose 파일은 로컬 빌드 없이 이미지를 내려받으며, `WEB_IMAGE`로 이미지 태그를 바꿀 수 있습니다. Synology Container Manager에서 사용할 때는 `compose.registry.yaml` 내용을 프로젝트 YAML로 입력하고, NAS에 Registry 접근 권한을 설정하세요. P1은 최초 설정·인증 UI 단계이며 노트 탐색·편집은 아직 제공하지 않습니다.
+
 기본 공개 포트는 **호스트 `127.0.0.1:8787`**입니다. 브라우저의 `http://localhost:8787`에서 초기 설정을 진행할 때에는 `.env`에서 `WEB_COOKIE_SECURE=false`로 변경해야 합니다. 운영에서는 외부 HTTPS 역방향 프록시를 구성하고 `WEB_COOKIE_SECURE=true`, `WEB_PUBLIC_ORIGIN=https://실제-웹-도메인`을 설정하세요. `WEB_PUBLIC_ORIGIN`은 브라우저에서 접근하는 **origin**으로, 끝에 경로를 붙이지 않습니다. 프록시는 원래 Host를 전달해야 하고 앱은 임의 `X-Forwarded-*` 헤더를 신뢰하지 않습니다.
 
 `.env`는 필수 파일이 아니며, 원할 때 `.env.example`을 복사해 수정할 수 있습니다. `NAS_URL`을 비워 두면 최초 설정에서 NAS HTTPS 주소와 `/data/setup-code`를 입력합니다. 서버가 NAS API에 연결되는 것을 확인해야 주소가 SQLite에 저장됩니다. 코드는 최초 설정이 완료되면 삭제되며, 다시 조회할 수 없습니다. 이미 주소가 저장되어 있으면 다른 사용자는 주소를 덮어쓸 수 없습니다. 환경변수 `NAS_URL`을 지정하면 해당 주소가 최우선이고 웹에서는 읽기 전용입니다.
@@ -53,4 +64,4 @@ npm run dev
 
 ## Synology Container Manager 상태
 
-`compose.yaml`은 **현재 소스 빌드 방식**이므로 Git 작업 공간의 `web/` 폴더 전체가 필요합니다. 추후 GHCR에 멀티아키텍처 버전 이미지가 공개되면 `build`를 제거하고 `image`를 게시된 버전 태그로 고정한 YAML을 제공해 **Container Manager → 프로젝트 → 생성 → YAML 업로드**를 지원할 예정입니다. 현재는 태그 이미지 게시 및 실제 Synology 장비 검증이 이루어지지 않았습니다. DSM 전용 프로젝트에서는 포트 충돌·볼륨 쓰기 권한(컨테이너 UID 10001)·HTTPS 역방향 프록시·NAS 인증서 CA·NAS로의 네트워크 경로를 확인해야 합니다.
+`compose.yaml`은 **소스 빌드 방식**이므로 Git 작업 공간의 `web/` 폴더 전체가 필요합니다. `compose.registry.yaml`은 개인 Registry 이미지를 사용하는 배포용 YAML이며, **Container Manager → 프로젝트 → 생성**에서 사용할 수 있습니다. 실제 Synology 장비에서의 구동은 아직 검증하지 않았습니다. DSM 전용 프로젝트에서는 포트 충돌·볼륨 쓰기 권한(컨테이너 UID 10001)·HTTPS 역방향 프록시·NAS 인증서 CA·NAS로의 네트워크 경로를 확인해야 합니다.

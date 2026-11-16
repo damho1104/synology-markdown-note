@@ -8,7 +8,7 @@
 
 `v1.2.17` 또는 `1.2.17`처럼 `X.Y.Z` 앞에 선택적으로 `v`만 붙일 수 있습니다. `1.2.17-abcdef0` 같은 short commit 접미사, 사전 릴리스 접미사는 허용하지 않습니다. 태그 버전이 `cli/pyproject.toml`의 `project.version`과 다르면 빌드를 중단합니다.
 
-1. `cli/pyproject.toml`의 버전을 수정하고 `cli/`에서 `uv lock`을 실행해 `uv.lock`을 갱신합니다.
+1. 공통 버전을 `cli/pyproject.toml`, `web/backend/pyproject.toml`, `web/frontend/package.json`에 함께 반영합니다. CLI와 웹 백엔드에서 `uv lock`, 웹 프런트엔드에서 `npm install --package-lock-only`로 잠금 파일도 갱신합니다.
 2. 변경 사항을 커밋하고 `develop`에 푸시합니다.
 3. CI가 통과하면 `develop` → `main` Pull Request를 병합합니다.
 4. 로컬 `main`을 갱신한 뒤 버전 태그를 붙여 푸시합니다. 아래는 소스 버전이 `1.2.17`일 때의 예이며, 이미 게시된 태그는 다시 만들거나 이동하지 않습니다.
@@ -38,6 +38,20 @@ git push origin v1.2.17
 각 빌드 환경에서 CLI 테스트와 단일 실행 파일의 `version`·`--help` 실행을 확인합니다. macOS에서는 Swift 테스트, 중첩 코드 서명, DMG 마운트·ZIP 복원 검증도 수행합니다. 모든 빌드와 체크섬 확인이 끝난 뒤 Draft 릴리스에 파일을 업로드하고 게시합니다. 게시된 동일 태그 릴리스는 덮어쓰지 않으며, 중단된 Draft는 재실행으로 이어갈 수 있습니다.
 
 릴리스 워크플로에는 `workflow_dispatch`가 없습니다. 버전 태그 푸시가 있어야 테스트·빌드·게시가 시작됩니다. 일반 개발 검증은 CI 워크플로를 사용합니다.
+
+## 웹 Docker 이미지 / GHCR
+
+릴리스 워크플로에 웹 이미지 게시도 포함합니다. **이미지 빌드·게시는 `[self-hosted, Linux, X64, docker-compose]` 러너**에서 수행합니다. 해당 Linux 호스트에는 Docker와 Python 3가 필요하고 Docker에서 QEMU/binfmt 및 Buildx 빌더를 실행할 수 있어야 합니다. Node 22와 Python 3.13 기반 웹 테스트는 같은 러너의 Ubuntu 컨테이너에서 준비합니다.
+
+- `web-checks.yml`: 백엔드 전체 테스트, 프런트엔드 테스트·빌드, 앱·CLI·웹 프런트/백엔드 공통 버전 일치 검증.
+- `ci.yml`: 일반 브랜치 및 PR에서는 위 검증만 수행하며 이미지를 게시하지 않습니다. PR 테스트는 기존 CI 정책처럼 GitHub 호스팅 환경으로 격리하고, 일반 브랜치 검증과 릴리스 작업은 셀프호스트 러너를 사용합니다.
+- `release.yml`: 위 릴리스 태그/`main` 검증과 앱·CLI 검증이 모두 통과하면 `web-image` 작업이 `linux/amd64`, `linux/arm64` 이미지를 빌드하여 GHCR에 게시합니다. 두 플랫폼이 manifest에 있는지도 확인합니다.
+- 이미지 이름은 `ghcr.io/<저장소 소유자>/synology-md-note-web`이고 태그는 `latest`와 공통 릴리스 버전 `X.Y.Z`입니다. 예를 들어 `v1.2.18` 릴리스라면 앱·CLI·웹 버전을 모두 `1.2.18`로 맞추고 `:latest`, `:1.2.18`을 게시합니다. 웹 설정에도 `1.2.18`로 표시합니다. 버전이 다르면 게시 전에 검증을 실패시킵니다.
+- GHCR 로그인은 `GITHUB_TOKEN`과 해당 작업의 `packages: write` 권한을 사용합니다. 개인 레지스트리 주소나 별도 레지스트리 비밀번호는 필요하지 않습니다.
+
+최초 게시 후 GitHub Packages에서 `synology-md-note-web` 패키지가 **Public**인지 확인합니다. 비공개 상태에서는 설치자가 인증 없이 이미지를 내려받을 수 없습니다. 다른 소유자 계정으로 포크하여 게시한다면 Compose와 `.env.example`의 GHCR 소유자 부분도 맞춥니다.
+
+사용자용 다운로드·실행 명령은 [셀프호스팅 설치 안내](../web/SELF-HOSTING.md)에 있습니다. 워크플로 파일을 작성한 상태와 실제 태그 실행·이미지 게시 성공은 구분해서 확인합니다.
 
 ## Linux 공용 실행 파일 검증
 

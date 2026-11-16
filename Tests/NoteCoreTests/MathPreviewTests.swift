@@ -256,6 +256,31 @@ import WebKit
         #expect(start.duration(to: clock.now) < .seconds(3))
     }
 
+    @Test func previewSourceLinesAccountForFrontMatterWithoutChangingExport() throws {
+        let source = "---\ntitle: test\n---\n\n# Heading\n\nParagraph\n"
+        let preview = MarkdownPipeline.previewPage(MarkdownPipeline.renderForPreview(source, sourceLines: true))
+        let dom = try SwiftSoup.parse(preview)
+        #expect(try dom.select("[data-source-line=5] h1").text() == "Heading")
+        #expect(try dom.select("[data-source-line=7] p").text() == "Paragraph")
+        #expect(!MarkdownPipeline.render(source).contains("data-source-line"))
+    }
+
+    @MainActor @Test func previewFollowsCursorParagraphWithoutNavigation() async throws {
+        let web = WKWebView(frame: CGRect(x: 0, y: 0, width: 600, height: 350))
+        let loader = MathPageLoader()
+        web.navigationDelegate = loader
+        let markdown = (0..<65).map { "## Heading \($0)\n\nParagraph \($0)\n\n" }.joined()
+        try await loader.load(MarkdownPipeline.previewPage(MarkdownPipeline.renderForPreview(markdown, sourceLines: true)), in: web)
+        let coordinator = HTMLPreview.Coordinator()
+        coordinator.sourceLine = 161
+        coordinator.followSource(in: web)
+        for _ in 0..<100 {
+            if try await mathEvaluate("(() => {const r=Array.from(document.querySelectorAll('[data-source-line]')).find(n => n.dataset.sourceLine === '161').getBoundingClientRect();return scrollY>0 && r.top>=0 && r.top<250})()", in: web) as? Bool == true { return }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        Issue.record("Cursor paragraph was not brought into the preview viewport")
+    }
+
     @MainActor @Test func previewCoordinatorRendersMathAndRestoresScrollAfterLayout() async throws {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()

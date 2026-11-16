@@ -30,12 +30,12 @@ public struct ImportedDocument: Sendable {
 
 public enum MarkdownPipeline {
     /// Preview-only rendering. Server HTML continues to use `render`.
-    public static func renderForPreview(_ markdown: String, blocks: [PreservedBlock] = []) -> String {
+    public static func renderForPreview(_ markdown: String, blocks: [PreservedBlock] = [], sourceLines: Bool = false) -> String {
         guard validateBlocks(markdown, blocks: blocks) else { return "" }
         let frontMatter = MarkdownFrontMatter.extract(from: markdown)
         let body = frontMatter?.body ?? markdown
         let source = MathPreviewSource(body)
-        let rendered = source.restoringFormulas(in: render(source.markdown, blocks: blocks))
+        let rendered = source.restoringFormulas(in: render(source.markdown, blocks: blocks, sourceLines: sourceLines, sourceLineOffset: markdown.components(separatedBy: "\n").count - body.components(separatedBy: "\n").count))
         guard let frontMatter else { return rendered }
         return """
         <details class="note-frontmatter"><summary>문서 정보</summary><pre><code>\(htmlEscape(frontMatter.metadata))</code></pre></details>
@@ -49,12 +49,12 @@ public enum MarkdownPipeline {
 
     /// Server HTML, including untouched opaque payloads. Use `previewPage` for display.
     /// Invalid block references produce no HTML; callers must validate before saving.
-    public static func render(_ markdown: String, blocks: [PreservedBlock] = []) -> String {
+    public static func render(_ markdown: String, blocks: [PreservedBlock] = [], sourceLines: Bool = false, sourceLineOffset: Int = 0) -> String {
         let math = MathPreviewSource(markdown)
         let source = MarkdownSource(math.markdown)
         let document = Markdown.Document(parsing: math.markdown, options: [.disableSmartOpts])
         guard source.validate(document, blocks: blocks) else { return "" }
-        var renderer = ServerHTMLRenderer(source: source, blocks: Dictionary(uniqueKeysWithValues: blocks.map { ($0.id, $0.html) }))
+        var renderer = ServerHTMLRenderer(source: source, blocks: Dictionary(uniqueKeysWithValues: blocks.map { ($0.id, $0.html) }), sourceLines: sourceLines, sourceLineOffset: sourceLineOffset)
         return math.restoringSource(in: renderer.visit(document))
     }
 
@@ -104,7 +104,7 @@ public enum MarkdownPipeline {
         <!doctype html><html lang="ko"><head><meta charset="utf-8">
         <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; connect-src 'none'; img-src data: attachment:; style-src 'unsafe-inline'; font-src data:; media-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <style>:root{color-scheme:light dark}body{font:15px -apple-system,sans-serif;line-height:1.7;overflow-wrap:anywhere;margin:24px}pre,code{font-family:ui-monospace,monospace}pre{white-space:pre-wrap;padding:14px;background:light-dark(#f4f5f7,#27292e);border-radius:6px}table{border-collapse:collapse}th,td{border:1px solid gray;padding:6px 10px}img{max-width:100%;height:auto}blockquote{border-left:3px solid gray;margin-left:0;padding-left:16px}li>p{display:inline;margin:0}li{margin:5px 0}li:has(>.task-toggle){list-style:none}.task-toggle{text-decoration:none;font-size:18px;margin-right:7px;color:light-dark(#3375c9,#8bb6ff)}h1{font-size:1.8em}h2{font-size:1.35em;margin-top:1.7em}a{color:light-dark(#246cc4,#8bb6ff)}.note-frontmatter{border:1px solid light-dark(#ddd,#505050);border-radius:8px;padding:8px 12px;background:light-dark(#fafafa,#252525)}.note-frontmatter summary{cursor:pointer;font-weight:600}.note-frontmatter pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:340px;overflow:auto;margin-bottom:2px}</style>
+        <style>html{overflow-y:scroll;scrollbar-gutter:stable;overflow-anchor:none}:root{color-scheme:light dark}body{font:15px -apple-system,sans-serif;line-height:1.7;overflow-wrap:anywhere;margin:24px}pre,code{font-family:ui-monospace,monospace}pre{white-space:pre-wrap;padding:14px;background:light-dark(#f4f5f7,#27292e);border-radius:6px}table{border-collapse:collapse}th,td{border:1px solid gray;padding:6px 10px}img{max-width:100%;height:auto}blockquote{border-left:3px solid gray;margin-left:0;padding-left:16px}li>p{display:inline;margin:0}li{margin:5px 0}li:has(>.task-toggle){list-style:none}.task-toggle{text-decoration:none;font-size:18px;margin-right:7px;color:light-dark(#3375c9,#8bb6ff)}h1{font-size:1.8em}h2{font-size:1.35em;margin-top:1.7em}a{color:light-dark(#246cc4,#8bb6ff)}.note-frontmatter{border:1px solid light-dark(#ddd,#505050);border-radius:8px;padding:8px 12px;background:light-dark(#fafafa,#252525)}.note-frontmatter summary{cursor:pointer;font-weight:600}.note-frontmatter pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:340px;overflow:auto;margin-bottom:2px}</style>
         </head><body>\(body)</body></html>
         """
     }
@@ -238,10 +238,17 @@ private struct ServerHTMLRenderer: MarkupVisitor {
     typealias Result = String
     let source: MarkdownSource
     let blocks: [String: String]
+    var sourceLines = false
+    var sourceLineOffset = 0
 
     mutating func defaultVisit(_ markup: Markup) -> String {
         var result = ""
-        for child in markup.children { result += visit(child) }
+        for child in markup.children {
+            let rendered = visit(child)
+            if sourceLines, markup is Markdown.Document, let line = child.range?.lowerBound.line {
+                result += "<div data-source-line=\"\(line + sourceLineOffset)\">\(rendered)</div>"
+            } else { result += rendered }
+        }
         return result
     }
 
@@ -560,6 +567,7 @@ private enum PreviewSanitizer {
             }
             if key == "align" { keep = ["left", "right", "center"].contains(value.lowercased()) }
             if tag == "input", key == "checked" { keep = true }
+            if key == "data-source-line" { keep = Int(value).map { $0 > 0 } ?? false }
             if tag == "input", key == "data-md-task" { keep = Int(value).map { $0 > 0 } ?? false }
             if keep { attrs += " \(key)=\"\(htmlEscape(value))\"" }
         }

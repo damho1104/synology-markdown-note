@@ -1,0 +1,62 @@
+name: Web checks
+
+on:
+  workflow_call:
+    outputs:
+      version:
+        description: Validated shared application version
+        value: ${{ jobs.web.outputs.version }}
+
+permissions:
+  contents: read
+
+jobs:
+  web:
+    # Publishing always uses our self-hosted runner; untrusted PR tests are isolated.
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || fromJSON('["self-hosted", "Linux", "X64", "docker-compose"]') }}
+    container: ubuntu:24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install test tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl git build-essential
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: false
+      - name: Test backend
+        working-directory: web/backend
+        run: |
+          uv python install 3.13
+          uv lock --check
+          uv run --locked pytest -q
+      - id: version
+        name: Check app, CLI and web versions agree
+        run: |
+          uv run --project web/backend --locked python - <<'PY'
+          import json, os, re, tomllib
+          from pathlib import Path
+          frontend = json.loads(Path('web/frontend/package.json').read_text())['version']
+          backend = tomllib.loads(Path('web/backend/pyproject.toml').read_text())['project']['version']
+          application = tomllib.loads(Path('cli/pyproject.toml').read_text())['project']['version']
+          if frontend != application or backend != application or not re.fullmatch(r'(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)', application):
+              raise SystemExit('App, CLI and web must have the same X.Y.Z version')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'version={application}\n')
+          PY
+      - name: Test and build frontend
+        working-directory: web/frontend
+        run: |
+          npm ci --no-audit --no-fund
+          npm test
+          npm run build

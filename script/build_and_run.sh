@@ -64,7 +64,7 @@ cat > "$APP_CONTENTS/Info.plist" <<PLIST
 <key>CFBundleDisplayName</key><string>Synology Markdown Note</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>$APP_VERSION</string>
-<key>CFBundleVersion</key><string>28</string>
+<key>CFBundleVersion</key><string>29</string>
 <key>SynologyDisplayVersion</key><string>$DISPLAY_VERSION</string>
 <key>SynologyGitCommit</key><string>$APP_COMMIT</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>

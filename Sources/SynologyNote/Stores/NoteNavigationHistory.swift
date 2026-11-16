@@ -55,6 +55,12 @@ struct NoteNavigationHistory {
     var canGoBack: Bool { !previous.isEmpty }
     var canGoForward: Bool { !next.isEmpty }
 
+    mutating func openGlobalSearchResult(_ id: UUID, from origin: Location) -> Location {
+        let destination = Location(selection: id, filter: .all)
+        navigate(from: origin, to: destination)
+        return destination
+    }
+
     mutating func observeSelection(_ location: Location, previousID: UUID?) {
         guard current != location else { return }
         // The sidebar transition owns its history entry when selection and

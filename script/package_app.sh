@@ -122,7 +122,7 @@ expected = {'CFBundleIdentifier': 'com.damho.SynologyMarkdown',
             'CFBundleExecutable': 'SynologyNote', 'CFBundlePackageType': 'APPL',
             'CFBundleName': 'Synology Markdown Note',
             'CFBundleDisplayName': 'Synology Markdown Note',
-            'CFBundleShortVersionString': base_version, 'CFBundleVersion': '28',
+            'CFBundleShortVersionString': base_version, 'CFBundleVersion': '29',
             'CFBundleIconFile': 'AppIcon', 'LSMinimumSystemVersion': '14.0'}
 for key, value in expected.items():
     if info.get(key) != value: raise SystemExit(f'{key}: expected {value!r}, got {info.get(key)!r}')

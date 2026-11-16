@@ -3,6 +3,33 @@ import Testing
 @testable import SynologyNote
 
 @Suite struct NoteNavigationHistoryTests {
+    @Test func globalSearchClearsFiltersAndRestoresGraphThroughSharedHistory() {
+        let target = UUID()
+        var origin = NoteNavigationHistory.Location(selection: UUID(), filter: .graph, search: "목록 검색")
+        origin.advancedTitle = "제목 조건"
+        origin.advancedTag = "태그"
+        origin.advancedNotebookID = "book"
+        origin.advancedAfter = Date(timeIntervalSince1970: 100)
+        origin.advancedBefore = Date(timeIntervalSince1970: 200)
+        origin.graph = NoteGraphSnapshot(selectedID: target, focusID: target, depth: 2, query: "그래프 검색", zoom: 2)
+        var history = NoteNavigationHistory()
+        let destination = history.openGlobalSearchResult(target, from: origin)
+        #expect(destination == NoteNavigationHistory.Location(selection: target, filter: .all))
+        history.observeSelection(destination, previousID: origin.selection)
+        #expect(history.goBack(allowing: { _ in true }) == origin)
+        #expect(!history.canGoBack)
+        #expect(history.goForward(allowing: { _ in true }) == destination)
+    }
+
+    @Test func globalSearchOfSelectedNoteStillPreservesPreviousNotebookAndFilters() {
+        let target = UUID()
+        let origin = NoteNavigationHistory.Location(selection: target, filter: .notebook("book"), search: "목록 검색")
+        var history = NoteNavigationHistory()
+        let destination = history.openGlobalSearchResult(target, from: origin)
+        #expect(destination == NoteNavigationHistory.Location(selection: target, filter: .all))
+        #expect(history.goBack(allowing: { _ in true }) == origin)
+    }
+
     private func location(_ id: UUID?, filter: LibraryFilter = .all, search: String = "") -> NoteNavigationHistory.Location {
         NoteNavigationHistory.Location(selection: id, filter: filter, search: search)
     }

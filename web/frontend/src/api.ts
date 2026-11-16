@@ -72,6 +72,11 @@ export class ApiFailure extends Error {
   }
 }
 
+export const SESSION_EXPIRED_EVENT = "synonote:session-expired";
+export function notifySessionExpired(): void {
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
+}
+
 async function rawRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
   let response: Response;
   try {
@@ -84,6 +89,8 @@ async function rawRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new Error("웹 서버에 연결할 수 없습니다. 네트워크를 확인하세요.");
   }
   if (!response.ok) {
+    if (response.status === 401 && !["/api/auth/login", "/api/auth/logout"].includes(path))
+      notifySessionExpired();
     const data = (await response.json().catch(() => ({}))) as {
       error?: string;
       detail?: string;

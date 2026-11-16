@@ -362,7 +362,7 @@ def test_different_accounts_have_independent_saved_sessions(tmp_path):
     assert bob.get("/api/auth/me").json()["username"] == "bob"
 
 
-def test_network_error_during_auto_relogin_preserves_saved_credential(tmp_path):
+def test_network_error_during_auto_relogin_requires_manual_login_after_recovery(tmp_path):
     nas = FakeNas()
     first = TestClient(app_at(tmp_path, nas, nas_url="https://nas.example"))
     assert post(first, "/api/auth/login", {
@@ -371,11 +371,11 @@ def test_network_error_during_auto_relogin_preserves_saved_credential(tmp_path):
     nas.error = "NAS_UNAVAILABLE"
     restarted = TestClient(app_at(tmp_path, nas, nas_url="https://nas.example"))
     restarted.cookies.update(first.cookies)
-    assert restarted.get("/api/auth/me").status_code == 503
+    assert restarted.get("/api/auth/me").status_code == 401
     with sqlite3.connect(tmp_path / "web.sqlite3") as db:
-        assert db.execute("SELECT count(*) FROM sessions").fetchone()[0] == 1
+        assert db.execute("SELECT count(*) FROM sessions").fetchone()[0] == 0
     nas.error = None
-    assert restarted.get("/api/auth/me").status_code == 200
+    assert restarted.get("/api/auth/me").status_code == 401
 
 
 def test_http_policy_applies_before_probe_and_to_saved_configuration(tmp_path):
@@ -544,3 +544,147 @@ def test_failed_nas_read_still_delivers_the_rotated_cookie(tmp_path):
     assert response.status_code==503
     assert 'set-cookie' in response.headers
     assert client.get('/api/auth/me').status_code==200
+
+
+def test_nas_failure_returns_sanitized_diagnostic_for_failed_notebook_request(tmp_path, caplog):
+    class RejectedNas(FakeNas):
+        def notebooks(self, *_args):
+            raise NasError("NAS_API_ERROR", diagnostic={"api": "SYNO.NoteStation.Notebook", "method": "list", "reason": "API_REJECTED", "nas_code": 105})
+    client = TestClient(app_at(tmp_path, RejectedNas(), nas_url="https://nas.example"))
+    assert post(client, "/api/auth/login", {"username": "alice", "password": "correct"}).status_code == 200
+    response = client.get("/api/notebooks")
+    assert response.status_code == 503
+    assert response.json() == {"error": "NAS_API_ERROR", "diagnostic": {"api": "SYNO.NoteStation.Notebook", "method": "list", "reason": "API_REJECTED", "nas_code": 105}}
+    assert "API_REJECTED" in caplog.text and "105" in caplog.text
+    assert "sid-secret" not in caplog.text and "correct" not in caplog.text
+
+
+@pytest.mark.parametrize("remember", [False, True])
+def test_nas_expiration_clears_web_session_and_cookie_even_after_one_read_retry(tmp_path, remember):
+    class ExpiredNas(FakeNas):
+        expired = False
+        def notebooks(self, *_args):
+            if self.expired:
+                raise NasError("NAS_SESSION_EXPIRED")
+            return []
+    nas = ExpiredNas()
+    app = app_at(tmp_path, nas, nas_url="https://nas.example")
+    client = TestClient(app)
+    assert post(client, "/api/auth/login", {"username": "alice", "password": "correct", "remember": remember}).status_code == 200
+    original = client.cookies.get("synonote_session")
+    nas.expired = True
+    response = client.get("/api/notebooks")
+    assert response.status_code == 401
+    assert response.json() == {"detail": "RELOGIN_REQUIRED"}
+    assert 'Max-Age=0' in response.headers['set-cookie']
+    assert client.cookies.get("synonote_session") is None
+    assert not app.state.transient and not app.state.live_nas
+    replay = TestClient(app)
+    replay.cookies.set("synonote_session", original)
+    assert replay.get("/api/auth/me").status_code == 401
+    assert len(nas.login_calls) == (2 if remember else 1)
+
+
+@pytest.mark.parametrize("code", ["AUTH_FAILED", "OTP_REQUIRED", "NAS_API_ERROR", "NAS_UNAVAILABLE"])
+def test_failed_persistent_nas_login_revokes_web_session_for_any_login_failure(tmp_path, code, caplog):
+    nas = FakeNas()
+    first = TestClient(app_at(tmp_path, nas, nas_url="https://nas.example"))
+    assert post(first, "/api/auth/login", {"username": "alice", "password": "correct", "remember": True}).status_code == 200
+    old = first.cookies.get("synonote_session")
+    nas.error = code
+    restarted = TestClient(app_at(tmp_path, nas, nas_url="https://nas.example"))
+    restarted.cookies.update(first.cookies)
+    response = restarted.get("/api/auth/me")
+    assert response.status_code == 401
+    assert response.json() == {"detail": "RELOGIN_REQUIRED"}
+    assert restarted.cookies.get("synonote_session") is None
+    assert 'Max-Age=0' in response.headers['set-cookie']
+    with sqlite3.connect(tmp_path / "web.sqlite3") as db:
+        assert db.execute("SELECT count(*) FROM sessions").fetchone()[0] == 0
+    assert code in caplog.text and "session_invalidated" in caplog.text
+    assert "correct" not in caplog.text and "sid-secret" not in caplog.text and old not in caplog.text
+
+
+def test_request_logs_have_correlation_timing_and_no_query_or_credentials(tmp_path, caplog):
+    import logging
+    caplog.set_level(logging.INFO, logger="uvicorn.error")
+    client = TestClient(app_at(tmp_path, nas_url="https://nas.example"))
+    response = client.get("/api/health?password=never-log-this", headers={"X-Request-ID": "untrusted-value"})
+    assert response.status_code == 200
+    assert len(response.headers["X-Request-ID"]) == 16
+    assert response.headers["X-Request-ID"] in caplog.text
+    assert "request_completed" in caplog.text and '"status": 200' in caplog.text and '"duration_ms":' in caplog.text
+    assert "never-log-this" not in caplog.text and "untrusted-value" not in caplog.text
+
+
+def test_nas_logs_share_web_request_id_without_logging_form_data(tmp_path, monkeypatch, caplog):
+    import json
+    import logging
+    import httpx
+    from urllib.parse import parse_qs
+    from synonote_web.nas import NasClient, NOTE, NOTEBOOK, AUTH
+    caplog.set_level(logging.INFO, logger="uvicorn.error")
+    def handler(request):
+        form = {k: v[0] for k, v in parse_qs(request.content.decode()).items()}
+        if form["api"] == "SYNO.API.Info":
+            data = {AUTH: {"path": "auth.cgi", "minVersion": 3, "maxVersion": 6}, NOTE: {"path": "entry.cgi", "minVersion": 1, "maxVersion": 3}, NOTEBOOK: {"path": "entry.cgi", "minVersion": 2, "maxVersion": 2}}
+        elif form["api"] == AUTH:
+            data = {"sid": "private-nas-sid"}
+        else:
+            data = {"total": 0, "offset": 0, "notebooks": []}
+        return httpx.Response(200, json={"success": True, "data": data})
+    monkeypatch.setattr(NasClient, "_client", lambda self: httpx.Client(transport=httpx.MockTransport(handler)))
+    client = TestClient(app_at(tmp_path, NasClient(), nas_url="https://nas.example"))
+    assert post(client, "/api/auth/login", {"username": "alice", "password": "private-password"}).status_code == 200
+    assert "private-nas-sid" not in caplog.text and "private-password" not in caplog.text
+    caplog.clear()
+    response = client.get("/api/notebooks")
+    assert response.status_code == 200
+    events = [json.loads(record.getMessage()) for record in caplog.records if record.name == "uvicorn.error"]
+    assert len(events) == 2
+    assert all(event["request_id"] == response.headers["X-Request-ID"] for event in events)
+    assert any(event["event"] == "nas_request_completed" and event["api"] == NOTEBOOK and event["method"] == "list" for event in events)
+
+
+def test_stale_request_after_rotation_cannot_delete_the_new_cookie(tmp_path):
+    app = app_at(tmp_path, nas_url="https://nas.example")
+    client = TestClient(app)
+    assert post(client, "/api/auth/login", {"username": "alice", "password": "correct", "remember": True}).status_code == 200
+    old = client.cookies.get("synonote_session")
+    with sqlite3.connect(tmp_path / "web.sqlite3") as db:
+        db.execute("UPDATE sessions SET rotated=0")
+    assert client.get("/api/auth/me").status_code == 200
+    assert client.cookies.get("synonote_session") != old
+    stale = TestClient(app)
+    stale.cookies.set("synonote_session", old)
+    response = stale.get("/api/auth/me")
+    assert response.status_code == 401
+    assert "set-cookie" not in response.headers
+    assert client.get("/api/auth/me").status_code == 200
+
+
+def test_failed_manual_nas_login_also_revokes_existing_web_session(tmp_path):
+    nas = FakeNas()
+    app = app_at(tmp_path, nas, nas_url="https://nas.example")
+    client = TestClient(app)
+    assert post(client, "/api/auth/login", {"username": "alice", "password": "correct", "remember": True}).status_code == 200
+    old = client.cookies.get("synonote_session")
+    nas.error = "NAS_API_ERROR"
+    response = post(client, "/api/auth/login", {"username": "alice", "password": "wrong"})
+    assert response.status_code == 503
+    assert 'Max-Age=0' in response.headers['set-cookie']
+    assert client.cookies.get("synonote_session") is None
+    replay = TestClient(app)
+    replay.cookies.set("synonote_session", old)
+    assert replay.get("/api/auth/me").status_code == 401
+
+
+def test_app_html_is_not_cached_across_frontend_deployments(tmp_path, monkeypatch):
+    static = tmp_path / "static"
+    static.mkdir()
+    (static / "index.html").write_text('<html><script src="/assets/current.js"></script></html>')
+    monkeypatch.setenv("WEB_STATIC_DIR", str(static))
+    client = TestClient(app_at(tmp_path / "data", nas_url="https://nas.example"))
+    response = client.get("/")
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "no-store"

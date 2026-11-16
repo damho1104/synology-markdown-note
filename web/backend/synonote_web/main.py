@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import hmac
+import json
+import logging
+from datetime import datetime, timezone
 import hashlib
 import os
 import re
@@ -21,6 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .nas import NasClient, NasError, NasLogin, validate_url
+from .observability import request_id
 from .settings import Settings
 from .store import Store, StoreError, token_hash
 
@@ -136,37 +140,81 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
         # Keep the health/status API running so invalid configuration is visible.
         pass
 
+    def log_event(request: Request, event: str, level: int = logging.INFO, **fields) -> None:
+        route = request.scope.get("route")
+        logging.getLogger("uvicorn.error").log(level, json.dumps({"event": event, "timestamp": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
+            "request_id": getattr(request.state, "request_id", None),
+            "method": request.method, "route": getattr(route, "path", "/api/unknown"),
+            **fields}, ensure_ascii=False))
+
     @app.middleware("http")
     async def no_cache(request: Request, call_next):
-        if request.method in {"POST", "PUT", "DELETE", "PATCH"} and request.url.path.startswith("/api/"):
-            # Check before FastAPI parses the request body or reports validation errors.
-            try:
-                origin_guard(request)
-            except HTTPException as exc:
-                return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
-        response = await call_next(request)
-        # Preserve authentication cookie changes even when a later NAS operation
-        # returns an exception response instead of FastAPI's injected Response.
-        for header in getattr(request.state, "session_cookie_headers", []):
-            if header not in response.raw_headers:
-                response.raw_headers.append(header)
-        if request.url.path.startswith("/api/"):
-            response.headers["Cache-Control"] = "no-store"
-            response.headers["X-Content-Type-Options"] = "nosniff"
-        return response
+        request.state.request_id = secrets.token_hex(8)
+        request_id_token = request_id.set(request.state.request_id)
+        started = time.monotonic()
+        response = None
+        try:
+            if request.method in {"POST", "PUT", "DELETE", "PATCH"} and request.url.path.startswith("/api/"):
+                try:
+                    origin_guard(request)
+                except HTTPException as exc:
+                    response = JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+            if response is None:
+                response = await call_next(request)
+            for header in getattr(request.state, "session_cookie_headers", []):
+                if header not in response.raw_headers:
+                    response.raw_headers.append(header)
+            if request.url.path.startswith("/api/"):
+                response.headers["Cache-Control"] = "no-store"
+                response.headers["X-Content-Type-Options"] = "nosniff"
+                response.headers["X-Request-ID"] = request.state.request_id
+            elif response.headers.get("content-type", "").startswith("text/html"):
+                # Always obtain the current hashed script entry after an update.
+                response.headers["Cache-Control"] = "no-store"
+            return response
+        except Exception as exc:
+            # Exception messages/tracebacks may contain NAS URLs or request data.
+            log_event(request, "request_exception", logging.ERROR, exception_type=type(exc).__name__)
+            raise
+        finally:
+            if request.url.path.startswith("/api/"):
+                status = response.status_code if response is not None else 500
+                log_event(request, "request_completed", logging.WARNING if status >= 400 else logging.INFO,
+                          status=status, duration_ms=round((time.monotonic() - started) * 1000, 1))
+            request_id.reset(request_id_token)
+
+    def invalidate_session(request: Request, response: Response, token: str | None, reason: str,
+                           error: NasError | None = None) -> None:
+        if getattr(request.state, "session_invalidated", False):
+            return
+        if token:
+            logout_token(token)
+        clear_cookie(request, response)
+        request.state.session_invalidated = True
+        log_event(request, "session_invalidated", logging.WARNING, reason=reason,
+                  **({"error": error.code, "diagnostic": error.diagnostic} if error else {}))
 
     @app.exception_handler(NasError)
-    async def nas_error(_: Request, exc: NasError):
+    async def nas_error(request: Request, exc: NasError):
         code = exc.code
         status = (422 if code in {"INVALID_NAS_URL", "MARKDOWN_UNSUPPORTED", "HTML_PATCH_INVALID"} else 401 if code in
                   {"AUTH_FAILED", "OTP_REQUIRED", "NAS_SESSION_EXPIRED"} else
                   403 if code in {"NAS_ADDRESS_BLOCKED", "NAS_HTTP_BLOCKED", "DOCUMENT_READ_ONLY"} else
                   409 if code in {"REMOTE_CHANGED", "WRITE_UNCERTAIN"} else
                   413 if code == "ATTACHMENT_TOO_LARGE" else 503)
-        return JSONResponse({"error": code}, status_code=status)
+        body = {"error": code}
+        if exc.diagnostic:
+            body["diagnostic"] = exc.diagnostic
+        response = JSONResponse(body, status_code=status)
+        if status == 401:
+            token = getattr(request.state, "session_token_override", None) or request.cookies.get(cookie_name(request))
+            invalidate_session(request, response, token, "nas_auth_failed", exc)
+        log_event(request, "nas_error", logging.WARNING, error=code, diagnostic=exc.diagnostic)
+        return response
 
     @app.exception_handler(StoreError)
-    async def store_error(_: Request, __: StoreError):
+    async def store_error(request: Request, exc: StoreError):
+        log_event(request, "store_error", logging.ERROR, exception_type=type(exc).__name__)
         return JSONResponse({"error": "LOCAL_STORE_ERROR"}, status_code=503)
 
     def origin_guard(request: Request) -> None:
@@ -250,6 +298,7 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
             raise HTTPException(409, detail="ALREADY_CONFIGURED")
         store.bind_nas(target)
         store.clear_setup_code()
+        log_event(request, "nas_setup_succeeded")
         app.state.attempts.reset(peer, "setup")
         return {"configured": True, "nas_url": target, "source": "database", "read_only": False}
 
@@ -268,6 +317,11 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
             result = nas.login(url, body.username, body.password, body.otp,
                                body.remember and body.trust_device)
         except NasError as exc:
+            for name in ("__Host-synonote_session", "synonote_session"):
+                previous = request.cookies.get(name)
+                if previous:
+                    logout_token(previous)
+            invalidate_session(request, response, None, "nas_login_failed", exc)
             if exc.code in {"AUTH_FAILED", "OTP_REQUIRED"}:
                 app.state.attempts.fail(peer, "login")
             raise
@@ -290,6 +344,7 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
             if previous_token:
                 logout_token(previous_token)
         set_cookie(request, response, token, body.remember)
+        log_event(request, "login_succeeded", remember=body.remember)
         return {"username": body.username, "remember": body.remember, "csrf_token": csrf}
 
     def _current_session_locked(request: Request, response: Response) -> tuple[str, str, str, bool]:
@@ -302,7 +357,7 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
         if transient is not None:
             if (transient.created + settings.session_seconds <= now or
                     transient.touched + settings.idle_seconds <= now):
-                app.state.transient.pop(digest, None)
+                invalidate_session(request, response, token, "web_session_expired")
                 raise HTTPException(401, detail="LOGIN_REQUIRED")
             transient.touched = now
             return token, transient.username, transient.csrf, False
@@ -312,6 +367,9 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
         session = store.session(token, url, now, settings.remember_idle_seconds)
         if session is None:
             app.state.live_nas.pop(digest, None)
+            # A stale token may belong to a request sent before cookie rotation.
+            # Its late response must not delete a newer valid browser cookie.
+            log_event(request, "web_session_missing", logging.WARNING)
             raise HTTPException(401, detail="LOGIN_REQUIRED")
         if digest not in app.state.live_nas:
             credential = store.decrypt_credential(session.credential)
@@ -319,11 +377,9 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
                 active = nas.login(url, session.username, credential["password"], None,
                                    credential["trust_device"], credential["device_id"])
             except NasError as exc:
-                if exc.code in {"AUTH_FAILED", "OTP_REQUIRED"}:
-                    logout_token(token)
-                    clear_cookie(request, response)
-                    raise HTTPException(401, detail="RELOGIN_REQUIRED") from exc
-                raise
+                invalidate_session(request, response, token, "nas_relogin_failed", exc)
+                raise HTTPException(401, detail="RELOGIN_REQUIRED") from exc
+            log_event(request, "nas_relogin_succeeded")
             app.state.live_nas[digest] = active
             # Keep an updated device ID encrypted for future server restarts.
             if active.device_id and active.device_id != credential["device_id"]:
@@ -349,6 +405,7 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
             active = (app.state.live_nas.get(digest) if remembered else
                       app.state.transient[digest].nas)
             if active is None:
+                invalidate_session(request, response, token, "nas_session_missing")
                 raise HTTPException(401, detail="RELOGIN_REQUIRED")
             base, _ = configured()
             if base is None:
@@ -363,13 +420,22 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
         except NasError as exc:
             if exc.code != "NAS_SESSION_EXPIRED":
                 raise
+            log_event(request, "nas_session_expired", logging.WARNING, diagnostic=exc.diagnostic)
             if not remembered:
+                invalidate_session(request, response, token, "nas_session_expired", exc)
                 raise HTTPException(401, detail="RELOGIN_REQUIRED") from exc
             # Persistent credentials can reauthenticate once after a NAS SID expires.
             with app.state.session_lock:
                 app.state.live_nas.pop(token_hash(token), None)
             fresh_base, fresh, _, _, _, _ = nas_access(request, response)
-            return fn(fresh_base, fresh)
+            try:
+                return fn(fresh_base, fresh)
+            except NasError as retry_error:
+                if retry_error.code == "NAS_SESSION_EXPIRED":
+                    current_token = getattr(request.state, "session_token_override", None) or token
+                    invalidate_session(request, response, current_token, "nas_session_expired_after_relogin", retry_error)
+                    raise HTTPException(401, detail="RELOGIN_REQUIRED") from retry_error
+                raise
 
     def csrf_guard(request: Request, expected: str) -> None:
         if not hmac.compare_digest(request.headers.get("x-csrf-token", ""), expected):

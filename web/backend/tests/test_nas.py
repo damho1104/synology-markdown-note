@@ -203,3 +203,46 @@ def test_authenticated_discovery_carries_sid_across_fresh_http_clients(monkeypat
         return httpx.Response(200,json={'success':True,'data':data})
     monkeypatch.setattr(NasClient,'_client',lambda self:httpx.Client(transport=httpx.MockTransport(handler)))
     assert NasClient().notes('https://nas.example',NasLogin('sid',None))==[]
+
+
+def test_api_rejection_keeps_safe_upstream_code_and_operation():
+    from synonote_web.nas import NOTEBOOK, NasLogin
+    def handler(request):
+        return httpx.Response(200, json={"success": False, "error": {"code": 105, "secret": "do-not-expose"}})
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(NasError) as error:
+            NasClient._post(client, "https://nas.example", "entry.cgi", {
+                "api": NOTEBOOK, "method": "list", "version": "2", "_sid": "private-sid"})
+    assert error.value.code == "NAS_API_ERROR"
+    assert error.value.diagnostic == {"reason": "API_REJECTED", "nas_code": 105,
+                                      "api": NOTEBOOK, "method": "list"}
+    assert "private-sid" not in repr(error.value.diagnostic)
+    assert "do-not-expose" not in repr(error.value.diagnostic)
+
+
+
+def test_saved_discovery_uses_authenticated_routing_until_nas_reports_session_expired(monkeypatch):
+    from urllib.parse import parse_qs
+    from synonote_web.nas import NOTEBOOK, NasLogin
+    calls = []
+    def handler(request):
+        form = {k: v[0] for k, v in parse_qs(request.content.decode()).items()}
+        calls.append(form["api"])
+        if form["api"] == "SYNO.API.Info":
+            return httpx.Response(200, json={"success": True, "data": {}})
+        return httpx.Response(200, json={"success": False, "error": {"code": 119}})
+    monkeypatch.setattr(NasClient, "_client", lambda self: httpx.Client(transport=httpx.MockTransport(handler)))
+    login = NasLogin("expired-sid", None, api_info={NOTEBOOK: {"path": "entry.cgi", "minVersion": 2, "maxVersion": 2}})
+    with pytest.raises(NasError) as error:
+        NasClient().notebooks("https://nas.example", login)
+    assert error.value.code == "NAS_SESSION_EXPIRED"
+    assert error.value.diagnostic["nas_code"] == 119
+    assert calls == [NOTEBOOK]
+
+
+def test_nested_api_result_keeps_session_expiration_instead_of_generic_503():
+    with pytest.raises(NasError) as error:
+        NasClient._data(httpx.Response(200, json={"success": True, "data": {
+            "has_fail": True, "result": [{"success": False, "error": {"code": 119}}]}}))
+    assert error.value.code == "NAS_SESSION_EXPIRED"
+    assert error.value.diagnostic == {"reason": "API_REJECTED", "nas_code": 119}

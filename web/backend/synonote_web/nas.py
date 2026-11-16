@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import logging
+from datetime import datetime, timezone
 import re
 import socket
 import ssl
@@ -25,6 +27,7 @@ from .compat.markdown import render as render_markdown
 from .compat.errors import CLIError
 from .html_text import annotate, patch as patch_html_text
 from .library_nas import LibraryNasOperations
+from .observability import request_id
 
 
 AUTH = "SYNO.API.Auth"
@@ -40,8 +43,14 @@ PRIVATE_V6 = ipaddress.ip_network("fc00::/7")
 
 
 class NasError(Exception):
-    def __init__(self, code: str):
+    def __init__(self, code: str, *, diagnostic: dict | None = None):
         self.code = code
+        self.diagnostic = {}
+        for key, value in (diagnostic or {}).items():
+            if key in {"nas_code", "http_status"} and type(value) is int:
+                self.diagnostic[key] = value
+            elif key in {"api", "method", "reason", "transport"} and isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.]{1,100}", value):
+                self.diagnostic[key] = value
         super().__init__(code)
 
 
@@ -204,6 +213,7 @@ class PinnedTransport(httpx.BaseTransport):
 class NasLogin:
     sid: str
     device_id: str | None
+    api_info: dict | None = None
 
 
 class NasClient(LibraryNasOperations):
@@ -214,48 +224,69 @@ class NasClient(LibraryNasOperations):
     @staticmethod
     def _data(response: httpx.Response, auth: bool = False, empty: bool = False) -> dict:
         if response.status_code != 200:
-            raise NasError("NAS_UNAVAILABLE")
+            raise NasError("NAS_UNAVAILABLE", diagnostic={"reason": "HTTP_ERROR", "http_status": response.status_code})
+
+        def rejected(error):
+            code = error.get("code") if isinstance(error, dict) else None
+            result = ("OTP_REQUIRED" if auth and code == 403 else
+                      "AUTH_FAILED" if auth and code in {400, 401, 402, 404} else
+                      "NAS_SESSION_EXPIRED" if not auth and code in {106, 107, 119} else
+                      "REMOTE_CHANGED" if code == 1064 else "NAS_API_ERROR")
+            raise NasError(result, diagnostic={"reason": "API_REJECTED", "nas_code": code})
+
         try:
             payload = response.json()
             if not isinstance(payload, dict) or type(payload.get("success")) is not bool:
                 raise ValueError()
             if not payload["success"]:
-                error = payload.get("error") or {}
-                code = error.get("code") if isinstance(error, dict) else None
-                if auth and code == 403:
-                    raise NasError("OTP_REQUIRED")
-                if auth and code in {400, 401, 402, 404}:
-                    raise NasError("AUTH_FAILED")
-                if not auth and code in {106, 107, 119}:
-                    raise NasError("NAS_SESSION_EXPIRED")
-                if code == 1064:
-                    raise NasError("REMOTE_CHANGED")
-                raise NasError("NAS_API_ERROR")
+                rejected(payload.get("error"))
             data = payload.get("data")
             if empty and data is None:
                 return {}
-            if not isinstance(data, dict) or data.get("has_fail") is True:
+            if not isinstance(data, dict):
                 raise ValueError()
-            if any(not isinstance(item, dict) or item.get("success") is False
-                   for item in data.get("result", [])):
+            results = data.get("result", [])
+            if not isinstance(results, list):
+                raise ValueError()
+            for item in results:
+                if not isinstance(item, dict):
+                    raise ValueError()
+                if item.get("success") is False:
+                    rejected(item.get("error"))
+            if data.get("has_fail") is True:
                 raise ValueError()
             return data
         except (ValueError, TypeError, AttributeError) as exc:
-            raise NasError("NAS_API_ERROR") from exc
+            raise NasError("NAS_API_ERROR", diagnostic={"reason": "INVALID_RESPONSE"}) from exc
 
     @staticmethod
     def _post(client: httpx.Client, base: str, path: str, data: dict,
               *, empty: bool = False) -> dict:
         if not PATH.fullmatch(path) or any(p in {".", ".."} for p in path.split("/")):
-            raise NasError("NAS_API_ERROR")
+            raise NasError("NAS_API_ERROR", diagnostic={"reason": "INVALID_API_PATH"})
+        started = time.monotonic()
+        diagnostic = {"api": data.get("api"), "method": data.get("method")}
+        outcome = "ok"
+        failure = {}
         try:
             response = client.post(f"{base}/webapi/{path}", data=data)
-            # httpx is not allowed to follow redirects, including same-origin ones.
             if response.is_redirect:
-                raise NasError("NAS_UNAVAILABLE")
+                raise NasError("NAS_UNAVAILABLE", diagnostic={"reason": "HTTP_REDIRECT", "http_status": response.status_code})
             return NasClient._data(response, auth=data.get("api") == AUTH, empty=empty)
+        except NasError as exc:
+            exc.diagnostic.update(NasError(exc.code, diagnostic=diagnostic).diagnostic)
+            outcome = exc.code
+            failure = exc.diagnostic
+            raise
         except (httpx.HTTPError, OSError) as exc:
-            raise NasError("NAS_UNAVAILABLE") from exc
+            outcome = "NAS_UNAVAILABLE"
+            error = NasError(outcome, diagnostic={**diagnostic, "reason": "TRANSPORT_ERROR", "transport": type(exc).__name__})
+            failure = error.diagnostic
+            raise error from exc
+        finally:
+            logging.getLogger("uvicorn.error").info(json.dumps({"event": "nas_request_completed", "timestamp": datetime.now(timezone.utc).isoformat(timespec="milliseconds"), "request_id": request_id.get(),
+                **NasError("", diagnostic=diagnostic).diagnostic,
+                "outcome": outcome, "diagnostic": failure, "duration_ms": round((time.monotonic() - started) * 1000, 1)}, separators=(",", ":")))
 
     @staticmethod
     def _discover(client: httpx.Client, base: str, name: str, sid: str | None = None) -> dict:
@@ -310,14 +341,15 @@ class NasClient(LibraryNasOperations):
             did = result.get("did") or device_id
             if did is not None and not isinstance(did, str):
                 raise NasError("NAS_API_ERROR")
-            return NasLogin(sid=sid, device_id=did)
+            return NasLogin(sid=sid, device_id=did, api_info=all_info)
 
     @staticmethod
     def _info(client: httpx.Client, base: str, api: str, cap: int, minimum: int,
               login: NasLogin | None = None) -> tuple[str, int, bool]:
-        info = NasClient._discover(client, base, "all", login.sid if login else None).get(api)
+        discovered = login.api_info if login and login.api_info is not None else NasClient._discover(client, base, "all", login.sid if login else None)
+        info = discovered.get(api)
         if not isinstance(info, dict):
-            raise NasError("NAS_API_ERROR")
+            raise NasError("NAS_API_ERROR", diagnostic={"api": api, "reason": "API_NOT_ADVERTISED"})
         try:
             low, high = info["minVersion"], info["maxVersion"]
             if isinstance(low, bool) or isinstance(high, bool):
@@ -328,7 +360,7 @@ class NasClient(LibraryNasOperations):
                     or not PATH.fullmatch(path) or any(v in {".", ".."} for v in path.split("/"))):
                 raise ValueError()
         except (ValueError, KeyError, TypeError) as exc:
-            raise NasError("NAS_API_ERROR") from exc
+            raise NasError("NAS_API_ERROR", diagnostic={"api": api, "reason": "INVALID_API_METADATA"}) from exc
         return path, version, str(info.get("requestFormat", "")).upper() == "JSON" or path == "entry.cgi"
 
     @staticmethod
@@ -363,13 +395,13 @@ class NasClient(LibraryNasOperations):
                     or type(offset) is not int or offset != len(rows) or not isinstance(page, list)
                     or (expected_total is not None and total != expected_total)):
                 raise NasError("REMOTE_CHANGED" if expected_total is not None and total != expected_total
-                               else "NAS_API_ERROR")
+                               else "NAS_API_ERROR", diagnostic={"api": api, "method": "list", "reason": "INVALID_LIST_PAGE"})
             expected_total = total
             ids = [item.get(identity) for item in page if isinstance(item, dict)]
             if (len(ids) != len(page) or any(not isinstance(v, str) or not v for v in ids)
                     or len(ids) != len(set(ids)) or any(v in seen for v in ids)
                     or not page and len(rows) < total or len(rows) + len(page) > total):
-                raise NasError("NAS_API_ERROR")
+                raise NasError("NAS_API_ERROR", diagnostic={"api": api, "method": "list", "reason": "INVALID_LIST_IDENTITIES"})
             rows.extend(page)
             seen.update(ids)
             if len(rows) == total:

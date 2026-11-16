@@ -45,6 +45,23 @@ docker compose exec web cat /data/setup-code
 
 버전 충돌은 내 편집본을 보존한 채 NAS 최신 내용과 비교합니다. 응답 유실 등 결과가 불확실하면 자동 재시도하지 않습니다. 서버에 암호화한 쓰기 의도와 대상 잠금을 보존하므로 Note Station에서 저장 결과를 확인한 뒤 보류를 해제하세요. 진행 중인 작업은 1시간 동안 해제할 수 없습니다.
 
+## NAS 세션 실패와 로그
+
+NAS 세션이 만료되면 일반 로그인은 웹 세션·쿠키를 정리하고 로그인 화면으로 돌아갑니다. 로그인 유지는 읽기 요청에서 한 번 NAS 재인증을 시도하며, 재로그인이 실패하거나 재인증 후에도 세션이 거절되면 웹 세션과 저장된 로그인 정보를 폐기합니다. 네트워크 장애로 NAS 재로그인이 실패한 경우에도 다시 수동 로그인해야 합니다. 본문 임시 편집본은 현재 탭에 유지합니다. 그래프·첨부 조회에서 발생한 인증 실패도 로그인 화면으로 전환합니다. 쓰기 작업을 자동 재전송하지 않습니다.
+
+별도 환경변수 없이 컨테이너 표준 출력에 구조화된 이벤트를 남깁니다.
+
+```sh
+docker compose logs -f --tail=100 web
+```
+
+- `request_completed`: 웹 API 경로 템플릿, HTTP 메서드, 상태 코드, 처리 시간, 요청 ID
+- `nas_request_completed`: 같은 요청 ID의 NAS API·메서드, 처리 시간, 결과 및 실패 진단
+- `session_invalidated`: 웹 로그인 폐기 사유와 원래 NAS 실패 코드
+- `nas_error`: NAS 원래 숫자 오류 코드 또는 응답 검증 실패 사유
+
+응답 헤더 `X-Request-ID`를 로그의 `request_id`와 대조하면 실패한 호출을 찾을 수 있습니다. 오류 JSON에도 허용된 API 이름·메서드·오류 숫자·분류만 포함합니다. 계정명, 비밀번호, OTP, 쿠키, SID, 신뢰 기기 토큰, 원본 응답 본문 및 노트 본문은 기록하지 않습니다. 요청 쿼리 문자열이나 외부에서 보낸 요청 ID도 기록하지 않습니다.
+
 ## 데이터 보관과 권한
 
 기본 `WEB_DATA_PATH=synonote-web-data`는 Docker named volume입니다. 컨테이너는 **UID/GID 10001:10001**로 실행합니다. 새 볼륨은 이미지의 `/data` 소유권을 상속합니다.
@@ -63,7 +80,7 @@ sudo chmod 700 /volume1/docker/synonote-web/data
 
 ## 업데이트와 검증
 
-이미지: `dr.dmomo.net/damho1104/synonote-web:0.4.1` (`linux/amd64`, `linux/arm64`). 게시 여부는 해당 작업의 빌드 결과로 확인합니다.
+이미지: `dr.dmomo.net/damho1104/synonote-web:0.4.2` (`linux/amd64`, `linux/arm64`). 게시 여부는 해당 작업의 빌드 결과로 확인합니다.
 
 ```sh
 docker compose pull web

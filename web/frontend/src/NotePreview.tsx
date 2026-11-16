@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { notifySessionExpired } from "./api";
 import { previewNonce, canonicalNoteLink } from "./previewSecurity";
 import DOMPurify from "dompurify";
 import { sanitizeMermaidSvg } from "./mermaidSvg";
@@ -139,6 +140,7 @@ export function NotePreview({
                 `/api/notes/${encodeURIComponent(noteId)}/attachments/${encodeURIComponent(file.id)}`,
                 { credentials: "same-origin", cache: "no-store" },
               );
+              if (response.status === 401) notifySessionExpired();
               if (!response.ok) continue;
               const bytes = await response.arrayBuffer();
               const head = new Uint8Array(

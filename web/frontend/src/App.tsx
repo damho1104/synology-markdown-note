@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { AlertTriangle, ArrowRight, BookOpenText, KeyRound, RefreshCw, ServerCog } from 'lucide-react'
 import { Button } from './components/ui/button'
-import { ApiFailure, request, jsonRequest, type Session, type Status } from './api'
+import { ApiFailure, request, jsonRequest, type Session, type Status, SESSION_EXPIRED_EVENT } from './api'
 import { Workspace } from './Workspace'
 
 function InsecureNasWarning() {
@@ -82,7 +82,12 @@ function App() {
     if (!session) return
     setBusy(true); setError('')
     try {
-      await request('/api/auth/logout', jsonRequest({}, { 'X-CSRF-Token': session.csrf_token }))
+      try {
+        await request('/api/auth/logout', jsonRequest({}, { 'X-CSRF-Token': session.csrf_token }))
+      } catch (error) {
+        if (!(error instanceof ApiFailure) || error.status !== 401) throw error
+        // The server already discarded this session; finish local logout too.
+      }
       setSession(null); setPassword(''); setOtp(''); setOtpVisible(false)
     } finally { setBusy(false) }
   }
@@ -90,6 +95,12 @@ function App() {
   const sessionExpired = useCallback(() => {
     setSession(null); setError('로그인 세션이 만료되었습니다. 다시 로그인하세요.')
   }, [])
+
+  useEffect(() => {
+    if (!session) return
+    window.addEventListener(SESSION_EXPIRED_EVENT, sessionExpired)
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, sessionExpired)
+  }, [session, sessionExpired])
 
   if (!loading && session && status?.configured) {
     return <Workspace session={session} status={status} onLogout={logout}

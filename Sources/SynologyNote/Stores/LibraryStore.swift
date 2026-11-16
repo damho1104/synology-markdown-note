@@ -12,6 +12,7 @@ final class LibraryStore {
     var sessions: [UUID: EditorSession] = [:]
     var search = ""
     var fullTextMatches: Set<UUID> = []
+    private(set) var searchIndexRevision = 0
     var advancedTitle = ""
     var advancedTag = ""
     var advancedNotebookID: String? = nil
@@ -154,6 +155,8 @@ final class LibraryStore {
         }
         guard generation == accountGeneration, changeVersion == localChangeVersion, !Task.isCancelled else { return }
         summaries = rows; notebooks = books; savedSearches = searches; savedSearchMatches = matches; noteGraph = graph
+        // HTML body downloads can update the index without changing a summary.
+        searchIndexRevision &+= 1
         if !search.isEmpty { searchChanged() }
     }
 

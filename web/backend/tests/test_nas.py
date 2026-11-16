@@ -205,6 +205,82 @@ def test_authenticated_discovery_carries_sid_across_fresh_http_clients(monkeypat
     assert NasClient().notes('https://nas.example',NasLogin('sid',None))==[]
 
 
+@pytest.mark.parametrize("api,key,cap,identity", [
+    ("SYNO.NoteStation.Shortcut", "shortcuts", 1, "id"),
+    ("SYNO.NoteStation.Tag", "tags", 1, "tag_id"),
+    ("SYNO.NoteStation.Note", "notes", 3, "object_id"),
+    ("SYNO.NoteStation.Notebook", "notebooks", 2, "object_id"),
+])
+def test_list_accepts_omitted_array_only_for_empty_first_page(api, key, cap, identity):
+    from synonote_web.nas import NasLogin
+
+    login = NasLogin("sid", None, api_info={
+        api: {"path": "entry.cgi", "minVersion": 1, "maxVersion": cap},
+    })
+    transport = httpx.MockTransport(lambda request: httpx.Response(
+        200, json={"success": True, "data": {"offset": 0, "total": 0}}))
+    with httpx.Client(transport=transport) as client:
+        assert NasClient._list(client, "https://nas.example", login, api, key, cap, identity) == []
+
+
+@pytest.mark.parametrize("data", [
+    {"offset": 0, "total": 1},
+    {"offset": 1, "total": 0},
+    {"offset": 0},
+    {"total": 0},
+    {},
+    {"offset": 0, "total": False},
+    {"offset": False, "total": 0},
+    {"offset": 0, "total": 0.0},
+    {"offset": 0.0, "total": 0},
+    {"offset": 0, "total": "0"},
+    {"offset": "0", "total": 0},
+    {"offset": 0, "total": -1},
+    {"offset": 0, "total": 0, "shortcuts": None},
+    {"offset": 0, "total": 0, "shortcuts": {}},
+    {"offset": 0, "total": 0, "shortcuts": ""},
+    {"offset": 0, "total": 0, "shortcuts": False},
+    {"offset": 0, "total": 1, "shortcuts": []},
+    {"offset": 0, "total": 0, "shortcuts": [{"id": "note1"}]},
+])
+def test_list_still_rejects_malformed_or_incomplete_empty_pages(data):
+    from synonote_web.nas import NasLogin
+
+    api = "SYNO.NoteStation.Shortcut"
+    login = NasLogin("sid", None, api_info={
+        api: {"path": "entry.cgi", "minVersion": 1, "maxVersion": 1},
+    })
+    transport = httpx.MockTransport(lambda request: httpx.Response(
+        200, json={"success": True, "data": data}))
+    with httpx.Client(transport=transport) as client:
+        with pytest.raises(NasError) as error:
+            NasClient._list(client, "https://nas.example", login, api, "shortcuts", 1, "id")
+    assert error.value.code == "NAS_API_ERROR"
+    assert error.value.diagnostic["reason"] in {"INVALID_LIST_PAGE", "INVALID_LIST_IDENTITIES"}
+
+
+@pytest.mark.parametrize("last_page,expected_code", [
+    ({"offset": 1, "total": 2}, "NAS_API_ERROR"),
+    ({"offset": 1, "total": 0}, "REMOTE_CHANGED"),
+    ({"offset": 0, "total": 0}, "REMOTE_CHANGED"),
+])
+def test_list_rejects_omitted_array_after_nonempty_page(last_page, expected_code):
+    from synonote_web.nas import NasLogin
+
+    api = "SYNO.NoteStation.Shortcut"
+    login = NasLogin("sid", None, api_info={
+        api: {"path": "entry.cgi", "minVersion": 1, "maxVersion": 1},
+    })
+    pages = iter([{"offset": 0, "total": 2, "shortcuts": [{"id": "note1"}]}, last_page])
+    transport = httpx.MockTransport(lambda request: httpx.Response(
+        200, json={"success": True, "data": next(pages)}))
+    with httpx.Client(transport=transport) as client:
+        with pytest.raises(NasError) as error:
+            NasClient._list(client, "https://nas.example", login, api, "shortcuts", 1, "id")
+    assert error.value.code == expected_code
+    assert error.value.diagnostic["reason"] == "INVALID_LIST_PAGE"
+
+
 def test_api_rejection_keeps_safe_upstream_code_and_operation():
     from synonote_web.nas import NOTEBOOK, NasLogin
     def handler(request):

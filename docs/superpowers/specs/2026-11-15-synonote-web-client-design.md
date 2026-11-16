@@ -2,7 +2,7 @@
 
 - 작성일: 2026-11-15 (Asia/Seoul)
 - 상태: 구현 전 검토안 (NAS 주소 설정·로그인 유지 요구 반영)
-- 기준 작업 저장소: `/Users/damho1104/Develop/src/synology-note/github` (`feature/web-client`, `develop`에서 분기)
+- 기준 작업 저장소: `<repository-root>` (`feature/web-client`, `develop`에서 분기)
 
 ## 목적과 범위
 

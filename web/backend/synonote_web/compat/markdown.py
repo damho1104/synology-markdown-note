@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from html import escape
 import re
+import hashlib
+import uuid
 
 from markdown_it import MarkdownIt
 
@@ -57,15 +59,15 @@ def _inline(children) -> str:
     return result
 
 
-def render(markdown: str, blocks: list[dict] | None = None) -> str:
+def render(markdown: str, blocks: list[dict] | None = None, math_images: dict | None = None) -> str:
     blocks = blocks or []
     if not validate_blocks(markdown, blocks):
         raise CLIError("INVALID_SOURCE", "보존 블록과 Markdown 토큰이 일치하지 않습니다.")
     preserved = {block["id"]: block["html"] for block in blocks}
-    # MathExport needs cross-platform PNG assets. Prevent silent downgrade to text.
-    if re.search(r"(?<!\\)(?<!\$)\$\$|(?<!\\)(?<!\$)\$(?!\s|\$)[^\n$]+?\$(?!\$)", markdown):
-        raise CLIError("UNSUPPORTED_MARKDOWN_FEATURE", "TeX 수식은 PNG 동등성 검증 전에는 업로드할 수 없습니다.")
-    tokens = PARSER.parse(markdown)
+    masked, formulas = math_plan(markdown)
+    if formulas and math_images is None:
+        raise CLIError("UNSUPPORTED_MARKDOWN_FEATURE", "수식 이미지를 준비하세요.")
+    tokens = PARSER.parse(masked)
     chunks: list[str] = []
     index = 0
     while index < len(tokens):
@@ -133,4 +135,36 @@ def render(markdown: str, blocks: list[dict] | None = None) -> str:
         else:
             raise CLIError("UNSUPPORTED_MARKDOWN_FEATURE", f"지원하지 않는 Markdown 블록 형식: {typ}")
         index += 1
-    return "".join(chunks)
+    result = "".join(chunks)
+    for formula in formulas:
+        asset = (math_images or {}).get(formula['key'])
+        if not asset:
+            raise CLIError("UNSUPPORTED_MARKDOWN_FEATURE", "수식 이미지가 없습니다.")
+        delimiter = '$$' if formula['display'] else '$'
+        image = f'<img ref="{escaped(asset["ref"])}" alt="{escaped(delimiter + formula["tex"] + delimiter)}" width="{int(asset["width"])}" height="{int(asset["height"])}" style="{"display:block;" if formula["display"] else ""}max-width:100%;vertical-align:middle">'
+        result = result.replace(formula['token'], image)
+    return result
+
+
+def math_plan(markdown: str) -> tuple[str, list[dict]]:
+    # Mask literal code, HTML and destinations before looking for TeX delimiters.
+    protected = re.compile(r"(?ms)^```[^\n]*\n.*?^```[^\n]*$|^~~~[^\n]*\n.*?^~~~[^\n]*$|`+[^`]*`+|<(?:pre|code|script|style)\b.*?</(?:pre|code|script|style)>|<[^>]+>|!\[[^\]]*\]\([^)]*\)|\]\([^)]*\)")
+    ranges = [m.span() for m in protected.finditer(markdown)]
+    starts = [0]
+    for line in markdown.splitlines(keepends=True): starts.append(starts[-1] + len(line))
+    for token in PARSER.parse(markdown):
+        if token.type in ('fence', 'code_block', 'html_block') and token.map:
+            ranges.append((starts[token.map[0]], starts[token.map[1]]))
+    pattern = re.compile(r"(?<![\\$])\$\$([\s\S]+?)\$\$|(?<!\\)\\\[([\s\S]+?)\\\]|(?<!\\)\\\(([^\n]*?)\\\)|(?<![\\$])\$(?![\s$])([^\n$]+?)(?<!\s)\$(?![\d$])")
+    formulas = []
+    prefix = 'SynologyMath' + uuid.uuid4().hex
+    def replace(match):
+        if any(match.start() < end and match.end() > start for start, end in ranges):
+            return match.group()
+        tex = next(v for v in match.groups() if v is not None)
+        display = match.group(1) is not None or match.group(2) is not None
+        key = hashlib.sha256(('math-png-v1\n' + str(display).lower() + '\n' + tex).encode()).hexdigest()
+        token = prefix + str(len(formulas)) + 'End'
+        formulas.append(dict(key=key, tex=tex, display=display, token=token))
+        return token + '\n' * match.group().count('\n')
+    return pattern.sub(replace, markdown), formulas

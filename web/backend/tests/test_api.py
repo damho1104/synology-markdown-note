@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -303,7 +304,7 @@ def test_transient_login_respects_both_timeouts(tmp_path, deadline):
     assert digest not in app.state.transient
 
 
-def test_persistent_token_rotates_and_old_token_cannot_be_reused(tmp_path):
+def test_persistent_token_rotates_and_old_token_expires_after_short_grace(tmp_path):
     app = app_at(tmp_path, nas_url="https://nas.example")
     client = TestClient(app)
     login = post(client, "/api/auth/login", {
@@ -317,7 +318,12 @@ def test_persistent_token_rotates_and_old_token_cannot_be_reused(tmp_path):
     assert client.cookies.get("synonote_session") != old_token
     replay = TestClient(app)
     replay.cookies.set("synonote_session", old_token)
-    assert replay.get("/api/auth/me").status_code == 401
+    assert replay.get("/api/auth/me").status_code == 200
+    with sqlite3.connect(tmp_path / 'web.sqlite3') as db:
+        db.execute('UPDATE session_aliases SET expires=0')
+    replay.cookies.clear()
+    replay.cookies.set('synonote_session', old_token)
+    assert replay.get('/api/auth/me').status_code == 401
     assert post(client, "/api/auth/logout", {}, csrf=login.json()["csrf_token"]).status_code == 200
 
 
@@ -421,7 +427,7 @@ def test_notes_require_session_and_writes_require_csrf(tmp_path):
     downloaded = client.get('/api/notes/note1/attachments/file1')
     assert downloaded.content == b'file-content'
     assert downloaded.headers['content-type'] == 'application/octet-stream'
-    body = {'title': 'created', 'html': '<p>new</p>', 'notebook_id': 'book1'}
+    body = {'title': 'created', 'html': '<p>new</p>', 'notebook_id': 'book1', 'client_request_id': str(uuid.uuid4())}
     assert post(client, '/api/notes', body).status_code == 403
     assert nas.write_calls == 0
     assert post(client, '/api/notes', body, csrf=csrf).status_code == 200
@@ -432,7 +438,7 @@ def test_uncertain_write_survives_restart_and_blocks_retransmission(tmp_path):
     nas = NotesNas(); nas.write_error = 'WRITE_UNCERTAIN'
     app = app_at(tmp_path, nas, nas_url='https://nas.example'); client = TestClient(app)
     csrf = post(client, '/api/auth/login', {'username': 'alice', 'password': 'correct', 'remember': True}).json()['csrf_token']
-    body = {'title': 'created', 'html': '<p>new</p>', 'notebook_id': 'book1'}
+    body = {'title': 'created', 'html': '<p>new</p>', 'notebook_id': 'book1', 'client_request_id': str(uuid.uuid4())}
     assert post(client, '/api/notes', body, csrf=csrf).status_code == 409
     restarted = TestClient(app_at(tmp_path, nas, nas_url='https://nas.example')); restarted.cookies.update(client.cookies)
     assert post(restarted, '/api/notes', body, csrf=csrf).json()['detail'] == 'WRITE_REVIEW_REQUIRED'
@@ -444,6 +450,8 @@ def test_uncertain_write_survives_restart_and_blocks_retransmission(tmp_path):
     assert post(bob, f"/api/writes/{operation['operation_id']}/ack", {}, csrf=bob_csrf).status_code == 404
     assert post(restarted, f"/api/writes/{operation['operation_id']}/ack", {}, csrf=csrf).status_code == 200
     nas.write_error = None
+    assert post(restarted, '/api/notes', body, csrf=csrf).status_code == 409
+    body['client_request_id'] = str(uuid.uuid4())
     assert post(restarted, '/api/notes', body, csrf=csrf).status_code == 200
 
 
@@ -493,14 +501,14 @@ def test_https_proxy_origin_keeps_secure_cookie_even_on_internal_http(tmp_path):
 @pytest.mark.parametrize('scheme', ['http', 'https'])
 def test_auto_transport_needs_no_cookie_or_origin_settings(tmp_path, scheme):
     app = create_app(Settings(data_dir=tmp_path, nas_url='https://nas.example'), NotesNas())
-    client = TestClient(app, base_url=f'{scheme}://note.local.dmomo.ai.kr')
-    response = post(client, '/api/auth/login', {'username':'alice','password':'correct'}, origin=f'{scheme}://note.local.dmomo.ai.kr')
+    client = TestClient(app, base_url=f'{scheme}://notes.example.com')
+    response = post(client, '/api/auth/login', {'username':'alice','password':'correct'}, origin=f'{scheme}://notes.example.com')
     assert response.status_code == 200
     secure = scheme == 'https'
     assert response.headers['set-cookie'].startswith('__Host-synonote_session=' if secure else 'synonote_session=')
     assert ('Secure' in response.headers['set-cookie'].split('; ')) is secure
     assert client.get('/api/notebooks').status_code == 200
-    assert post(client, '/api/auth/logout', {}, csrf=response.json()['csrf_token'], origin=f'{scheme}://note.local.dmomo.ai.kr').status_code == 200
+    assert post(client, '/api/auth/logout', {}, csrf=response.json()['csrf_token'], origin=f'{scheme}://notes.example.com').status_code == 200
     assert client.get('/api/auth/me').status_code == 401
 
 
@@ -658,8 +666,8 @@ def test_stale_request_after_rotation_cannot_delete_the_new_cookie(tmp_path):
     stale = TestClient(app)
     stale.cookies.set("synonote_session", old)
     response = stale.get("/api/auth/me")
-    assert response.status_code == 401
-    assert "set-cookie" not in response.headers
+    assert response.status_code == 200
+    assert response.cookies.get('synonote_session') == client.cookies.get('synonote_session')
     assert client.get("/api/auth/me").status_code == 200
 
 

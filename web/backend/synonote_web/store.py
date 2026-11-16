@@ -88,6 +88,10 @@ class Store:
             raise StoreError("Master key is invalid; restore it from backup") from exc
         with self.connect() as db:
             db.executescript("""
+                CREATE TABLE IF NOT EXISTS graph_index (
+                    owner TEXT NOT NULL, note_id TEXT NOT NULL, version TEXT NOT NULL,
+                    entry BLOB NOT NULL, PRIMARY KEY(owner, note_id)
+                );
                 CREATE TABLE IF NOT EXISTS config (
                     name TEXT PRIMARY KEY, value TEXT NOT NULL
                 );
@@ -103,6 +107,11 @@ class Store:
                     expires REAL NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS sessions_expires ON sessions(expires);
+                CREATE TABLE IF NOT EXISTS session_aliases (
+                    old_hash TEXT PRIMARY KEY, current_hash TEXT NOT NULL,
+                    token BLOB NOT NULL, expires REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS aliases_current ON session_aliases(current_hash);
                 CREATE TABLE IF NOT EXISTS write_operations (
                     operation_id TEXT PRIMARY KEY,
                     owner TEXT NOT NULL,
@@ -125,6 +134,13 @@ class Store:
                 INSERT OR IGNORE INTO write_target_locks(owner, target)
                     SELECT DISTINCT owner, target FROM write_operations
                     WHERE status IN ('pending', 'uncertain');
+                CREATE TABLE IF NOT EXISTS create_receipts (
+                    owner TEXT NOT NULL, client_request_id TEXT NOT NULL,
+                    request_hash TEXT NOT NULL, operation_id TEXT NOT NULL,
+                    status TEXT NOT NULL, result BLOB,
+                    PRIMARY KEY(owner, client_request_id)
+                );
+                CREATE INDEX IF NOT EXISTS create_receipts_operation ON create_receipts(operation_id);
             """)
             # Support databases created by the initial development build.
             columns = {row["name"] for row in db.execute("PRAGMA table_info(sessions)")}
@@ -165,6 +181,7 @@ class Store:
             if row is None or row["value"] != url:
                 db.execute("INSERT OR REPLACE INTO config(name,value) VALUES ('active_nas_url',?)", (url,))
                 db.execute("DELETE FROM sessions")
+                db.execute('DELETE FROM session_aliases')
 
     def setup_code(self) -> str:
         path = self.dir / "setup-code"
@@ -220,14 +237,47 @@ class Store:
             return PersistedSession(**dict(row))
 
     def rotate_session(self, old_token: str, new_token: str, now: float) -> bool:
+        old_hash, new_hash = token_hash(old_token), token_hash(new_token)
+        encrypted = self.cipher.encrypt(new_token.encode())
         with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            db.execute('DELETE FROM session_aliases WHERE expires<=? OR current_hash NOT IN (SELECT token_hash FROM sessions)', (now,))
             result = db.execute("UPDATE sessions SET token_hash=?, rotated=? WHERE token_hash=?",
-                                (token_hash(new_token), now, token_hash(old_token)))
+                                (new_hash, now, old_hash))
+            if result.rowcount == 1:
+                # Aliases never form chains and retaining an alias never extends
+                # its original grace deadline, even with rapid rotations.
+                db.execute('UPDATE session_aliases SET current_hash=?,token=? WHERE current_hash=?',
+                           (new_hash, encrypted, old_hash))
+                db.execute('INSERT INTO session_aliases VALUES(?,?,?,?)', (old_hash, new_hash, encrypted, now + 30))
+                db.execute('DELETE FROM session_aliases WHERE current_hash=? AND old_hash NOT IN '
+                           '(SELECT old_hash FROM session_aliases WHERE current_hash=? ORDER BY expires DESC LIMIT 8)',
+                           (new_hash, new_hash))
             return result.rowcount == 1
 
-    def revoke(self, token: str) -> None:
+    def resolve_session_alias(self, token: str, nas_url: str, now: float, idle_seconds: int) -> str | None:
         with self.connect() as db:
-            db.execute("DELETE FROM sessions WHERE token_hash=?", (token_hash(token),))
+            row = db.execute('''SELECT a.token,a.current_hash FROM session_aliases a
+                JOIN sessions s ON s.token_hash=a.current_hash
+                WHERE a.old_hash=? AND a.expires>? AND s.nas_url=? AND s.expires>?
+                    AND s.last_seen+?>?''', (token_hash(token), now, nas_url, now, idle_seconds, now)).fetchone()
+        if row is None: return None
+        try:
+            canonical = self.cipher.decrypt(row['token']).decode('ascii')
+            if token_hash(canonical) != row['current_hash']: raise ValueError()
+            return canonical
+        except (InvalidToken, UnicodeError, ValueError) as exc:
+            raise StoreError('Session alias is unreadable') from exc
+
+    def revoke(self, token: str) -> str:
+        digest = token_hash(token)
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            alias = db.execute('SELECT current_hash FROM session_aliases WHERE old_hash=?', (digest,)).fetchone()
+            current = alias['current_hash'] if alias else digest
+            db.execute('DELETE FROM session_aliases WHERE current_hash=? OR old_hash=?', (current, digest))
+            db.execute("DELETE FROM sessions WHERE token_hash=?", (current,))
+            return current
 
     def update_credential(self, token: str, credential: bytes) -> None:
         with self.connect() as db:
@@ -235,10 +285,20 @@ class Store:
                        (credential, token_hash(token)))
 
     def start_write(self, operation_id: str, owner: str, target: str,
-                    note_id: str | None, title: str, intent: dict) -> bool:
+                    note_id: str | None, title: str, intent: dict, *,
+                    client_request_id: str | None = None, request_hash: str | None = None) -> bool:
         """Durably record a one-shot mutation before sending it to the NAS."""
         encrypted = self.cipher.encrypt(json.dumps(intent, ensure_ascii=False).encode())
         with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            if client_request_id:
+                if db.execute('SELECT 1 FROM create_receipts WHERE owner=? AND client_request_id=?',
+                              (owner, client_request_id)).fetchone():
+                    return False
+                # Keep keys/tombstones permanently: an expired key must never
+                # silently become permission to repeat an unknown NAS create.
+                if db.execute('SELECT COUNT(*) FROM create_receipts WHERE owner=?', (owner,)).fetchone()[0] >= 10000:
+                    raise StoreError('Create receipt ledger is full')
             # INSERT obtains SQLite's writer lock. A second process cannot
             # reserve this target while the first reservation is committing.
             reserved = db.execute("""INSERT OR IGNORE INTO write_target_locks(owner, target)
@@ -249,15 +309,40 @@ class Store:
                 (operation_id, owner, target, note_id, title, intent, status, created)
                 VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)""",
                 (operation_id, owner, target, note_id, title, encrypted, time.time()))
+            if client_request_id:
+                db.execute('INSERT INTO create_receipts VALUES(?,?,?,?,?,NULL)',
+                           (owner, client_request_id, request_hash, operation_id, 'pending'))
         return True
 
-    def finish_write(self, operation_id: str, *, uncertain: bool) -> None:
+    def create_receipt(self, owner: str, client_request_id: str) -> dict:
+        with self.connect() as db:
+            row = db.execute('SELECT * FROM create_receipts WHERE owner=? AND client_request_id=?',
+                             (owner, client_request_id)).fetchone()
+        if row is None:
+            return {'status': 'absent'}
+        result = dict(status=row['status'], operation_id=row['operation_id'], request_hash=row['request_hash'])
+        if row['status'] == 'completed':
+            try:
+                result['note'] = json.loads(self.cipher.decrypt(row['result']))
+                if not isinstance(result['note'], dict): raise ValueError()
+            except (InvalidToken, ValueError, TypeError) as exc:
+                raise StoreError('Create receipt is unreadable') from exc
+        return result
+
+    def finish_write(self, operation_id: str, *, uncertain: bool, result: dict | None = None) -> None:
+        encrypted_result = self.cipher.encrypt(json.dumps(result, ensure_ascii=False).encode()) if result is not None else None
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             if uncertain:
                 db.execute("UPDATE write_operations SET status='uncertain' WHERE operation_id=?",
                            (operation_id,))
+                db.execute("UPDATE create_receipts SET status='uncertain' WHERE operation_id=?", (operation_id,))
             else:
+                if encrypted_result is not None:
+                    db.execute("UPDATE create_receipts SET status='completed',result=? WHERE operation_id=?",
+                               (encrypted_result, operation_id))
+                else:
+                    db.execute('DELETE FROM create_receipts WHERE operation_id=?', (operation_id,))
                 row = db.execute("SELECT owner, target FROM write_operations WHERE operation_id=?",
                                  (operation_id,)).fetchone()
                 db.execute("DELETE FROM write_operations WHERE operation_id=?", (operation_id,))
@@ -287,5 +372,31 @@ class Store:
                 return False
             db.execute("DELETE FROM write_operations WHERE owner=? AND operation_id=?",
                        (owner, operation_id))
+            db.execute("UPDATE create_receipts SET status='reviewed' WHERE owner=? AND operation_id=?",
+                       (owner, operation_id))
             self._release_target_if_clear(db, owner, row["target"])
             return True
+
+
+    def load_graph_index(self, owner: str, versions: dict[str, str]) -> list[dict]:
+        result = []
+        with self.connect() as db:
+            rows = db.execute('SELECT note_id, version, entry FROM graph_index WHERE owner=?', (owner,)).fetchall()
+            deleted = [(owner, row['note_id']) for row in rows if row['note_id'] not in versions]
+            db.executemany('DELETE FROM graph_index WHERE owner=? AND note_id=?', deleted)
+        for row in rows:
+            if versions.get(row['note_id']) != row['version']: continue
+            try:
+                entry = json.loads(self.cipher.decrypt(row['entry']))
+                if isinstance(entry, dict) and entry.get('id') == row['note_id'] and entry.get('version') == row['version']:
+                    result.append(entry)
+            except (ValueError, TypeError, InvalidToken):
+                continue
+        return result
+
+    def save_graph_index(self, owner: str, entry: dict) -> None:
+        if entry.get('error') or entry.get('hidden') or not entry.get('version'): return
+        encrypted = self.cipher.encrypt(json.dumps(entry, ensure_ascii=False).encode())
+        with self.connect() as db:
+            db.execute('INSERT OR REPLACE INTO graph_index(owner,note_id,version,entry) VALUES(?,?,?,?)',
+                (owner, entry['id'], entry['version'], encrypted))

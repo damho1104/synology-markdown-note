@@ -11,18 +11,19 @@ struct PreviewView: View {
     var assetStore: AttachmentStore
     var onToggleTask: ((Int) -> Void)? = nil
     var onOpenNote: ((String) -> Void)? = nil
+    var sourceLine: Int? = nil
     @State private var page = ""
     @AppStorage("mermaidStyle") private var mermaidStyle: MermaidStyle = .sketch
     @AppStorage("mermaidTheme") private var mermaidTheme: MermaidTheme = .automatic
     private var input: PreviewInput { PreviewInput(markdown: markdown, html: originalHTML, blocks: blocks, attachments: attachments) }
     var body: some View {
-        HTMLPreview(page: page, attachments: attachments, assetStore: assetStore, mermaidStyle: mermaidStyle, mermaidTheme: mermaidTheme, onToggleTask: onToggleTask, onOpenNote: onOpenNote)
+        HTMLPreview(page: page, attachments: attachments, assetStore: assetStore, mermaidStyle: mermaidStyle, mermaidTheme: mermaidTheme, onToggleTask: onToggleTask, onOpenNote: onOpenNote, sourceLine: sourceLine)
             .task(id: input) {
                 let value = input
                 do {
                     try await Task.sleep(for: .milliseconds(150))
                     let rendered = await Task.detached(priority: .userInitiated) {
-                        let html = value.markdown.map { MarkdownPipeline.renderForPreview($0, blocks: value.blocks) } ?? value.html ?? ""
+                        let html = value.markdown.map { MarkdownPipeline.renderForPreview($0, blocks: value.blocks, sourceLines: true) } ?? value.html ?? ""
                         let resolved = AttachmentResolver.previewHTML(html, attachments: value.attachments)
                         let safe = MarkdownPipeline.sanitize(resolved)
                         let linked = value.markdown == nil ? safe : InternalNoteLinks.previewHTML(safe)
@@ -44,6 +45,7 @@ struct HTMLPreview: NSViewRepresentable {
     let mermaidTheme: MermaidTheme
     var onToggleTask: ((Int) -> Void)?
     var onOpenNote: ((String) -> Void)?
+    var sourceLine: Int? = nil
     func makeCoordinator() -> Coordinator { Coordinator() }
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
@@ -62,25 +64,76 @@ struct HTMLPreview: NSViewRepresentable {
         context.coordinator.handler?.attachments = attachments
         context.coordinator.onToggleTask = onToggleTask
         context.coordinator.onOpenNote = onOpenNote
+        if context.coordinator.sourceLine != sourceLine {
+            context.coordinator.sourceLine = sourceLine
+            context.coordinator.followSource(in: web)
+        }
         guard context.coordinator.lastPage != page
                 || context.coordinator.mermaidStyle != mermaidStyle
                 || context.coordinator.mermaidTheme != mermaidTheme else { return }
+        guard !page.isEmpty else { return }
+        let previousPage = context.coordinator.lastPage
         context.coordinator.lastPage = page
         context.coordinator.mermaidStyle = mermaidStyle
         context.coordinator.mermaidTheme = mermaidTheme
         context.coordinator.pageRevision += 1
         let revision = context.coordinator.pageRevision
-        // Snapshot only scroll position; user-authored JavaScript never runs.
+        // Keep the WKWebView document alive while editing. Replacing its DOM
+        // avoids the blank navigation frame that loadHTMLString shows per edit.
         web.evaluateJavaScript("window.scrollY") { offset, _ in
             guard context.coordinator.pageRevision == revision else { return }
             context.coordinator.scrollY = offset as? Double ?? context.coordinator.scrollY
-            context.coordinator.navigation = web.loadHTMLString(page, baseURL: URL(string: "about:blank"))
+            if previousPage.isEmpty {
+                context.coordinator.navigation = web.loadHTMLString(page, baseURL: URL(string: "about:blank"))
+            } else {
+                web.callAsyncJavaScript("""
+                const next = new DOMParser().parseFromString(page, 'text/html');
+                const styles = [...next.head.querySelectorAll('style')].map(s => s.textContent).join('');
+                let style = document.getElementById('preview-style');
+                if (!style) { style = document.createElement('style'); style.id = 'preview-style'; document.head.append(style); }
+                if (style.textContent !== styles) style.textContent = styles;
+                document.body.style.minHeight = document.body.scrollHeight + 'px';
+                const old = [...document.body.childNodes];
+                const fresh = [...next.body.childNodes];
+                const raw = fresh.map(n => n.outerHTML ?? n.textContent);
+                const previous = window.__previewRaw ?? old.map(n => n.outerHTML ?? n.textContent);
+                let start = 0, end = 0;
+                while (start < old.length && start < fresh.length && previous[start] === raw[start]) start++;
+                while (end < old.length-start && end < fresh.length-start && previous[old.length-1-end] === raw[fresh.length-1-end]) end++;
+                for (let i=start;i<old.length-end;i++) old[i].remove();
+                const fragment = document.createDocumentFragment();
+                fresh.slice(start,fresh.length-end).forEach(n => fragment.append(n));
+                document.body.insertBefore(fragment, end ? old[old.length-end] : null);
+                window.__previewRaw = raw;
+                return true;
+                """, arguments: ["page": page], in: nil, in: .page) { result in
+                    guard context.coordinator.pageRevision == revision else { return }
+                    guard case .success = result else {
+                        context.coordinator.navigation = web.loadHTMLString(page, baseURL: URL(string: "about:blank"))
+                        return
+                    }
+                    context.coordinator.renderCurrentPage(in: web, revision: revision)
+                }
+            }
         }
     }
     @MainActor final class Coordinator: NSObject, WKNavigationDelegate {
         var lastPage = ""
         var mermaidStyle: MermaidStyle = .sketch
         var mermaidTheme: MermaidTheme = .automatic
+        var sourceLine: Int?
+        func followSource(in web: WKWebView) {
+            guard let sourceLine else { return }
+            web.callAsyncJavaScript("""
+            const nodes = [...document.querySelectorAll('[data-source-line]')];
+            const target = nodes.reverse().find(node => Number(node.dataset.sourceLine) <= line);
+            if (target) {
+                const rect = target.getBoundingClientRect();
+                if (rect.top < 24 || rect.top > innerHeight * 0.7)
+                    scrollTo(0, scrollY + rect.top - innerHeight * 0.3);
+            }
+            """, arguments: ["line": sourceLine], in: nil, in: .page, completionHandler: { _ in })
+        }
         var scrollY = 0.0
         var pageRevision = 0
         var navigation: WKNavigation?
@@ -89,7 +142,9 @@ struct HTMLPreview: NSViewRepresentable {
         var onOpenNote: ((String) -> Void)?
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             guard navigation === self.navigation else { return }
-            let revision = pageRevision
+            renderCurrentPage(in: webView, revision: pageRevision)
+        }
+        func renderCurrentPage(in webView: WKWebView, revision: Int) {
             renderMathIfNeeded(in: webView) {
                 guard self.pageRevision == revision else { return }
                 self.renderMermaidIfNeeded(in: webView) {
@@ -125,7 +180,10 @@ struct HTMLPreview: NSViewRepresentable {
             return true;
             """, arguments: [:], in: nil, in: .page) { _ in
                 guard self.pageRevision == revision else { return }
-                webView.evaluateJavaScript("window.scrollTo(0, \(self.scrollY))", completionHandler: nil)
+                webView.evaluateJavaScript("document.body.style.minHeight = ''; window.scrollTo(0, \(self.scrollY))") { _, _ in
+                    guard self.pageRevision == revision else { return }
+                    self.followSource(in: webView)
+                }
             }
         }
         func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {

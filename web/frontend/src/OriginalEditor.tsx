@@ -50,7 +50,27 @@ export function OriginalEditor({
   latest.current = { changes, blocks, onChange };
   useLayoutEffect(() => {
     const container = root.current!;
-    container.innerHTML = safeHtml(html);
+    const next = document.createElement("div");
+    next.innerHTML = safeHtml(html);
+    const structure = (value: HTMLElement) => {
+      const clone = value.cloneNode(true) as HTMLElement;
+      for (const node of clone.querySelectorAll<HTMLElement>("[data-edit-token]")) {
+        node.setAttribute("data-edit-token", "");
+        node.removeAttribute("contenteditable");
+        node.textContent = "";
+      }
+      return clone.innerHTML;
+    };
+    // Own-save acknowledgements update the baseline/token, not the live editor
+    // DOM: retaining the spans keeps caret, native undo and IME composition.
+    const reusable = container.childNodes.length > 0 && structure(container) === structure(next);
+    if (reusable) {
+      const existing = container.querySelectorAll<HTMLElement>("[data-edit-token]");
+      const fresh = next.querySelectorAll<HTMLElement>("[data-edit-token]");
+      existing.forEach((node, i) => {
+        node.dataset.editToken = fresh[i].dataset.editToken;
+      });
+    } else container.replaceChildren(...Array.from(next.childNodes));
     const allowed = Array.from(
       container.querySelectorAll<HTMLElement>(`[data-edit-token="${token}"]`),
     );
@@ -59,7 +79,8 @@ export function OriginalEditor({
       if (!latest.current.blocks.some((b) => b.index === index)) continue;
       node.contentEditable = editable ? "plaintext-only" : "false";
       const changed = latest.current.changes.find((v) => v.index === index);
-      if (changed) node.textContent = changed.text;
+      const desired = changed?.text ?? latest.current.blocks.find(b => b.index === index)?.text;
+      if (desired !== undefined && editableText(node) !== desired) node.textContent = desired;
     }
     // Native input runs synchronously in the same document as Save/navigation.
     // No iframe messages or debounced copy can drop the last typed character.

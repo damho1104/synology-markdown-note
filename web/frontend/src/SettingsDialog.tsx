@@ -95,6 +95,12 @@ export function SettingsDialog({ preferences, onChange, onClose }: {
           </div>
           <p className="settings-help">스케치는 지원되는 다이어그램의 도형과 선을 손으로 그린 듯 표시합니다.</p>
         </section>
+        <section aria-labelledby={`${titleId}-about`}>
+          <h3 id={`${titleId}-about`}>앱 정보</h3>
+          <div className="settings-group">
+            <div className="settings-row"><span>버전</span><span>{__APP_VERSION__}</span></div>
+          </div>
+        </section>
       </div>
       <footer className="settings-footer">
         <button type="button" className="native-button" onClick={() => onChange({ ...DEFAULT_PREFERENCES })}>기본값 복원</button>

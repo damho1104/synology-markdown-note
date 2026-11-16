@@ -9,6 +9,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 import time
+import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -44,6 +45,18 @@ def _require(condition: bool, code: str = "NAS_API_ERROR") -> None:
     from .nas import NasError
     if not condition:
         raise NasError(code)
+
+
+def _note_invariants(row: dict) -> dict:
+    # Note/get also returns derived notebook labels, paths and sync counters.
+    # Verify the document and its access metadata, not those location caches.
+    fields = {'object_id', 'title', 'content', 'parent_id', 'ver', 'encrypt', 'recycle',
+              'tag', 'attachment', 'ctime', 'brief', 'latitude', 'longitude',
+              'todo', 'tasks', 'reminder', 'perm', 'archive', 'category',
+              'individual_joined', 'location', 'source_url', 'link_id'}
+    fields.update(key for key in row if re.search(
+        r'share|permission|encrypt|owner|acl|access|public|readonly|read_only', key, re.I))
+    return {key: value for key, value in row.items() if key in fields}
 
 
 class LibraryNasOperations:
@@ -117,10 +130,17 @@ class LibraryNasOperations:
                     # matching note version before AND after the shortcut write.
                     self._library_favorites(client, base, login)
                     api, method, cap, minimum = SHORTCUT, "set" if value else "delete", 1, 1
+                elif action in {'trash', 'restore'}:
+                    # Official Note Station notestation.js: v3 delete with
+                    # recycle=true is soft trash; restore is a separate method.
+                    # Neither method exposes ver/check_conflict. Preflight and
+                    # invariant readback guard the one-shot request instead.
+                    api, method, cap, minimum = NOTE, 'delete' if action == 'trash' else 'restore', 3, 3
+                    if action == 'trash': params['recycle'] = True
+                    expected['recycle'] = action == 'trash'
                 else:
                     api, method, cap, minimum = NOTE, "set", 3, 2
-                    field, new_value = {"tags": ("tag", value), "move": ("parent_id", value),
-                                        "trash": ("recycle", True), "restore": ("recycle", False)}[action]
+                    field, new_value = {"tags": ("tag", value), "move": ("parent_id", value)}[action]
                     params.update(ver=command["version"], check_conflict=True,
                                   mtime=int(time.time()), commit_msg={"device": "web", "listable": False})
                     params[field] = new_value
@@ -180,6 +200,47 @@ class LibraryNasOperations:
         return self._post(client, base, path, self._fields(
             plan.api, method, version, login.sid, params, as_json), empty=empty)
 
+    def _verify_library_note(self, client, base, login, plan, version):
+        from .nas import NasError
+        for attempt, delay in enumerate((0, 0.05, 0.15)):
+            if delay: time.sleep(delay)
+            try:
+                actual = self._library_note(client, base, login, plan.command['id'])
+            except NasError as exc:
+                if exc.code not in {'REMOTE_CHANGED', 'NAS_UNAVAILABLE'} or attempt == 2:
+                    raise
+                continue
+            expected = deepcopy(plan.expected)
+            action = plan.command['action']
+            if action == 'trash' and actual['parent_id'] != expected['parent_id']:
+                # Live NAS moves the note into a system recycle notebook and
+                # records its real notebook separately. Never accept a lost or
+                # substituted origin merely because recycle became true.
+                if actual.get('old_parent_id') != plan.before['parent_id']:
+                    continue
+                expected['parent_id'] = actual['parent_id']
+            if action == 'restore' and plan.before.get('old_parent_id'):
+                origin = plan.before['old_parent_id']
+                expected['parent_id'] = origin
+                if actual['parent_id'] != origin:
+                    books = self._library_books(client, base, login)
+                    # Note Station restores into an existing notebook when the
+                    # original notebook was removed. Otherwise require origin.
+                    if origin not in books and actual['parent_id'] in books:
+                        expected['parent_id'] = actual['parent_id']
+            # A successful but sparse mutation response is only a receipt of
+            # acceptance. Every intended field and invariant must be read back;
+            # a lost/rejected response never reaches this reader. NAS metadata
+            # changes (verified live for move) need not change content version.
+            if plan.api == NOTE:
+                if version is not None and actual['ver'] != version:
+                    if actual['ver'] == plan.before['ver']: continue
+                    break
+                expected['ver'] = actual['ver']
+            if _note_invariants(actual) == _note_invariants(expected):
+                return
+        _require(False)
+
     def apply_library_action(self, base: str, login: NasLogin, plan: LibraryPlan) -> None:
         """Mutation boundary: send once, verify by reads, never replay/relogin."""
         from .nas import NasError
@@ -190,20 +251,18 @@ class LibraryNasOperations:
                 command = plan.command
                 if command["kind"] == "note":
                     note_id = command["id"]
-                    expected = deepcopy(plan.expected)
+                    version = None
                     if plan.api == NOTE:
-                        rows = receipt.get("data")
-                        _require(isinstance(rows, list) and len(rows) == 1 and isinstance(rows[0], dict))
-                        row = rows[0]
-                        _require(row.get("object_id", note_id) == note_id and type(row.get("ver")) in (str, int)
-                                 and bool(str(row["ver"])) and str(row["ver"]) != plan.before["ver"])
-                        expected["ver"] = str(row["ver"])
-                    actual = self._library_note(client, base, login, note_id)
-                    # Compare raw attachments (including opaque NAS metadata),
-                    # HTML, title, tags, parent, encryption and all other fields.
-                    actual.pop("mtime", None)
-                    expected.pop("mtime", None)
-                    _require(actual == expected)
+                        row = receipt
+                        if 'data' in receipt:
+                            rows = receipt['data']
+                            _require(isinstance(rows, list) and len(rows) <= 1)
+                            row = rows[0] if rows else {}
+                        _require(isinstance(row, dict) and row.get('object_id', note_id) == note_id)
+                        if 'ver' in row:
+                            _require(type(row['ver']) in (str, int) and bool(str(row['ver'])))
+                            version = str(row['ver'])
+                    self._verify_library_note(client, base, login, plan, version)
                     if plan.api == SHORTCUT:
                         favorites = self._library_favorites(client, base, login)
                         _require((note_id in favorites) == command["value"])

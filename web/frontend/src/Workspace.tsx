@@ -4,11 +4,10 @@ import {
   useMemo,
   useRef,
   useState,
-  type FormEvent,
   type CSSProperties,
+  type SetStateAction,
 } from "react";
 import {
-  AlertTriangle,
   ArrowLeft,
   ArrowRight,
   Book,
@@ -20,9 +19,7 @@ import {
   LogOut,
   Menu,
   Paperclip,
-  Pencil,
   RefreshCw,
-  Save,
   Search,
   ShieldAlert,
   Trash2,
@@ -31,12 +28,17 @@ import {
   Tag,
   Settings,
   PanelRight,
+  PanelLeftClose,
+  PanelLeftOpen,
+  FolderPlus,
+  BookPlus,
   ChevronDown,
   Code,
   Eye,
   Network,
   Link2,
 } from "lucide-react";
+import { AppIcon } from "./AppIcon";
 import {
   ApiFailure,
   jsonRequest,
@@ -44,7 +46,13 @@ import {
   type Session,
   type Status,
 } from "./api";
+import { requestId } from "./ids";
+import { GlobalSearchDialog } from "./GlobalSearchDialog";
+import { HttpNasWarning } from "./HttpNasWarning";
 import { NoteGraph } from "./NoteGraph";
+import { GraphIndexProvider, GraphIndexStatus } from "./GraphIndex";
+import { GraphNavigationProvider, GraphNavigationPanel, initialState, type NavigationState } from "./GraphNavigation";
+import { sameLocation, newGraphVisit, type Location, type Route } from "./navigation";
 import {
   LibraryDialog,
   type DialogAction,
@@ -62,6 +70,7 @@ import CodeMirror, { EditorView, type ReactCodeMirrorRef } from "@uiw/react-code
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { tags as syntaxTags } from "@lezer/highlight";
 import { markdown as markdownLanguage } from "@codemirror/lang-markdown";
+import { exportMath } from "./mathExport";
 import { NotePreview } from "./NotePreview";
 import {
   remoteNoteLink,
@@ -89,9 +98,10 @@ type NoteSummary = {
 };
 type Attachment = { id: string; name: string; ref: string | null };
 type NoteDetail = NoteSummary & {
+  html_text_layout?: string;
   html_text_preview?: string;
   html_text_token?: string;
-  html_text_blocks?: TextChange[];
+  html_text_blocks?: (TextChange & { start?: number; end?: number })[];
   attachment_bindings?: Record<string, string>;
   markdown?: string;
   blocks?: { id: string; html: string; label: string }[];
@@ -108,15 +118,14 @@ type WriteOperation = {
   status: string;
   created: number;
 };
-type Route = {
-  shelf: string | null;
-  notebook: string | null;
-  note: string | null;
-  compose: boolean;
-  filter?: string;
-};
 type Draft = {
   text_changes?: TextChange[];
+  text_layout?: string;
+  text_blocks?: NoteDetail["html_text_blocks"];
+  client_request_id?: string;
+  create_sent?: {title:string;html:string;markdown?:string};
+  review_required?: boolean;
+  recovery_acknowledged?: boolean;
   key: string;
   title: string;
   html: string;
@@ -124,6 +133,26 @@ type Draft = {
   version?: string;
   markdown?: string;
 };
+
+// Offsets are supplied with the authoritative HTML, never derived from the
+// sanitized editing DOM. The server supplies UTF-16 offsets for JS slicing.
+function exportHtml(note: NoteDetail, draft: Draft): string {
+  if (!draft.text_changes?.length) return draft.html;
+  let source = draft.html;
+  const changes = draft.text_changes.map(change => {
+    const blocks = draft.text_blocks ?? (draft.version === note.version ? note.html_text_blocks : undefined);
+    const block = blocks?.find(block => block.index === change.index);
+    if (!block || !Number.isInteger(block.start) || !Number.isInteger(block.end) ||
+        block.start! < 0 || block.end! < block.start! || block.end! > source.length)
+      throw new Error("원본 HTML의 텍스트 위치를 확인할 수 없습니다. 편집본을 보관했습니다.");
+    return {...change, start:block.start!, end:block.end!};
+  }).sort((a,b) => b.start-a.start);
+  for (const change of changes) {
+    const text = change.text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    source = source.slice(0, change.start) + text + source.slice(change.end);
+  }
+  return source;
+}
 
 const EDITOR_EXTENSIONS = [
   markdownLanguage(),
@@ -145,8 +174,6 @@ const readOnlyReasons: Record<string, string> = {
   TRASHED: "휴지통에 있는 노트는 편집할 수 없습니다.",
   ATTACHMENTS:
     "첨부파일 또는 Markdown 원문 메타데이터가 포함된 노트입니다. 손상을 막기 위해 읽기 전용으로 엽니다.",
-  MATH_EXPORT:
-    "수식 이미지 원문은 표시할 수 있습니다. PNG 재생성을 포함한 저장은 아직 검증 중입니다.",
   COMPLEX_HTML:
     "복합 HTML·서식·내부 링크가 포함된 문서입니다. 안전한 왕복 편집이 검증될 때까지 읽기 전용입니다.",
 };
@@ -162,7 +189,7 @@ function readRoute(): Route {
   };
 }
 
-function writeRoute(route: Route, index: number, replace = false): void {
+function writeRoute(route: Route, index: number, replace = false, location?: Location, scope?: string): void {
   const url = new URL(window.location.href);
   for (const key of ["s", "n", "note", "new", "f"])
     url.searchParams.delete(key);
@@ -172,7 +199,7 @@ function writeRoute(route: Route, index: number, replace = false): void {
   if (route.filter) url.searchParams.set("f", route.filter);
   if (route.compose) url.searchParams.set("new", "1");
   window.history[replace ? "replaceState" : "pushState"](
-    { ...window.history.state, __synonote_index: index },
+    { ...window.history.state, __synonote_index: index, __synonote_location: location, __synonote_scope: scope },
     "",
     url,
   );
@@ -232,6 +259,8 @@ export function Workspace({
   const [notebooks, setNotebooks] = useState<Notebook[]>([]);
   const [notes, setNotes] = useState<NoteSummary[]>([]);
   const [listLoading, setListLoading] = useState(true);
+  const [libraryReady, setLibraryReady] = useState(false);
+  const graphRevision = useMemo(() => JSON.stringify(notes.map(note => [note.id, note.version, note.locked, note.trashed])), [notes]);
   const [listError, setListError] = useState("");
   const [noteError, setNoteError] = useState("");
   const [detail, setDetail] = useState<NoteDetail | null>(null);
@@ -239,12 +268,24 @@ export function Workspace({
   const [draft, setDraft] = useState<Draft | null>(null);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [composing, setComposing] = useState(false);
+  const [saveFailure, setSaveFailure] = useState<"safe" | "conflict" | "uncertain" | null>(null);
+  const writeInFlight = useRef(false);
+  const saveHasMore = useRef(false);
+  const saveLatest = useRef<() => Promise<boolean>>(async () => false);
+  const createdDraft = useRef<{note: NoteDetail; draft: Draft} | null>(null);
   const [query, setQuery] = useState("");
+  const [showGlobalSearch,setShowGlobalSearch] = useState(false);
+  const [graphState, setGraphState] = useState<NavigationState>(initialState);
   const [pending, setPending] = useState<WriteOperation[]>([]);
   const [pendingError, setPendingError] = useState("");
+  const [createReceipt, setCreateReceipt] = useState<{status:string;operation_id?:string} | null>(null);
+  const [recoveredDetail, setRecoveredDetail] = useState<NoteDetail | null>(null);
   const [compare, setCompare] = useState<NoteDetail | null>(null);
   const [message, setMessage] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => preference<boolean>("sidebarCollapsed", false) === true);
+  const [listCollapsed, setListCollapsed] = useState(() => preference<boolean>("noteListCollapsed", false) === true);
   const [sortField, setSortField] = useState<SortField>(() =>
     preference("noteListSortField", "modifiedAt"),
   );
@@ -258,6 +299,7 @@ export function Workspace({
     preference("editorMode", "read"),
   );
   const editorRef = useRef<ReactCodeMirrorRef>(null);
+  const [previewLine, setPreviewLine] = useState<number>();
   const [showLinkPicker, setShowLinkPicker] = useState(false);
   const [showLocalGraph, setShowLocalGraph] = useState(false);
   const [dialogAction, setDialogAction] = useState<DialogAction | null>(null);
@@ -289,11 +331,12 @@ export function Workspace({
     return () => media.removeEventListener("change", update);
   }, []);
   const [revision, setRevision] = useState(0);
-  const historyIndex = useRef<number>(
-    typeof window.history.state?.__synonote_index === "number"
-      ? window.history.state.__synonote_index
-      : 0,
-  );
+  const shelfRenames = useRef(new Map<string, string>());
+  const historyIndex = useRef(0);
+  const historyScope = useRef(requestId());
+  const historyLocation = useRef<Location>({route, search:query, graph:graphState});
+  const [historyBounds, setHistoryBounds] = useState({index:0, last:0});
+  const historyLast = useRef(0);
   const navigating = useRef({
     route,
     draft,
@@ -311,6 +354,7 @@ export function Workspace({
       : route.note
         ? `note:${route.note}`
         : null;
+  useEffect(() => { setPreviewLine(undefined); }, [activeKey]);
   const activeDraftKey = activeKey ? draftPrefix + activeKey : null;
   const original = detail && !route.compose ? detail : null;
   const dirty = !!(
@@ -335,10 +379,32 @@ export function Workspace({
     saving,
   };
 
-  function commitRoute(next: Route, replace = false) {
+  function recordLocation(next: Location, replace = false) {
+    if (sameLocation(historyLocation.current, next)) return;
     const index = historyIndex.current + (replace ? 0 : 1);
-    writeRoute(next, index, replace);
+    if (!replace) historyLast.current = index;
+    writeRoute(next.route, index, replace, next, historyScope.current);
     historyIndex.current = index;
+    historyLocation.current = next;
+    setHistoryBounds({index, last:historyLast.current});
+  }
+
+  function changeGraphState(action: SetStateAction<NavigationState>, transient = false) {
+    const current = historyLocation.current;
+    const next = typeof action === 'function' ? action(current.graph) : action;
+    const location = {...current, graph:next};
+    recordLocation(location, transient || current.route.filter !== 'graph' || !newGraphVisit(current.graph,next));
+    setGraphState(next);
+  }
+
+  function changeQuery(search: string) {
+    recordLocation({...historyLocation.current,search}, true);
+    setQuery(search);
+  }
+
+  function commitRoute(next: Route, replace = false, search = historyLocation.current.search) {
+    recordLocation({...historyLocation.current,route:next,search}, replace);
+    setQuery(search);
     setRoute(next);
     setSidebarOpen(false);
     setCompare(null);
@@ -362,6 +428,7 @@ export function Workspace({
       ]);
       setNotebooks(books.notebooks);
       setNotes(all.notes);
+      setLibraryReady(true);
       setListError("");
     } catch (error) {
       handleError(error, setListError);
@@ -387,9 +454,14 @@ export function Workspace({
     void loadPending();
   }, [loadLists, loadPending]);
   useEffect(() => {
-    writeRoute(readRoute(), historyIndex.current, true);
+    writeRoute(route, 0, true, historyLocation.current, historyScope.current);
     const pop = (event: PopStateEvent) => {
-      const next = readRoute();
+      const known = event.state?.__synonote_scope === historyScope.current;
+      const location: Location = known && event.state?.__synonote_location
+        ? event.state.__synonote_location : {route:readRoute(),search:'',graph:initialState()};
+      const renamed = location.route.shelf && shelfRenames.current.get(location.route.shelf);
+      if (renamed) location.route = {...location.route, shelf:renamed};
+      const next = location.route;
       const current = navigating.current;
       const destination =
         next.compose && next.notebook
@@ -398,14 +470,14 @@ export function Workspace({
             ? `note:${next.note}`
             : null;
       const nextIndex =
-        typeof event.state?.__synonote_index === "number"
+        known && typeof event.state?.__synonote_index === "number"
           ? event.state.__synonote_index
           : null;
       const restore = () => {
         if (nextIndex !== null && nextIndex !== historyIndex.current) {
           window.history.go(historyIndex.current - nextIndex);
         } else {
-          writeRoute(current.route, historyIndex.current, true);
+          writeRoute(current.route, historyIndex.current, true, historyLocation.current, historyScope.current);
         }
       };
       if (current.saving) {
@@ -423,6 +495,16 @@ export function Workspace({
           draftStore(current.draftKey, current.draft);
       }
       if (nextIndex !== null) historyIndex.current = nextIndex;
+      else {
+        historyIndex.current = 0;
+        historyLast.current = 0;
+        writeRoute(next,0,true,location,historyScope.current);
+      }
+      if (renamed) writeRoute(next, historyIndex.current, true, location, historyScope.current);
+      historyLocation.current = location;
+      setHistoryBounds({index:historyIndex.current,last:historyLast.current});
+      setQuery(location.search);
+      setGraphState(location.graph);
       setRoute(next);
       setCompare(null);
       setMessage("");
@@ -443,6 +525,9 @@ export function Workspace({
   useEffect(() => {
     let active = true;
     setDetail(null);
+    setRecoveredDetail(null);
+    setCreateReceipt(null);
+    setSaveFailure(null);
     setNoteError("");
     setCompare(null);
     if (!activeKey || !activeDraftKey) {
@@ -453,17 +538,25 @@ export function Workspace({
     }
     if (route.compose) {
       setNoteLoading(false);
-      setDraft(
-        draftRead(activeDraftKey) ?? {
-          key: activeKey,
-          title: "",
-          html: BLANK_HTML,
-          markdown: "",
-          notebook_id: route.notebook!,
-        },
-      );
-      setEditing(true);
-      setViewMode("split");
+      const restored = draftRead(activeDraftKey);
+      const initial: Draft = restored ?? {
+        key:activeKey, title:"", html:BLANK_HTML, markdown:"", notebook_id:route.notebook!,
+        client_request_id:requestId(),
+      };
+      // Legacy compose drafts must also receive a durable key before a request.
+      if (!initial.client_request_id) initial.client_request_id = requestId();
+      setDraft(initial); setEditing(true); setViewMode("split");
+      if (initial.review_required) {
+        setSaveFailure("uncertain");
+        void recoverCreate(initial, activeDraftKey, () => active);
+      }
+      return () => { active = false; };
+    }
+    const created = createdDraft.current;
+    createdDraft.current = null;
+    if (created && created.note.id === route.note) {
+      createdDraft.current = null;
+      setDetail(created.note); setDraft(created.draft); setEditing(true); setNoteLoading(false);
       return;
     }
     setNoteLoading(true);
@@ -481,10 +574,15 @@ export function Workspace({
           (note.editable || !!note.html_text_preview)
         ) {
           setDraft(saved);
+          if (saved.review_required) {
+            setSaveFailure("uncertain");
+            if (saved.recovery_acknowledged) { setRecoveredDetail(note); setCompare(note); }
+          }
           setEditing(true);
           setViewMode("split");
           setMessage("이 탭에 남아 있던 편집 내용을 복원했습니다.");
         } else {
+          setEditing(note.editable || !!note.html_text_preview);
           setDraft({
             key: activeKey,
             title: note.title,
@@ -493,6 +591,7 @@ export function Workspace({
             version: note.version,
             markdown: note.markdown,
             text_changes: note.html_text_preview ? [] : undefined,
+            text_layout:note.html_text_layout, text_blocks:note.html_text_blocks,
           });
         }
       })
@@ -521,11 +620,14 @@ export function Workspace({
       activeDraftKey &&
       draft.key === activeKey &&
       editing &&
-      dirty
+      (dirty || draft.review_required)
     ) {
       draftStore(activeDraftKey, draft);
+    } else if (draft && activeDraftKey && draft.key === activeKey &&
+      !dirty && !saving && !draft.review_required && (route.compose || detail)) {
+      draftDelete(activeDraftKey);
     }
-  }, [activeKey, activeDraftKey, draft, dirty, editing]);
+  }, [activeKey, activeDraftKey, draft, dirty, editing, saving, detail, route.compose]);
 
   const shelves = useMemo(
     () =>
@@ -619,89 +721,41 @@ export function Workspace({
   function chooseMode(mode: "source" | "split" | "read") {
     setViewMode(mode);
     savePreference("editorMode", mode);
-    if (
-      mode !== "read" &&
-      !editing &&
-      (detail?.editable || detail?.html_text_preview)
-    )
-      startEdit();
+
   }
 
-  function navigate(next: Route, replace = false) {
-    if (saving) return;
-    if (
-      activeKey !==
-        (next.compose && next.notebook
-          ? `new:${next.notebook}`
-          : next.note
-            ? `note:${next.note}`
-            : null) &&
-      dirty &&
-      !window.confirm(
-        "편집 내용은 이 탭에 임시 보관됩니다. 다른 노트로 이동할까요?",
-      )
-    )
-      return;
-    if (dirty && draft && activeDraftKey) draftStore(activeDraftKey, draft);
-    commitRoute(next, replace);
-    setMessage("");
+  const canLeaveReview = !!(draft?.review_required && ((draft.recovery_acknowledged && recoveredDetail) || (route.compose && createReceipt)));
+
+  async function traverseHistory(direction: -1 | 1) {
+    if (saving || writeInFlight.current) return;
+    if (direction === -1 ? historyIndex.current <= 0 : historyIndex.current >= historyLast.current) return;
+    if (dirty && !canLeaveReview && (!await saveLatest.current() || saveHasMore.current)) return;
+    window.history.go(direction);
   }
 
-  function startEdit() {
-    if (
-      !detail ||
-      (!detail.editable && !detail.html_text_preview) ||
-      !activeKey
-    )
-      return;
-    setDraft({
-      key: activeKey,
-      title: detail.title,
-      html: detail.html,
-      notebook_id: detail.notebook_id,
-      version: detail.version,
-      markdown: detail.markdown,
-      text_changes: detail.html_text_preview ? [] : undefined,
-    });
-    setEditing(true);
-    setMessage("");
-  }
-
-  function discard() {
-    if (saving) return;
-    if (dirty && !window.confirm("이 탭의 임시 편집 내용도 삭제할까요?"))
-      return;
-    if (activeDraftKey) draftDelete(activeDraftKey);
-    if (route.compose) {
-      setDraft(null);
-      setEditing(false);
-      commitRoute({ ...route, compose: false }, true);
-      setMessage("새 노트 작성을 취소했습니다.");
-    } else {
-      if (detail && activeKey)
-        setDraft({
-          key: activeKey,
-          title: detail.title,
-          html: detail.html,
-          notebook_id: detail.notebook_id,
-          version: detail.version,
-          markdown: detail.markdown,
-          text_changes: detail.html_text_preview ? [] : undefined,
-        });
-      setEditing(false);
-      setMessage("편집을 취소했습니다.");
+  async function navigate(next: Route, replace = false, search?:string): Promise<boolean> {
+    if (saving || writeInFlight.current) return false;
+    if (dirty && !canLeaveReview) {
+      if (!await saveLatest.current() || saveHasMore.current) return false;
     }
+    commitRoute(next, replace, search);
+    setMessage("");
+    return true;
   }
 
-  async function save(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!draft || !activeDraftKey || saving || !draft.title.trim()) return;
+  async function save(): Promise<boolean> {
+    if (!draft || !activeDraftKey || writeInFlight.current || saving || saveFailure || composing) return false;
     if (
       !route.compose &&
       ((!detail?.editable && !detail?.html_text_preview) || !dirty)
     )
-      return;
+      return false;
     const isNew = route.compose;
+    let sent = draft;
+    const sentKey = activeKey!;
+    const sentStorageKey = activeDraftKey;
+    let mutationStarted = false;
+    writeInFlight.current = true;
     setSaving(true);
     setNoteError("");
     setCompare(null);
@@ -710,15 +764,32 @@ export function Workspace({
       const url = isNew
         ? "/api/notes"
         : `/api/notes/${encodeURIComponent(route.note!)}`;
+      const mathImages = draft.markdown === undefined ? [] : await exportMath(draft.markdown, session.csrf_token);
+      // Persist the unresolved state before the network call, including edits
+      // made while the request is pending. Reload must never blindly replay it.
+      sent = {...draft, review_required:true, recovery_acknowledged:false,
+        ...(isNew ? {client_request_id:draft.client_request_id ?? requestId(),
+          create_sent:{title:draft.title,html:draft.html,markdown:draft.markdown}} : {})};
+      const held = navigating.current.draft === draft ? sent : {
+        ...navigating.current.draft!, review_required:true, recovery_acknowledged:false,
+        client_request_id:sent.client_request_id, create_sent:sent.create_sent,
+      };
+      draftStore(sentStorageKey, held);
+      const persisted = draftRead(sentStorageKey);
+      if (!persisted?.review_required || (isNew && persisted.client_request_id !== sent.client_request_id))
+        throw new Error("편집본을 이 탭에 보관할 수 없어 저장을 중단했습니다. 브라우저 저장소 설정을 확인하세요.");
+      setDraft(held);
+      mutationStarted = true;
       const next = await request<NoteDetail>(
         url,
         jsonRequest(
           {
-            title: draft.title.trim(),
+            title: draft.title.trim() || "제목 없음",
+            ...(isNew ? {client_request_id:sent.client_request_id} : {}),
             ...(draft.text_changes !== undefined
-              ? { text_changes: draft.text_changes }
+              ? { text_changes: draft.text_changes, text_layout:draft.text_layout }
               : draft.markdown !== undefined
-                ? { markdown: draft.markdown }
+                ? { markdown: draft.markdown, ...(mathImages.length ? { math_images: mathImages } : {}) }
                 : { html: draft.html }),
             notebook_id: draft.notebook_id,
             ...(!isNew
@@ -729,34 +800,52 @@ export function Workspace({
           isNew ? "POST" : "PUT",
         ),
       );
-      draftDelete(activeDraftKey);
-      setEditing(false);
-      setMessage("NAS에 저장하고 최신 버전을 확인했습니다.");
+      const latest = navigating.current.draft;
+      if (navigating.current.activeKey !== sentKey || !latest) return true;
+      const unchanged = latest === sent;
+      const key = isNew ? `note:${next.id}` : sentKey;
+      const rebased: Draft = unchanged ? {
+        key, title: next.title, html: next.html, notebook_id: next.notebook_id,
+        version: next.version, markdown: next.markdown,
+        text_changes: next.html_text_preview ? [] : undefined,
+        text_layout:next.html_text_layout, text_blocks:next.html_text_blocks,
+      } : {
+        ...latest, key, version: next.version, review_required:false, recovery_acknowledged:false,
+        text_layout:next.html_text_layout, text_blocks:next.html_text_blocks,
+        html: latest.markdown !== undefined || latest.text_changes !== undefined || latest.html === sent.html ? next.html : latest.html,
+        text_changes: latest.text_changes?.filter(change =>
+          next.html_text_blocks?.find(block => block.index === change.index)?.text !== change.text),
+      };
+      saveHasMore.current = rebased.title !== next.title || rebased.html !== next.html || rebased.markdown !== next.markdown || !!rebased.text_changes?.length;
+      draftDelete(sentStorageKey);
+      if (!unchanged) draftStore(draftPrefix + key, rebased);
+      setSaveFailure(null);
+      setDetail(next); setDraft(rebased);
+      setNotes(notes => notes.some(note => note.id === next.id)
+        ? notes.map(note => note.id === next.id ? {...note, ...next} : note) : [...notes, next]);
       if (isNew) {
-        setDraft(null);
-        commitRoute(
-          {
-            shelf: route.shelf,
-            notebook: next.notebook_id,
-            note: next.id,
-            compose: false,
-          },
-          true,
-        );
-      } else {
-        setDetail(next);
-        setDraft({
-          key: activeKey!,
-          title: next.title,
-          html: next.html,
-          notebook_id: next.notebook_id,
-          version: next.version,
-          markdown: next.markdown,
-          text_changes: next.html_text_preview ? [] : undefined,
-        });
+        createdDraft.current = {note: next, draft: rebased};
+        commitRoute({shelf: route.shelf, notebook: next.notebook_id, note: next.id, compose: false}, true);
       }
-      await Promise.all([loadLists(), loadPending()]);
+      return true;
     } catch (error) {
+      const conflict = error instanceof ApiFailure && error.code === "REMOTE_CHANGED";
+      const rejected = error instanceof ApiFailure && ["MARKDOWN_UNSUPPORTED", "HTML_PATCH_INVALID", "DOCUMENT_READ_ONLY", "INVALID_NOTE", "NAS_SESSION_EXPIRED"].includes(error.code);
+      setSaveFailure(conflict ? "conflict" : !mutationStarted || rejected ? "safe" : "uncertain");
+      if (mutationStarted && (conflict || rejected)) {
+        const latest = navigating.current.draft;
+        if (latest && navigating.current.activeKey === sentKey) {
+          const held = {...latest, review_required:false, recovery_acknowledged:false};
+          draftStore(sentStorageKey, held); setDraft(held);
+        }
+      }
+      if (mutationStarted && !conflict && !rejected) {
+        const latest = navigating.current.draft;
+        if (latest && navigating.current.activeKey === sentKey) {
+          const held = {...latest, review_required:true, recovery_acknowledged:false};
+          draftStore(sentStorageKey, held); setDraft(held);
+        }
+      }
       handleError(error, setNoteError);
       if (
         error instanceof ApiFailure &&
@@ -779,9 +868,66 @@ export function Workspace({
       ) {
         void loadPending();
       }
+      return false;
     } finally {
+      writeInFlight.current = false;
       setSaving(false);
     }
+  }
+  saveLatest.current = save;
+  useEffect(() => {
+    if (!editing || !dirty || saving || composing || saveFailure || !draft) return;
+    const timer = window.setTimeout(() => { void saveLatest.current(); }, 800);
+    return () => window.clearTimeout(timer);
+  }, [draft, dirty, editing, saving, composing, saveFailure]);
+
+  async function recoverCreate(saved: Draft, storageKey: string, active = () => true) {
+    if (!saved.client_request_id) return;
+    try {
+      const receipt = await request<{status:string;note?:NoteDetail;operation_id?:string}>(
+        `/api/creates/${encodeURIComponent(saved.client_request_id)}`);
+      if (!active() || navigating.current.activeKey !== saved.key) return;
+      setCreateReceipt(receipt);
+      if (receipt.status === "reviewed") {
+        const held = {...navigating.current.draft!, review_required:true,recovery_acknowledged:true};
+        draftStore(storageKey,held); setDraft(held);
+      }
+      if (receipt.status !== "completed" || !receipt.note) return;
+      const note = receipt.note, latest = navigating.current.draft ?? saved;
+      const original = saved.create_sent;
+      const unchanged = original && latest.title === original.title && latest.html === original.html && latest.markdown === original.markdown;
+      const next: Draft = unchanged ? {
+        key:`note:${note.id}`, title:note.title, html:note.html, markdown:note.markdown,
+        notebook_id:note.notebook_id, version:note.version,
+      } : {...latest, key:`note:${note.id}`, html:note.html, version:note.version,
+        notebook_id:note.notebook_id, review_required:false,recovery_acknowledged:false};
+      draftDelete(storageKey);
+      draftStore(draftPrefix + next.key, next);
+      createdDraft.current = {note, draft:next};
+      setNotes(notes => notes.some(row => row.id === note.id) ? notes.map(row => row.id === note.id ? {...row,...note} : row) : [...notes,note]);
+      setSaveFailure(null);
+      commitRoute({shelf:route.shelf,notebook:note.notebook_id,note:note.id,compose:false}, true);
+    } catch (error) { if (active()) handleError(error, setNoteError); }
+  }
+
+  function restartReviewedCreate() {
+    if (!draft || !activeDraftKey || !["reviewed", "absent"].includes(createReceipt?.status ?? "") ||
+        !window.confirm("기존 생성 요청을 다시 보내지 않습니다. 초안을 남기고 별도의 새 노트를 생성할까요?")) return;
+    // Keep the unresolved original and its tombstoned UUID available in this tab.
+    draftStore(`${activeDraftKey}:held:${draft.client_request_id}`, draft);
+    const next: Draft = {...draft, client_request_id:requestId(), create_sent:undefined,
+      review_required:false,recovery_acknowledged:false};
+    draftStore(activeDraftKey,next); setDraft(next); setCreateReceipt(null); setSaveFailure(null);
+  }
+
+  async function reviewAcknowledged() {
+    const current = navigating.current;
+    if (!current.draft || !current.draftKey || !current.route.note) return;
+    try {
+      const confirmed = await request<NoteDetail>(`/api/notes/${encodeURIComponent(current.route.note)}`);
+      if (navigating.current.activeKey !== current.activeKey) return;
+      setRecoveredDetail(confirmed); setCompare(confirmed); setNoteError("");
+    } catch (error) { handleError(error, setNoteError); }
   }
 
   async function acknowledge(operation: WriteOperation) {
@@ -798,22 +944,33 @@ export function Workspace({
       );
       setMessage("보류된 쓰기 기록을 확인 처리했습니다.");
       await loadPending();
+      const current = navigating.current;
+      if (current.draft?.review_required && current.draftKey &&
+          ((!current.route.compose && operation.note_id === current.route.note) || (current.route.compose && operation.operation_id === createReceipt?.operation_id))) {
+        const held = {...current.draft, recovery_acknowledged:true};
+        draftStore(current.draftKey, held); setDraft(held);
+        if (current.route.compose) await recoverCreate(held, current.draftKey);
+        else await reviewAcknowledged();
+      } else if (current.route.compose && current.draft?.review_required && current.draftKey) {
+        // The receipt identifies the originating operation even after ack;
+        // never infer ownership from a null note_id shared by all creates.
+        await recoverCreate(current.draft, current.draftKey);
+      }
     } catch (error) {
       handleError(error, setPendingError);
     }
   }
 
-  function logout() {
-    if (saving) return;
-    if (dirty && !window.confirm("임시 편집 내용을 삭제하고 로그아웃할까요?"))
-      return;
+  async function logout() {
+    if (saving || writeInFlight.current) return;
+    if (dirty && !canLeaveReview && (!await saveLatest.current() || saveHasMore.current)) return;
     void onLogout()
       .then(() => {
-        // Logout also clears local drafts for this NAS account.
+        // Clear ordinary drafts, retaining unresolved/reviewed edits for this tab.
         try {
           for (let i = sessionStorage.length - 1; i >= 0; i--) {
             const key = sessionStorage.key(i);
-            if (key?.startsWith(draftPrefix)) sessionStorage.removeItem(key);
+            if (key?.startsWith(draftPrefix) && !draftRead(key)?.review_required) sessionStorage.removeItem(key);
           }
         } catch {
           /* Session may be disabled. */
@@ -848,6 +1005,19 @@ export function Workspace({
         "/api/library/action",
         jsonRequest(action, { "X-CSRF-Token": session.csrf_token }),
       );
+      if (action.kind === "stack" && action.action === "rename" && action.id && action.name) {
+        for (const [old, target] of shelfRenames.current) {
+          if (target === action.id) shelfRenames.current.set(old, action.name);
+        }
+        shelfRenames.current.set(action.id, action.name);
+        shelfRenames.current.delete(action.name);
+        const current = historyLocation.current;
+        if (current.route.shelf === action.id) commitRoute({...current.route, shelf:action.name}, true);
+        setExpandedStacks(current => {
+          const next = [...new Set(current.map(name => name === action.id ? action.name! : name))];
+          savePreference("expandedStacks", next); return next;
+        });
+      }
       await Promise.all([loadLists(), loadPending()]);
       if (action.kind === "note") setRevision((n) => n + 1);
     } catch (error) {
@@ -859,8 +1029,10 @@ export function Workspace({
     }
   }
   function exportNote() {
-    const body =
-      draft?.markdown ?? detail?.markdown ?? draft?.html ?? detail?.html;
+    let body: string | undefined;
+    try {
+      body = draft?.markdown ?? detail?.markdown ?? (draft && detail ? exportHtml(detail, draft) : draft?.html ?? detail?.html);
+    } catch (error) { setNoteError(errorText(error)); return; }
     if (body === undefined) return;
     const isMarkdown = (draft?.markdown ?? detail?.markdown) !== undefined;
     const url = URL.createObjectURL(
@@ -877,6 +1049,11 @@ export function Workspace({
       (isMarkdown ? ".md" : ".html");
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+  let reviewDraftBody = draft?.markdown ?? draft?.html ?? "";
+  if (draft?.text_changes?.length && detail) {
+    try { reviewDraftBody = exportHtml(detail, draft); }
+    catch { reviewDraftBody = "원본 위치 확인 필요\n" + JSON.stringify(draft.text_changes, null, 2); }
   }
   const selectedSummary = notes.find((n) => n.id === route.note);
   const previewHtml =
@@ -917,9 +1094,25 @@ export function Workspace({
     </button>
   );
   return (
-    <div className={`native-app ${dark ? "native-dark" : ""}`}
+    <GraphIndexProvider key={JSON.stringify([status.nas_url, session.username])} enabled={libraryReady} revision={graphRevision}>
+    <GraphNavigationProvider state={graphState} onChange={changeGraphState}>
+    <div className={`native-app ${dark ? "native-dark" : ""} ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${listCollapsed ? "list-collapsed" : ""}`}
+      onCompositionStart={() => setComposing(true)}
+      onCompositionEnd={() => setComposing(false)}
       style={{ "--editor-font-size": `${preferences.editorFontSize}px` } as CSSProperties}>
       <header className="native-toolbar">
+        <div className="panel-controls" role="group" aria-label="패널 표시">
+            <button className="icon-button panel-toggle panel-toggle-sidebar" aria-label={sidebarCollapsed ? "책장 패널 펼치기" : "책장 패널 접기"}
+              aria-expanded={!sidebarCollapsed} aria-controls="workspace-sidebar" title={sidebarCollapsed ? "책장 패널 펼치기" : "책장 패널 접기"}
+              onClick={() => {setSidebarCollapsed(!sidebarCollapsed); savePreference("sidebarCollapsed", !sidebarCollapsed);}}>
+              {sidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
+            </button>
+            <button className="icon-button panel-toggle panel-toggle-list" aria-label={listCollapsed ? "노트 목록 펼치기" : "노트 목록 접기"}
+              aria-expanded={!listCollapsed} aria-controls="workspace-note-list" title={listCollapsed ? "노트 목록 펼치기" : "노트 목록 접기"}
+              onClick={() => {setListCollapsed(!listCollapsed); savePreference("noteListCollapsed", !listCollapsed);}}>
+              {listCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
+            </button>
+        </div>
         <div className="toolbar-sidebar">
           <button
             className="icon-button mobile-menu"
@@ -928,24 +1121,32 @@ export function Workspace({
           >
             <Menu size={18} />
           </button>
-          <b>Note Station</b>
+          <span className="workspace-brand" title="Synology Markdown Note">
+            <AppIcon size={24} />
+            <b>Markdown Note</b>
+          </span>
         </div>
         <div className="toolbar-list">{listTitle}</div>
         <div className="toolbar-actions">
           <div className="toolbar-group">
+            <button className="icon-button mobile-list-toggle" aria-label="노트 목록 표시 전환"
+              aria-expanded={!listCollapsed} aria-controls="workspace-note-list" title={listCollapsed ? "노트 목록 펼치기" : "노트 목록 접기"}
+              onClick={() => {setListCollapsed(!listCollapsed); savePreference("noteListCollapsed", !listCollapsed);}}>
+              {listCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
+            </button>
             <button
               className="icon-button"
               aria-label="이전 화면"
-              disabled={saving}
-              onClick={() => window.history.back()}
+              disabled={saving || historyBounds.index === 0}
+              onClick={() => void traverseHistory(-1)}
             >
               <ArrowLeft size={18} />
             </button>
             <button
               className="icon-button"
               aria-label="다음 화면"
-              disabled={saving}
-              onClick={() => window.history.forward()}
+              disabled={saving || historyBounds.index >= historyBounds.last}
+              onClick={() => void traverseHistory(1)}
             >
               <ArrowRight size={18} />
             </button>
@@ -969,7 +1170,8 @@ export function Workspace({
             <button
               className="icon-button"
               aria-label="전체 검색"
-              onClick={() => document.getElementById("library-search")?.focus()}
+              title="전체 노트 검색"
+              onClick={() => setShowGlobalSearch(true)}
             >
               <Search size={19} />
             </button>
@@ -997,7 +1199,7 @@ export function Workspace({
             <button
               className="icon-button"
               aria-label="새로고침"
-              disabled={saving}
+              disabled={saving || dirty}
               onClick={() => {
                 void loadLists();
                 void loadPending();
@@ -1018,12 +1220,7 @@ export function Workspace({
           </div>
         </div>
       </header>
-      {status.nas_url?.startsWith("http://") && (
-        <div className="workspace-alert warning">
-          <AlertTriangle size={14} />
-          NAS 연결이 HTTP입니다. 계정 정보와 노트가 암호화되지 않습니다.
-        </div>
-      )}
+      <HttpNasWarning nasUrl={status.nas_url} />
       {!!pending.length && (
         <section
           className="workspace-alert warning"
@@ -1063,6 +1260,7 @@ export function Workspace({
       )}
       <div className={`native-columns ${inspector ? "with-inspector" : ""}`}>
         <aside
+          id="workspace-sidebar"
           className={`native-sidebar ${sidebarOpen ? "open" : ""}`}
           aria-label="책장 및 메모장"
         >
@@ -1089,6 +1287,36 @@ export function Workspace({
               <span>전체 그래프</span>
             </button>
             <div className="sidebar-section">책장 · 메모장</div>
+            <div className="sidebar-create-actions" role="group" aria-label="책장 및 노트북 추가">
+            <button
+              className="sidebar-create-button"
+              disabled={saving}
+              onClick={() =>
+                setDialogAction({
+                  request: { kind: "stack", action: "create" },
+                  title: "새 책장 만들기",
+                  mode: "createStack",
+                })
+              }
+            >
+              <FolderPlus size={16} />
+              <span>책장 만들기</span>
+            </button>
+            <button
+              className="sidebar-create-button"
+              disabled={saving}
+              onClick={() =>
+                setDialogAction({
+                  request: { kind: "notebook", action: "create" },
+                  title: "메모장 추가",
+                  mode: "name",
+                })
+              }
+            >
+              <BookPlus size={16} />
+              <span>노트북 추가</span>
+            </button>
+            </div>
             {shelves.filter(Boolean).map((stack) => (
               <div
                 key={stack}
@@ -1158,34 +1386,6 @@ export function Workspace({
               )
               .map(renderNotebook)}
             {listLoading && <p className="sidebar-status">불러오는 중…</p>}
-            <button
-              className="native-nav"
-              disabled={saving}
-              onClick={() =>
-                setDialogAction({
-                  request: { kind: "stack", action: "create" },
-                  title: "새 책장 만들기",
-                  mode: "createStack",
-                })
-              }
-            >
-              <Book size={16} />
-              <span>책장 만들기</span>
-            </button>
-            <button
-              className="native-nav"
-              disabled={saving}
-              onClick={() =>
-                setDialogAction({
-                  request: { kind: "notebook", action: "create" },
-                  title: "메모장 추가",
-                  mode: "name",
-                })
-              }
-            >
-              <FilePlus2 size={16} />
-              <span>노트북 추가</span>
-            </button>
             {!!tags.length && (
               <>
                 <div className="sidebar-section">태그</div>
@@ -1226,7 +1426,8 @@ export function Workspace({
             </button>
           </div>
         </aside>
-        <section className="native-list" aria-label="노트 목록">
+        <section id="workspace-note-list" className="native-list" aria-label="노트 목록">
+          {route.filter === "graph" ? <GraphNavigationPanel notebooks={notebooks} onOpenNote={(id) => navigate({shelf:null,notebook:null,note:id,compose:false})} /> : <>
           <div className="list-controls">
             <label className="native-search">
               <Search size={15} />
@@ -1235,10 +1436,10 @@ export function Workspace({
                 aria-label="노트 검색"
                 placeholder="노트 검색"
                 value={query}
-                onChange={(e) => setQuery(e.target.value)}
+                onChange={(e) => changeQuery(e.target.value)}
               />
               {query && (
-                <button aria-label="검색 지우기" onClick={() => setQuery("")}>
+                <button aria-label="검색 지우기" onClick={() => changeQuery("")}>
                   <X size={13} />
                 </button>
               )}
@@ -1320,14 +1521,16 @@ export function Workspace({
               ))
             )}
           </div>
+          </>}
           <footer className="native-status">
-            {visibleNotes.length}개의 노트
+            {route.filter !== "graph" && <span>{visibleNotes.length}개의 노트</span>}
+            <GraphIndexStatus />
           </footer>
         </section>
         <main className="native-detail" aria-label="노트 본문">
           {route.filter === "graph" ? (
             <NoteGraph
-              key={"graph-" + revision}
+              notebooks={notebooks}
               onOpenNote={(id) =>
                 navigate({
                   shelf: null,
@@ -1339,7 +1542,7 @@ export function Workspace({
             />
           ) : !activeKey ? (
             <div className="native-empty">
-              <BookOpenText size={40} />
+              <AppIcon size={40} />
               <h2>노트를 선택하세요</h2>
               <p>책장과 메모장에서 노트를 선택하세요.</p>
             </div>
@@ -1358,7 +1561,6 @@ export function Workspace({
                       aria-label="노트 제목"
                       required
                       maxLength={256}
-                      disabled={saving}
                       value={draft.title}
                       placeholder="제목"
                       onChange={(e) =>
@@ -1484,46 +1686,6 @@ export function Workspace({
                       </>
                     )}
 
-                    {!editing &&
-                      (detail?.editable || detail?.html_text_preview) && (
-                        <button
-                          className="native-button"
-                          onClick={() => {
-                            setViewMode("split");
-                            startEdit();
-                          }}
-                        >
-                          <Pencil size={13} />
-                          편집
-                        </button>
-                      )}
-                    {editing && (
-                      <>
-                        <button
-                          className="native-button primary"
-                          disabled={
-                            saving ||
-                            !draft?.title.trim() ||
-                            (!route.compose && !dirty)
-                          }
-                          onClick={() =>
-                            void save({
-                              preventDefault() {},
-                            } as FormEvent<HTMLFormElement>)
-                          }
-                        >
-                          <Save size={13} />
-                          {saving ? "NAS 저장 중…" : "NAS에 저장"}
-                        </button>
-                        <button
-                          className="native-button"
-                          disabled={saving}
-                          onClick={discard}
-                        >
-                          취소
-                        </button>
-                      </>
-                    )}
                   </div>
                 </div>
                 <p>
@@ -1539,6 +1701,7 @@ export function Workspace({
               {noteError && (
                 <div className="workspace-alert error" role="alert">
                   {noteError}
+                  {saveFailure === "safe" && <button className="native-button" onClick={() => { setSaveFailure(null); setNoteError(""); }}>자동 저장 다시 시도</button>}
                 </div>
               )}
               {!route.compose &&
@@ -1551,7 +1714,50 @@ export function Workspace({
                       "이 문서는 읽기 전용입니다."}
                   </div>
                 )}
-              {compare && draft && (
+              {route.compose && draft?.review_required && (
+                <div className="workspace-alert warning">
+                  <div>
+                    <b>새 노트 저장 결과 확인 필요</b>
+                    <p>상태: {createReceipt?.status ?? "조회 필요"}. 자동 재전송하지 않습니다. 초안을 보관한 채 다른 화면으로 이동할 수 있습니다.</p>
+                    <button className="native-button" onClick={() => activeDraftKey && void recoverCreate(draft, activeDraftKey)}>생성 결과 다시 조회</button>
+                    {["reviewed", "absent"].includes(createReceipt?.status ?? "") && <button className="native-button" onClick={restartReviewedCreate}>초안 보관하고 별도 노트 생성</button>}
+                  </div>
+                </div>
+              )}
+              {!route.compose && draft?.review_required && !recoveredDetail && (
+                <div className="workspace-alert warning">
+                  NAS 확인본을 읽기 전까지 자동 저장을 중단합니다.
+                  <button className="native-button" onClick={() => void reviewAcknowledged()}>NAS 확인본 다시 불러오기</button>
+                </div>
+              )}
+              {recoveredDetail && draft && (
+                <div className="workspace-alert warning">
+                  <div>
+                    <b>확인한 NAS 결과와 보관한 편집본을 검토하세요</b>
+                    <p>자동 재전송하지 않습니다. 편집본은 이동·로그아웃 후에도 이 탭에 보관됩니다.</p>
+                    <strong>{recoveredDetail.title}</strong>
+                    {!draft.recovery_acknowledged && <button className="native-button" onClick={() => {
+                      const operation = pending.find(operation => operation.note_id === route.note);
+                      if (operation) { void acknowledge(operation); return; }
+                      if (!window.confirm("NAS에서 현재 저장 결과를 확인했나요? 편집본을 보관하고 자동 재전송하지 않습니다.")) return;
+                      const held = {...draft, recovery_acknowledged:true};
+                      if (activeDraftKey) draftStore(activeDraftKey,held);
+                      setDraft(held);
+                    }}>NAS 결과 확인하고 편집본 보관</button>}
+                    <div className="conflict-columns">
+                      <pre>{recoveredDetail.markdown ?? recoveredDetail.html}</pre>
+                      <pre>{draft.title}{"\n"}{reviewDraftBody}</pre>
+                    </div>
+                    <button className="native-button" onClick={() => {
+                      if (!window.confirm("보관한 편집본을 버리고 확인한 NAS 내용을 사용할까요?")) return;
+                      if (activeDraftKey) draftDelete(activeDraftKey);
+                      setDraft(null); setEditing(false); setRecoveredDetail(null); setCompare(null);
+                      setRevision(value => value + 1);
+                    }}>편집본 버리고 NAS 확인본 사용</button>
+                  </div>
+                </div>
+              )}
+              {compare && !recoveredDetail && draft && (
                 <div className="workspace-alert warning">
                   <div>
                     <b>버전 충돌 · 로컬 편집본을 유지했습니다</b>
@@ -1604,7 +1810,7 @@ export function Workspace({
                           token={detail.html_text_token!}
                           blocks={detail.html_text_blocks ?? []}
                           changes={draft.text_changes}
-                          editable={editing && !saving}
+                          editable={editing}
                           dark={dark}
                           onChange={(change) => {
                             const original = detail.html_text_blocks?.find(
@@ -1630,9 +1836,13 @@ export function Workspace({
                           value={previewMarkdown}
                           extensions={editorExtensions}
                           theme={dark ? "dark" : "light"}
-                          editable={editing && !saving}
+                          editable={editing}
+                          onUpdate={(update) => {
+                            if (editing && update.view.hasFocus && (update.selectionSet || update.docChanged))
+                              setPreviewLine(update.state.doc.lineAt(update.state.selection.main.head).number);
+                          }}
                           onChange={(value) => {
-                            if (draft && editing && !saving)
+                            if (draft && editing)
                               setDraft({ ...draft, markdown: value });
                           }}
                           basicSetup={{
@@ -1647,7 +1857,6 @@ export function Workspace({
                           aria-label="HTML 본문"
                           value={previewHtml}
                           spellCheck={false}
-                          disabled={saving}
                           readOnly={!editing}
                           onChange={(e) => {
                             if (draft)
@@ -1666,6 +1875,7 @@ export function Workspace({
                         </div>
                       )}
                       <NotePreview
+                        sourceLine={editing && viewMode === "split" ? previewLine : undefined}
                         html={previewHtml}
                         markdown={previewMarkdown}
                         blocks={detail?.blocks}
@@ -1685,11 +1895,8 @@ export function Workspace({
               )}
               <footer className="native-status editor-status">
                 <span>
-                  {saving
-                    ? "NAS 저장 중…"
-                    : dirty
-                      ? "이 탭에 임시 저장됨"
-                      : "✓ 저장됨"}
+                  {saveFailure ? "자동 저장 중단 · 편집본 보관됨" : saving ? "NAS에 자동 저장 중…"
+                    : dirty ? "자동 저장 대기 중…" : route.compose ? "새 노트 작성 중" : "✓ NAS에 자동 저장됨"}
                 </span>
                 <span>
                   {
@@ -1753,7 +1960,8 @@ export function Workspace({
             {showLocalGraph && detail ? (
               <div style={{ height: 420 }}>
                 <NoteGraph
-                  key={"graph-" + revision}
+                      compact
+                  notebooks={notebooks}
                   focusId={detail.id}
                   onOpenNote={(id) =>
                     navigate({
@@ -1861,6 +2069,9 @@ export function Workspace({
           }}
         />
       )}
+      {showGlobalSearch && <GlobalSearchDialog notes={notes} notebooks={notebooks} loading={listLoading}
+        onSelect={(id)=>navigate({shelf:null,notebook:null,note:id,compose:false},false,'')}
+        onClose={()=>setShowGlobalSearch(false)} />}
       {showSettings && <SettingsDialog preferences={preferences} onChange={setPreferences} onClose={() => setShowSettings(false)} />}
       {dialogAction && (
         <LibraryDialog
@@ -1873,6 +2084,8 @@ export function Workspace({
         />
       )}
     </div>
+    </GraphNavigationProvider>
+    </GraphIndexProvider>
   );
 }
 function ServerIcon() {

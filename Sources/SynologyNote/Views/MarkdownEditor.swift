@@ -33,6 +33,7 @@ struct MarkdownEditor: NSViewRepresentable {
     let position: EditorPosition
     let undoManager: UndoManager
     var isEditable: Bool
+    var onSourceLine: ((Int) -> Void)? = nil
     var linkCandidates: [NoteSummary] = []
     var linkNotebooks: [Notebook] = []
     var onFiles: ([URL]) -> Void
@@ -141,6 +142,7 @@ struct MarkdownEditor: NSViewRepresentable {
             // Never replace or restyle marked text during Korean IME composition.
             parent.text = editor.sourceText
             parent.position.selection = editor.selectedRange()
+            reportSourceLine()
             if !editor.hasMarkedText() { style() }
             if !editor.hasMarkedText() { refreshCompletion() }
         }
@@ -148,7 +150,14 @@ struct MarkdownEditor: NSViewRepresentable {
             guard let editor else { return }
             parent.position.selection = editor.selectedRange()
             parent.position.scroll = editor.enclosingScrollView?.contentView.bounds.origin ?? .zero
-            if !updating && !editor.hasMarkedText() { refreshCompletion() }
+            if !updating && !editor.hasMarkedText() { reportSourceLine(); refreshCompletion() }
+        }
+        private func reportSourceLine() {
+            guard !updating, let editor, editor.isEditable, !editor.hasMarkedText(),
+                  editor.window?.firstResponder === editor else { return }
+            let range = NSRange(location: 0, length: min(editor.selectedRange().location, editor.attributedString().length))
+            let prefix = SourceTextView.source(from: editor.attributedString().attributedSubstring(from: range))
+            parent.onSourceLine?(prefix.components(separatedBy: "\n").count)
         }
         func refreshCompletion() {
             guard let editor, editor.isEditable, !editor.hasMarkedText() else { hideCompletion(); return }

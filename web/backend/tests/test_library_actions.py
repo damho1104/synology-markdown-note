@@ -72,7 +72,17 @@ class MockStation:
         if self.fail in {"reject", "expired"}:
             return httpx.Response(200, json={"success": False, "error": {"code": 1064 if self.fail == "reject" else 119}})
         if api == NOTE:
-            self.note.update({k: deepcopy(v) for k, v in params.items() if k in {"tag", "parent_id", "recycle"}})
+            if method=='delete':
+                assert params.get('recycle') is True  # Never authorize permanent deletion.
+                self.note['recycle']=True
+            elif method=='restore':
+                assert 'recycle' not in params
+                self.note['recycle']=False
+            else:
+                assert method=='set'
+                # Official set does not implement trash/restore. Model the live
+                # no-op so a mistaken set/recycle implementation cannot pass.
+                self.note.update({k: deepcopy(v) for k, v in params.items() if k in {"tag", "parent_id"}})
             self.note["ver"] = "v2"
             data = {"data": [{"object_id": "note1", "ver": "v2"}]}
         elif api == SHORTCUT:
@@ -102,7 +112,7 @@ class MockStation:
         if self.fail == "lost":
             raise httpx.ReadError("sid-private password-private response lost")
         if self.fail == "malformed":
-            return httpx.Response(200, json={"success": True, "data": {"data": []}})
+            return httpx.Response(200, json={"success": True, "data": {"data": 'malformed'}})
         if self.receipt_override is not None:
             data = self.receipt_override
         return self.ok(data)
@@ -148,7 +158,7 @@ def harness(tmp_path, monkeypatch):
     ("move", "book2", "parent_id", "book2"),
 ])
 @pytest.mark.parametrize("path,format", [("entry.cgi", ""), ("note.cgi", "JSON"), ("note.cgi", "")])
-def test_note_metadata_uses_conflict_guard_and_preserves_body(harness, action, value, field, want, path, format):
+def test_note_metadata_uses_official_contract_and_preserves_body(harness, action, value, field, want, path, format):
     station, store, post, _ = harness
     station.path, station.request_format = path, format
     station.note["recycle"] = action == "restore"
@@ -161,9 +171,17 @@ def test_note_metadata_uses_conflict_guard_and_preserves_body(harness, action, v
     assert response.json() == {"ok": True}
     assert len(station.mutations) == 1
     api, method, params, form = station.mutations[0]
-    assert (api, method) == (NOTE, "set")
-    assert params["ver"] == "v1" and params["check_conflict"] is True
-    assert params[field] == want
+    assert api==NOTE
+    if action in {'trash','restore'}:
+        assert method==('delete' if action=='trash' else 'restore')
+        assert 'ver' not in params and 'check_conflict' not in params
+        if action=='trash':assert params['recycle'] is True
+        else:assert 'recycle' not in params
+    else:
+        assert method=='set'
+        assert params["ver"] == "v1" and params["check_conflict"] is True
+        assert params[field] == want
+    assert station.note[field]==want
     assert "content" not in params and "attachment" not in params and "title" not in params
     assert station.note["content"] == original["content"]
     assert station.note["attachment"] == original["attachment"]
@@ -227,6 +245,134 @@ def test_readback_detects_unrequested_changes(harness, field, value):
     response = post({"kind": "note", "id": "note1", "action": "tags", "version": "v1", "value": ["new"]})
     assert response.status_code == 409 and response.json() == {"error": "WRITE_UNCERTAIN"}
     assert store.pending_writes(OWNER)[0]["status"] == "uncertain"
+
+
+def test_move_accepts_new_destination_version_and_derived_book_metadata(harness):
+    station, store, post, client = harness
+    station.note.update(parent_title='기존 메모장', stack='책장 & A', notebook_path=['old'], permission={'write':True})
+    protected=deepcopy({k:station.note[k] for k in ('content','title','attachment','encrypt','tag','permission')})
+    station.corrupt=lambda s:s.note.update(parent_title='다른 메모장',stack='',notebook_path=['new'],mtime=12345)
+    response=post({'kind':'note','id':'note1','action':'move','version':'v1','value':'book2'})
+    assert response.status_code==200,response.text
+    assert client.get('/api/notes/note1').json()['notebook_id']=='book2'
+    assert client.get('/api/notes/note1').json()['version']=='v2'
+    assert {k:station.note[k] for k in protected}==protected
+    assert len(station.mutations)==1 and not store.pending_writes(OWNER)
+
+
+@pytest.mark.parametrize('stale_reads,status',[(1,200),(2,200),(4,409)])
+def test_move_verification_waits_for_bounded_read_visibility_without_resending(harness,stale_reads,status):
+    station,store,post,client=harness
+    before=deepcopy(station.note)
+    original=station.handler
+    reads=0
+    def delayed(request):
+        nonlocal reads
+        response=original(request)
+        form={k:v[0] for k,v in parse_qs(request.content.decode()).items()}
+        if station.mutations and form['api']==NOTE and form['method']=='get':
+            reads+=1
+            if reads<=stale_reads:return station.ok(deepcopy(before))
+        return response
+    station.handler=delayed
+    response=post({'kind':'note','id':'note1','action':'move','version':'v1','value':'book2'})
+    assert response.status_code==status,response.text
+    assert station.note['parent_id']=='book2' and station.note['ver']=='v2'
+    assert len(station.mutations)==1
+    assert reads<=3
+    assert bool(store.pending_writes(OWNER))==(status==409)
+
+
+@pytest.mark.parametrize('field,value',[('permission',{'write':False}),('perm','readonly'),('shared',True),('encrypt',True),('tag',['lost'])])
+def test_move_still_rejects_changed_security_and_tags(harness,field,value):
+    station,store,post,_=harness
+    station.note.update(permission={'write':True},shared=False)
+    station.corrupt=lambda s:s.note.update({field:value})
+    response=post({'kind':'note','id':'note1','action':'move','version':'v1','value':'book2'})
+    assert response.status_code==409
+    assert len(station.mutations)==1 and store.pending_writes(OWNER)[0]['status']=='uncertain'
+
+
+@pytest.mark.parametrize('receipt',[{}, {'data':[]}, {'data':[{'object_id':'note1'}]}])
+@pytest.mark.parametrize('action,value',[('move','book2'),('trash',None)])
+def test_successful_sparse_note_receipt_requires_authoritative_changed_version(harness,receipt,action,value):
+    station,store,post,_=harness
+    station.receipt_override=receipt
+    body={'kind':'note','id':'note1','action':action,'version':'v1'}
+    if value is not None:body['value']=value
+    response=post(body)
+    assert response.status_code==200,response.text
+    assert station.note['ver']=='v2'
+    assert len(station.mutations)==1 and not store.pending_writes(OWNER)
+
+
+def test_sparse_success_receipt_never_accepts_unchanged_destination(harness):
+    station,store,post,_=harness
+    station.receipt_override={}
+    station.corrupt=lambda s:s.note.update(ver='v1',parent_id='book1')
+    response=post({'kind':'note','id':'note1','action':'move','version':'v1','value':'book2'})
+    assert response.status_code==409
+    assert len(station.mutations)==1 and store.pending_writes(OWNER)[0]['status']=='uncertain'
+
+
+def test_live_move_metadata_can_change_parent_without_changing_content_version(harness):
+    station,store,post,_=harness
+    station.receipt_override={'data':[{'object_id':'note1','ver':'v1','old_parent_id':None}]}
+    station.corrupt=lambda s:s.note.update(ver='v1')
+    before=deepcopy(station.note)
+    response=post({'kind':'note','id':'note1','action':'move','version':'v1','value':'book2'})
+    assert response.status_code==200,response.text
+    assert station.note['parent_id']=='book2' and station.note['ver']=='v1'
+    assert all(station.note[k]==before[k] for k in ('content','title','tag','attachment','encrypt'))
+    assert len(station.mutations)==1 and not store.pending_writes(OWNER)
+
+
+@pytest.mark.parametrize('action,method,recycle',[('trash','delete',True),('restore','restore',False)])
+def test_official_v3_trash_restore_contract(harness,action,method,recycle):
+    station,store,post,_=harness
+    station.note['recycle']=not recycle
+    response=post({'kind':'note','id':'note1','action':action,'version':'v1'})
+    assert response.status_code==200,response.text
+    api,called,params,form=station.mutations[0]
+    assert api==NOTE and called==method and form['version']=='3'
+    assert params['object_id']=='note1'
+    if action=='trash':assert params['recycle'] is True
+    else:assert 'recycle' not in params
+    assert 'ver' not in params and 'check_conflict' not in params
+    assert station.note['recycle'] is recycle
+    assert len(station.mutations)==1 and not store.pending_writes(OWNER)
+
+
+def test_success_receipt_with_unchanged_recycle_remains_uncertain(harness):
+    station,store,post,_=harness
+    station.corrupt=lambda s:s.note.update(recycle=False,ver='v1')
+    station.receipt_override={}
+    response=post({'kind':'note','id':'note1','action':'trash','version':'v1'})
+    assert response.status_code==409
+    assert len(station.mutations)==1 and store.pending_writes(OWNER)[0]['status']=='uncertain'
+
+
+@pytest.mark.parametrize('action',['trash','restore'])
+def test_live_recycle_parent_relocation_preserves_original_notebook(harness,action):
+    station,store,post,_=harness
+    if action=='restore':
+        station.note.update(parent_id='system-recycle',old_parent_id='book1',recycle=True)
+        station.corrupt=lambda s:s.note.update(parent_id='book1',old_parent_id=None)
+    else:
+        station.corrupt=lambda s:s.note.update(parent_id='system-recycle',old_parent_id='book1')
+    protected=deepcopy({k:station.note[k] for k in ('content','title','attachment','encrypt','tag')})
+    response=post({'kind':'note','id':'note1','action':action,'version':'v1'})
+    assert response.status_code==200,response.text
+    assert station.note['recycle']==(action=='trash')
+    assert {k:station.note[k] for k in protected}==protected
+    assert not store.pending_writes(OWNER) and len(station.mutations)==1
+
+
+def test_trash_relocation_cannot_lose_original_notebook_binding(harness):
+    station,store,post,_=harness
+    station.corrupt=lambda s:s.note.update(parent_id='system-recycle',old_parent_id='wrong-original')
+    response=post({'kind':'note','id':'note1','action':'trash','version':'v1'})
+    assert response.status_code==409 and store.pending_writes(OWNER)[0]['status']=='uncertain'
 
 
 @pytest.mark.parametrize("body", [

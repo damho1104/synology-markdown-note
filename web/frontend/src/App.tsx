@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
-import { AlertTriangle, ArrowRight, BookOpenText, KeyRound, RefreshCw, ServerCog } from 'lucide-react'
+import { AlertTriangle, ArrowRight, KeyRound, RefreshCw, ServerCog } from 'lucide-react'
+import { AppIcon } from './AppIcon'
 import { Button } from './components/ui/button'
 import { ApiFailure, request, jsonRequest, type Session, type Status, SESSION_EXPIRED_EVENT } from './api'
 import { Workspace } from './Workspace'
@@ -110,7 +111,7 @@ function App() {
   return (
     <div className="auth-shell">
       <main className="auth-main">
-        <div className="auth-brand"><BookOpenText size={28}/><h1>Synology Markdown Note</h1></div>
+        <div className="auth-brand"><AppIcon /><h1>Synology Markdown Note</h1></div>
         <section className="card auth-card" aria-live="polite">
           {loading ? (
             <div className="flex items-center gap-3 py-14 text-sm text-slate-600"><RefreshCw className="animate-spin" size={18} /> 서버 상태를 확인하고 있습니다…</div>

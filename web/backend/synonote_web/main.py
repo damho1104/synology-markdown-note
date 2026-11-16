@@ -47,11 +47,21 @@ class TextChange(BaseModel):
     text: str = Field(max_length=2_000_000)
 
 
+class MathImageInput(BaseModel):
+    key: str = Field(pattern=r"^[0-9a-f]{64}$")
+    width: int = Field(ge=1, le=2048)
+    height: int = Field(ge=1, le=2048)
+    png: str = Field(max_length=6_000_000)
+
+
 class WriteInput(BaseModel):
     title: str = Field(min_length=1, max_length=256)
     html: str = Field(default="", max_length=2_000_000)
     markdown: str | None = Field(default=None, max_length=2_000_000)
+    math_images: list[MathImageInput] = Field(default_factory=list, max_length=100)
     text_changes: list[TextChange] | None = Field(default=None, max_length=10000)
+    text_layout: str | None = Field(default=None, max_length=128)
+    client_request_id: str | None = Field(default=None, pattern=r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
     notebook_id: str = Field(min_length=1, max_length=256)
     version: str | None = Field(default=None, max_length=128)
 
@@ -258,7 +268,8 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
             digest = token_hash(token)
             app.state.transient.pop(digest, None)
             app.state.live_nas.pop(digest, None)
-            store.revoke(token)
+            revoked = store.revoke(token)
+            app.state.live_nas.pop(revoked, None)
 
     @app.get("/api/health")
     def health():
@@ -364,6 +375,11 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
         url, _ = configured()
         if not url:
             raise HTTPException(503, detail="NAS_NOT_CONFIGURED")
+        alias = store.resolve_session_alias(token, url, now, settings.remember_idle_seconds)
+        if alias is not None:
+            token, digest = alias, token_hash(alias)
+            request.state.session_token_override = token
+            set_cookie(request, response, token, True)
         session = store.session(token, url, now, settings.remember_idle_seconds)
         if session is None:
             app.state.live_nas.pop(digest, None)
@@ -459,10 +475,21 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
     def notes(request: Request, response: Response):
         return {"notes": read_nas(request, response, nas.notes)}
 
+    def remember_graph_entry(detail: dict, owner: str):
+        if not {"id", "title", "notebook_id", "version", "html", "locked", "trashed"}.issubset(detail): return
+        from .graph_api import entry_from_detail
+        try:
+            store.save_graph_index(owner, entry_from_detail(detail))
+        except StoreError:
+            logging.getLogger(__name__).warning("graph_index_unavailable")
+
     @app.get("/api/notes/{note_id}")
     def note(note_id: str, request: Request, response: Response):
         checked_id(note_id)
-        return read_nas(request, response, lambda base, active: nas.fetch(base, active, note_id))
+        owner = nas_access(request, response)[2]
+        detail = read_nas(request, response, lambda base, active: nas.fetch(base, active, note_id))
+        remember_graph_entry(detail, owner)
+        return detail
 
     @app.get("/api/notes/{note_id}/attachments/{file_id}")
     def attachment(note_id: str, file_id: str, request: Request, response: Response):
@@ -489,10 +516,28 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
                                   if key.lower() == b"set-cookie")
         return result
 
+    @app.post("/api/math/plan")
+    def math_plan_api(body: WriteInput, request: Request, response: Response):
+        _, _, _, csrf, _, _ = nas_access(request, response)
+        csrf_guard(request, csrf)
+        from .compat.markdown import math_plan
+        masked, formulas = math_plan(body.markdown or "")
+        return {"markdown": masked, "formulas": formulas}
+
     @app.get("/api/writes")
     def writes(request: Request, response: Response):
         _, _, owner, _, _, _ = nas_access(request, response)
         return {"operations": store.pending_writes(owner)}
+
+    @app.get('/api/creates/{client_request_id}')
+    def create_receipt(client_request_id: str, request: Request, response: Response):
+        try:
+            if str(uuid.UUID(client_request_id)) != client_request_id: raise ValueError()
+        except ValueError as exc:
+            raise HTTPException(422, detail='INVALID_ID') from exc
+        owner = nas_access(request, response)[2]
+        receipt = store.create_receipt(owner, client_request_id)
+        return {key: value for key, value in receipt.items() if key != 'request_hash'}
 
     def write_note(body: WriteInput, request: Request, response: Response,
                    note_id: str | None = None):
@@ -506,21 +551,41 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
             raise HTTPException(422, detail="VERSION_REQUIRED")
         base, active, owner, csrf, _, _ = nas_access(request, response)
         csrf_guard(request, csrf)
+        if note_id is None and body.client_request_id is None:
+            raise HTTPException(422, detail='CLIENT_REQUEST_ID_REQUIRED')
+        intent = body.model_dump()
+        request_hash = hashlib.sha256(json.dumps(intent, sort_keys=True, ensure_ascii=False,
+                                                 separators=(',', ':')).encode()).hexdigest()
+        def previous_create():
+            receipt = store.create_receipt(owner, body.client_request_id)
+            if receipt['status'] == 'absent': return None
+            if receipt['request_hash'] != request_hash:
+                raise HTTPException(409, detail='CREATE_KEY_REUSED')
+            if receipt['status'] == 'completed': return receipt['note']
+            raise HTTPException(409, detail='WRITE_REVIEW_REQUIRED')
+        if note_id is None:
+            previous = previous_create()
+            if previous is not None: return previous
         operation_id = str(uuid.uuid4())
         target = note_id or "new:" + body.notebook_id + ":" + hashlib.sha256(body.title.encode()).hexdigest()
         if not store.start_write(operation_id, owner, target, note_id, body.title,
-                                 body.model_dump()):
+                                 intent, client_request_id=body.client_request_id if note_id is None else None,
+                                 request_hash=request_hash):
+            if note_id is None:
+                previous = previous_create()
+                if previous is not None: return previous
             raise HTTPException(409, detail="WRITE_REVIEW_REQUIRED")
         try:
             if body.text_changes is not None:
                 if not note_id or not body.version or body.markdown is not None:
                     raise NasError("HTML_PATCH_INVALID")
                 result = nas.write_html_text(base, active, note_id=note_id, notebook_id=body.notebook_id,
-                    title=body.title, version=body.version, changes=[v.model_dump() for v in body.text_changes])
+                    title=body.title, version=body.version, text_layout=body.text_layout,
+                    changes=[v.model_dump() for v in body.text_changes])
             elif body.markdown is not None:
                 result = nas.write_markdown(base, active, note_id=note_id, notebook_id=body.notebook_id,
                                            title=body.title, markdown=body.markdown, version=body.version,
-                                           operation_id=operation_id)
+                                           operation_id=operation_id, **({"math_images": [v.model_dump() for v in body.math_images]} if body.math_images else {}))
             else:
                 result = nas.write(base, active, note_id=note_id, notebook_id=body.notebook_id,
                                    title=body.title, html=body.html, version=body.version)
@@ -532,7 +597,8 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
         except Exception:
             store.finish_write(operation_id, uncertain=True)
             raise
-        store.finish_write(operation_id, uncertain=False)
+        store.finish_write(operation_id, uncertain=False, result=result)
+        remember_graph_entry(result, owner)
         return result
 
     @app.post("/api/notes")
@@ -571,7 +637,7 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
     install_library_routes(app, nas=nas, read_nas=read_nas, nas_access=nas_access,
                            csrf_guard=csrf_guard, checked_id=checked_id, store=store)
     from .graph_api import register_graph_routes
-    register_graph_routes(app, read_nas=read_nas, nas=nas)
+    register_graph_routes(app, read_nas=read_nas, nas=nas, store=store, owner_for_request=lambda request, response: nas_access(request, response)[2])
 
     static_dir = Path(os.getenv("WEB_STATIC_DIR", Path(__file__).parents[2] / "frontend" / "dist"))
     if static_dir.is_dir():

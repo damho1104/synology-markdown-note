@@ -8,6 +8,8 @@ but credentials are not encrypted on that connection. CGI paths are fixed.
 from __future__ import annotations
 
 import ipaddress
+import base64
+import struct
 import json
 import logging
 from datetime import datetime, timezone
@@ -18,14 +20,15 @@ import time
 import uuid
 from dataclasses import dataclass
 from html.parser import HTMLParser
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlsplit, urlunsplit, urlencode
 
 import httpx
 
 from .compat.source_envelope import SourceEnvelope
-from .compat.markdown import render as render_markdown
+from .compat.markdown import render as render_markdown, math_plan
 from .compat.errors import CLIError
-from .html_text import annotate, patch as patch_html_text
+from .html_text import annotate, layout_identity, patch as patch_html_text
+from .attachment_html import bind_html
 from .library_nas import LibraryNasOperations
 from .observability import request_id
 
@@ -501,10 +504,10 @@ class NasClient(LibraryNasOperations):
             source, file_id = candidates[0]
             detail.update(markdown=source.markdown, blocks=source.blocks,
                           source_document_id=source.document_id, source_file_id=file_id,
-                          attachment_bindings=source.attachment_bindings)
+                          attachment_bindings=source.attachment_bindings, math_attachments=source.math_attachments)
             # Existing math image bindings require the original app's PNG export.
-            detail["editable"] = not detail["trashed"] and not source.math_attachments
-            detail["read_only_reason"] = "TRASHED" if detail["trashed"] else "MATH_EXPORT" if source.math_attachments else None
+            detail["editable"] = not detail["trashed"]
+            detail["read_only_reason"] = "TRASHED" if detail["trashed"] else None
         elif len(candidates) > 1:
             detail.update(editable=False, read_only_reason="AMBIGUOUS_SOURCE")
         elif not detail["trashed"] and not staged_source:
@@ -626,7 +629,7 @@ class NasClient(LibraryNasOperations):
                 routing = {key: fields.pop(key) for key in ("api", "method", "version", "_sid")}
                 try:
                     response = client.post(f"{base}/webapi/{path}", params=routing, data=fields,
-                                           files={part: (upload[0], upload[1], "text/markdown")})
+                                           files={part: (upload[0], upload[1], "image/png" if upload[0].endswith(".png") else "text/markdown")})
                     receipt = self._data(response)
                 except (httpx.HTTPError, OSError) as exc:
                     raise NasError("WRITE_UNCERTAIN") from exc
@@ -643,7 +646,7 @@ class NasClient(LibraryNasOperations):
 
     def write_markdown(self, base: str, login: NasLogin, *, note_id: str | None,
                        notebook_id: str, title: str, markdown: str, version: str | None,
-                       operation_id: str | None = None) -> dict:
+                       operation_id: str | None = None, math_images: list[dict] | None = None) -> dict:
         """Use the same staged source/body/publication contract as the CLI/macOS app."""
         base = validate_url(base)
         old = self.fetch(base, login, note_id) if note_id else None
@@ -661,14 +664,33 @@ class NasClient(LibraryNasOperations):
         if not references.issubset(original_references):
             raise NasError("MARKDOWN_UNSUPPORTED")
         try:
-            html = render_markdown(markdown, blocks)
+            _, formulas = math_plan(markdown)
+            assets = {}
+            supplied = {v['key']: v for v in math_images or []}
+            if set(supplied) != {v['key'] for v in formulas}:
+                raise CLIError("INVALID_SOURCE", "수식 이미지와 원문이 일치하지 않습니다.")
+            for key, image in supplied.items():
+                data = base64.b64decode(image['png'], validate=True)
+                if (len(data) < 33 or len(data) > 4_000_000 or data[:8] != b'\x89PNG\r\n\x1a\n'
+                        or data[12:16] != b'IHDR' or struct.unpack('>II', data[16:24]) != (image['width'] * 2, image['height'] * 2)):
+                    raise CLIError("INVALID_SOURCE", "잘못된 PNG입니다.")
+                assets[key] = dict(image, data=data, ref=str(uuid.uuid4()).upper())
+            html = render_markdown(markdown, blocks, assets)
             document_id = previous.document_id if previous else str(uuid.uuid4()).upper()
             operation_id = operation_id or str(uuid.uuid4())
             bindings = previous.attachment_bindings if previous else {}
+            def download_url(file_id):
+                with self._client() as client:
+                    path, api_version, as_json = self._info(client, base, NOTE, 1, 1, login)
+                fields = self._fields(NOTE, 'download', api_version, '',
+                    dict(file_id=file_id, object_id=note_id, format='raw', mode='download'), as_json)
+                fields.pop('_sid')
+                return f'{base}/webapi/{path}?' + urlencode(fields)
+            html = bind_html(html, bindings, old['attachments'] if old else [], download_url)
             original = old["html"] if old else "<p>문서를 전송하고 있습니다.</p>"
             stage = SourceEnvelope.make(markdown, original, document_id=document_id,
                 operation_id=operation_id, is_staging=True, blocks=blocks, attachment_bindings=bindings).encode()
-        except CLIError as exc:
+        except (CLIError, ValueError, KeyError) as exc:
             raise NasError("MARKDOWN_UNSUPPORTED") from exc
         stage_name = f"synology-note-upload-{document_id}-{operation_id}.md"
         protected = {f["id"] for f in old["attachments"] if f["id"] != old["source_file_id"]} if old else set()
@@ -684,15 +706,47 @@ class NasClient(LibraryNasOperations):
                       and self.download(base, login, target, f["id"]) == stage]
             if len(staged) != 1:
                 raise NasError("WRITE_UNCERTAIN")
+            math_metadata = {}
+            for key, asset in assets.items():
+                reusable = [(uid, meta) for uid, meta in (previous.math_attachments if previous else {}).items() if meta['key'] == key and uid in bindings]
+                if len(reusable) == 1:
+                    uid, meta = reusable[0]
+                    files = [f for f in current['attachments'] if f['id'] == bindings[uid]]
+                    if len(files) == 1:
+                        data = self.download(base, login, target, files[0]['id'])
+                        if data[:8] == b'\x89PNG\r\n\x1a\n':
+                            html = html.replace(f'ref="{asset["ref"]}"', f'ref="{files[0].get("ref") or files[0]["id"]}"').replace(f'width="{asset["width"]}" height="{asset["height"]}"', f'width="{int(meta["width"])}" height="{int(meta["height"])}"')
+                            math_metadata[uid] = meta
+                            continue
+                name = f"synology-note-math-{key}-{operation_id}.png"
+                _, stage_version = self._mutate_markdown(base, login, note_id=target, version=stage_version,
+                    notebook_id=notebook_id, upload=(name, asset['data']))
+                current = self.fetch(base, login, target)
+                matches = [f for f in current['attachments'] if f['name'] == name]
+                if current['version'] != stage_version or len(matches) != 1 or self.download(base, login, target, matches[0]['id']) != asset['data']:
+                    raise NasError("WRITE_UNCERTAIN")
+                bindings = dict(bindings)
+                bindings[asset['ref']] = matches[0]['id']
+                math_metadata[asset['ref']] = {k: asset[k] for k in ('key', 'width', 'height')}
+                html = html.replace(f'ref="{asset["ref"]}"', f'ref="{matches[0].get("ref") or matches[0]["id"]}"')
             _, body_version = self._mutate_markdown(base, login, note_id=target, version=stage_version,
                 notebook_id=notebook_id, title=title, html=html)
             current = self.fetch(base, login, target)
             if (current["version"] != body_version or current["html"] != html
                     or current["title"] != title or current["notebook_id"] != notebook_id):
                 raise NasError("WRITE_UNCERTAIN")
-            final = SourceEnvelope.make(markdown, current["html"], document_id=document_id,
-                operation_id=operation_id, blocks=blocks, attachment_bindings=bindings).encode()
             deleting = [staged[0]["id"]] + ([old["source_file_id"]] if old else [])
+            # Delete only explicitly owned images no longer referenced by source/opaque blocks.
+            for uid in previous.math_attachments if previous else []:
+                fid = bindings.get(uid)
+                file = next((f for f in current['attachments'] if f['id'] == fid), None)
+                literals = markdown + ''.join(b['html'] for b in blocks)
+                if uid not in math_metadata and file and not any(v in literals for v in (uid, fid, file.get('ref') or fid)):
+                    deleting.append(fid)
+                    protected.discard(fid)
+                    bindings = {k: v for k, v in bindings.items() if v != fid}
+            final = SourceEnvelope.make(markdown, current['html'], document_id=document_id,
+                operation_id=operation_id, blocks=blocks, attachment_bindings=bindings, math_attachments=math_metadata).encode()
             _, final_version = self._mutate_markdown(base, login, note_id=target, version=body_version,
                 notebook_id=notebook_id, upload=(f"synology-note-source-{document_id}.md", final), deleting=deleting)
             verified = self.fetch(base, login, target)
@@ -700,6 +754,8 @@ class NasClient(LibraryNasOperations):
             if (verified["version"] != final_version or verified.get("markdown") != markdown
                     or verified["html"] != html or verified["title"] != title
                     or verified["notebook_id"] != notebook_id or verified.get("blocks") != blocks
+                    or verified.get("math_attachments", {}) != math_metadata
+                    or verified.get("attachment_bindings") != bindings
                     or not protected.issubset(ids) or any(v in ids for v in deleting)):
                 raise NasError("WRITE_UNCERTAIN")
             return verified
@@ -709,12 +765,14 @@ class NasClient(LibraryNasOperations):
 
 
     def write_html_text(self, base: str, login: NasLogin, *, note_id: str, notebook_id: str,
-                        title: str, version: str, changes: list[dict]) -> dict:
+                        title: str, version: str, changes: list[dict], text_layout: str | None = None) -> dict:
         current = self.fetch(base, login, note_id)
         if current["version"] != version:
             raise NasError("REMOTE_CHANGED")
         if current["locked"] or current["trashed"] or current["notebook_id"] != notebook_id or "markdown" in current or current.get("write_in_progress") or "html_text_preview" not in current:
             raise NasError("DOCUMENT_READ_ONLY")
+        if text_layout != layout_identity(current['html']):
+            raise NasError('HTML_PATCH_INVALID')
         try:
             if any("\x00" in change["text"] for change in changes):
                 raise ValueError()

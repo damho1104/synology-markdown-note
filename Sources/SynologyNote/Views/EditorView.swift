@@ -8,6 +8,7 @@ struct EditorView: View {
     @Binding var inspector: Bool
     var insertNoteLinkRequest = 0
     @State private var position = EditorPosition()
+    @State private var previewLine: Int?
     @State private var comparing = false
     @State private var showingLinkPicker = false
     @State private var linkSelection = NSRange(location: 0, length: 0)
@@ -163,7 +164,7 @@ struct EditorView: View {
                 // Kept mounted in read mode to retain native undo, selection and scroll state.
                 VStack(spacing: 0) {
                     if mode == .split { paneLabel("MARKDOWN", icon: "chevron.left.forwardslash.chevron.right") }
-                    MarkdownEditor(text: Binding(get: { session.note.markdown }, set: { value in library.edit(session) { $0.markdown = value } }), blocks: session.note.blocks, position: position, undoManager: session.undoManager, isEditable: !session.note.isTrashed && mode != .read, linkCandidates: library.summaries.filter { $0.id != session.id && $0.mode != .locked }, linkNotebooks: library.notebooks, onFiles: { urls in Task { for url in urls { await library.addAttachment(to: session, url: url) } } }, onImage: { data in Task { await library.addImage(to: session, data: data) } })
+                    MarkdownEditor(text: Binding(get: { session.note.markdown }, set: { value in library.edit(session) { $0.markdown = value } }), blocks: session.note.blocks, position: position, undoManager: session.undoManager, isEditable: !session.note.isTrashed && mode != .read, onSourceLine: { previewLine = $0 }, linkCandidates: library.summaries.filter { $0.id != session.id && $0.mode != .locked }, linkNotebooks: library.notebooks, onFiles: { urls in Task { for url in urls { await library.addAttachment(to: session, url: url) } } }, onImage: { data in Task { await library.addImage(to: session, data: data) } })
                 }
                 .frame(minWidth: mode == .read ? 0 : 220, maxWidth: mode == .read ? 0 : .infinity)
                 .opacity(mode == .read ? 0 : 1)
@@ -176,7 +177,7 @@ struct EditorView: View {
                             library.edit(session, registerUndo: true) { $0.markdown = MarkdownEditing.toggleTask($0.markdown, line: line) }
                         }, onOpenNote: { destination in
                             Task { await library.openLinkedNote(destination, from: session.id) }
-                        })
+                        }, sourceLine: mode == .split ? previewLine : nil)
                     }.frame(minWidth: 220)
                 }
             }

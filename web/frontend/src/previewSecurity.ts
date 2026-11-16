@@ -32,5 +32,7 @@ export function canonicalNoteLink(destination: string): string | null {
       return null;
     }
   }
+  if (decoded.toLowerCase().endsWith(".md") && decoded.length > 3 && !/[\/\\?#:\n]/.test(decoded))
+    return encodeURIComponent(decoded);
   return null;
 }

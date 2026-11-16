@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from html import escape, unescape
 from html.parser import HTMLParser
 import secrets
-import re
+import hashlib
 
 
 @dataclass(frozen=True)
@@ -18,51 +18,61 @@ class _Spans(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.source = source
         self.lines = [0] + [i + 1 for i, char in enumerate(source) if char == '\n']
-        self.events: list[tuple[int, str, bool]] = []
+        self.events: list[tuple[int, int, bool]] = []
         self.stack: list[str] = []
-    def mark(self, kind):
+    def mark(self, length):
         line, column = self.getpos()
-        self.events.append((self.lines[line-1]+column, kind, any(v in self.stack for v in ('script','style','svg','math','textarea','title','head'))))
+        start = self.lines[line-1]+column
+        opaque = any(v in self.stack for v in ('script','style','svg','math','textarea','title','head'))
+        structural = bool(self.stack and self.stack[-1] in
+                          {'table','thead','tbody','tfoot','tr','colgroup','ul','ol','dl','select','optgroup'})
+        self.events.append((start, start+length, opaque or structural))
+    def markup_length(self):
+        line, column = self.getpos()
+        start = self.lines[line-1]+column
+        return self.source.find('>', start) + 1 - start
     def handle_starttag(self, tag, attrs):
-        self.mark('tag')
+        self.mark(len(self.get_starttag_text()))
         if tag not in {'br','hr','img','input','meta','link','source','wbr','area','base','embed','param','track','col'}: self.stack.append(tag)
-    def handle_startendtag(self, tag, attrs): self.mark('tag')
+    def handle_startendtag(self, tag, attrs): self.mark(len(self.get_starttag_text()))
     def handle_endtag(self, tag):
-        self.mark('tag')
+        self.mark(self.markup_length())
         if tag in self.stack:
             self.stack = self.stack[:len(self.stack)-1-self.stack[::-1].index(tag)]
-    def handle_data(self, data): self.mark('text')
-    def handle_comment(self, data): self.mark('tag')
-    def handle_decl(self, decl): self.mark('tag')
-    def handle_pi(self, data): self.mark('tag')
-    def unknown_decl(self, data): self.mark('tag')
+    def handle_comment(self, data): self.mark(len(data) + 7)
+    def handle_decl(self, decl): self.mark(self.markup_length())
+    def handle_pi(self, data): self.mark(self.markup_length())
+    def unknown_decl(self, data): self.mark(self.markup_length())
 
 
 def text_blocks(source: str) -> list[TextBlock]:
     parser = _Spans(source)
     parser.feed(source); parser.close()
-    blocks=[]
-    for i,(start, kind, excluded) in enumerate(parser.events):
-        end = parser.events[i+1][0] if i+1 < len(parser.events) else len(source)
-        if kind == 'text' and not excluded:
-            raw=source[start:end]
-            text=unescape(raw)
-            previous = parser.events[i-1][0] if i else start
-            text_parent = re.fullmatch(r"<(p|div|h[1-6]|li|blockquote|pre|code)\b[^>]*>",source[previous:start],re.I)
-            if text.strip() or text_parent: blocks.append(TextBlock(start,end,text))
-        elif kind == 'tag' and not excluded:
-            opening = re.fullmatch(r"<(p|div|h[1-6]|li|blockquote|pre|code)\b[^>]*>", source[start:end], re.I)
-            if opening and re.match(r"</\s*"+opening.group(1)+r"\s*>",source[end:],re.I):
-                blocks.append(TextBlock(end,end,''))
-    return sorted(blocks,key=lambda block:block.start)
+    # Reserve every gap in the immutable markup skeleton, including zero-length
+    # and whitespace gaps. Deleting text can never renumber a following slot.
+    blocks=[]; cursor=0
+    for start, end, excluded in parser.events:
+        if not excluded:
+            blocks.append(TextBlock(cursor, start, unescape(source[cursor:start])))
+        cursor=end
+    if not any(v in parser.stack for v in ('script','style','svg','math','textarea','title','head')):
+        blocks.append(TextBlock(cursor, len(source), unescape(source[cursor:])))
+    return blocks
+
+
+def layout_identity(source: str) -> str:
+    return 'html-text-v2:' + hashlib.sha256(source.encode('utf-8')).hexdigest()
 
 
 def annotate(source: str) -> dict:
     blocks=text_blocks(source); token=secrets.token_hex(16); preview=source
     for index,block in reversed(list(enumerate(blocks))):
         preview=(preview[:block.start]+f'<span data-edit-token="{token}" data-text-index="{index}">'+escape(block.text,quote=False)+'</span>'+preview[block.end:])
+    offsets=[0]
+    for char in source: offsets.append(offsets[-1]+(2 if ord(char)>0xffff else 1))
     return {'html_text_preview':preview,'html_text_token':token,
-            'html_text_blocks':[{'index':i,'text':b.text} for i,b in enumerate(blocks)]}
+            'html_text_layout':layout_identity(source),
+            'html_text_blocks':[{'index':i,'text':b.text,'start':offsets[b.start],'end':offsets[b.end]} for i,b in enumerate(blocks)]}
 
 
 def patch(source: str, changes: list[dict]) -> str:

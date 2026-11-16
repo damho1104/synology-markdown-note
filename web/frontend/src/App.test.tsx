@@ -17,7 +17,7 @@ it('does not enter the workspace when the browser fails to retain the login cook
 
 it('returns to login when a protected NAS request requires relogin', async()=>{
  vi.stubGlobal('fetch',vi.fn(async(path:string)=>{
-  const body=path==='/api/status'?{configured:true,nas_url:'https://nas.example',source:'database',read_only:false}:path==='/api/auth/me'?{username:'alice',remember:true,csrf_token:'csrf'}:path==='/api/notebooks'?{detail:'RELOGIN_REQUIRED'}:path==='/api/notes'?{notes:[]}:{operations:[]}
+  const body=path==='/api/status'?{configured:true,nas_url:'https://nas.example',source:'database',read_only:false}:path==='/api/auth/me'?{username:'alice',remember:true,csrf_token:'csrf'}:path==='/api/notebooks'?{detail:'RELOGIN_REQUIRED'}:path==='/api/notes'?{notes:[]}:path==='/api/graph?summary=true'?{nodes:[],edges:[],failures:[],entries:[],pending:[]}:{operations:[]}
   return new Response(JSON.stringify(body),{status:path==='/api/notebooks'?401:200})
  }))
  render(<App/>);
@@ -29,8 +29,8 @@ it('returns to login when a protected NAS request requires relogin', async()=>{
 it('logs out when a graph request fails authentication inside its own error handler', async()=>{
  window.history.replaceState({},'', '/');
  vi.stubGlobal('fetch',vi.fn(async(path:string)=>{
-  const body=path==='/api/status'?{configured:true,nas_url:'https://nas.example',source:'database',read_only:false}:path==='/api/auth/me'?{username:'alice',remember:true,csrf_token:'csrf'}:path==='/api/graph'?{detail:'RELOGIN_REQUIRED'}:path==='/api/notebooks'?{notebooks:[]}:path==='/api/notes'?{notes:[]}:{operations:[]}
-  return new Response(JSON.stringify(body),{status:path==='/api/graph'?401:200})
+  const body=path==='/api/status'?{configured:true,nas_url:'https://nas.example',source:'database',read_only:false}:path==='/api/auth/me'?{username:'alice',remember:true,csrf_token:'csrf'}:path.startsWith('/api/graph')?{detail:'RELOGIN_REQUIRED'}:path==='/api/notebooks'?{notebooks:[]}:path==='/api/notes'?{notes:[]}:path==='/api/graph?summary=true'?{nodes:[],edges:[],failures:[],entries:[],pending:[]}:{operations:[]}
+  return new Response(JSON.stringify(body),{status:path.startsWith('/api/graph')?401:200})
  }))
  render(<App/>);
  fireEvent.click(await screen.findByRole('button',{name:'전체 그래프'}));
@@ -43,7 +43,7 @@ it('treats an already-expired logout as complete and clears explicitly discarded
  const key='synonote:web-draft:["https://nas.example","alice"]:note:note1';
  sessionStorage.setItem(key,'draft');
  vi.stubGlobal('fetch',vi.fn(async(path:string)=>{
-  const body=path==='/api/status'?{configured:true,nas_url:'https://nas.example',source:'database',read_only:false}:path==='/api/auth/me'?{username:'alice',remember:true,csrf_token:'csrf'}:path==='/api/auth/logout'?{detail:'RELOGIN_REQUIRED'}:path==='/api/notebooks'?{notebooks:[]}:path==='/api/notes'?{notes:[]}:{operations:[]}
+  const body=path==='/api/status'?{configured:true,nas_url:'https://nas.example',source:'database',read_only:false}:path==='/api/auth/me'?{username:'alice',remember:true,csrf_token:'csrf'}:path==='/api/auth/logout'?{detail:'RELOGIN_REQUIRED'}:path==='/api/notebooks'?{notebooks:[]}:path==='/api/notes'?{notes:[]}:path==='/api/graph?summary=true'?{nodes:[],edges:[],failures:[],entries:[],pending:[]}:{operations:[]}
   return new Response(JSON.stringify(body),{status:path==='/api/auth/logout'?401:200})
  }))
  render(<App/>);

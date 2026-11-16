@@ -251,3 +251,74 @@ def test_resolver_uses_remote_ids_or_unique_verified_document_ids():
     nas.fetch=lambda *args:{'source_document_id':'12345678-1234-4321-ABCD-123456789ABC'}
     with pytest.raises(HTTPException) as exc:_resolve(nas,'base',None,'synology-note://note/12345678-1234-4321-ABCD-123456789ABC')
     assert exc.value.status_code==409
+
+
+def test_summary_is_immediate_and_index_survives_restart_and_only_refetches_changed_notes(tmp_path):
+    from synonote_web.store import Store
+    from threading import Lock
+    import time
+    class Nas:
+        def __init__(self):
+            self.calls = []; self.versions = {}; self.active = 0; self.maximum = 0; self.lock = Lock()
+        def notes(self, *args):
+            return [dict(id=str(i), title=f'Note {i}', notebook_id='book', version=self.versions.get(str(i),'1'), tags=[], locked=False, trashed=False) for i in range(500)]
+        def fetch(self, base, login, note_id):
+            with self.lock:
+                self.calls.append(note_id); self.active += 1; self.maximum = max(self.maximum, self.active)
+            try:
+                time.sleep(0.001)
+                return dict(id=note_id, title=f'Note {note_id}', notebook_id='book', version=self.versions.get(note_id,'1'), locked=False, trashed=False, source_document_id='12345678-1234-4321-abcd-123456789abc' if note_id == '7' else None, html='<a href="Note 1.md">target</a>')
+            finally:
+                with self.lock: self.active -= 1
+    nas = Nas()
+    def client():
+        app = FastAPI()
+        register_graph_routes(app, read_nas=lambda req,res,fn:fn('base',None), nas=nas,
+            store=Store(tmp_path), owner_for_request=lambda req,res:req.headers.get('x-account','first'))
+        return TestClient(app)
+    with client() as web:
+        first = web.get('/api/graph?summary=true').json()
+        assert len(first['nodes']) == len(first['pending']) == 500 and nas.calls == []
+        for offset in range(0,500,8):
+            response = web.get('/api/graph/entries', params={'ids':json.dumps(first['pending'][offset:offset+8])})
+            assert response.status_code == 200
+        assert len(nas.calls) == 500 and nas.maximum <= 4
+        warm = web.get('/api/graph?summary=true').json()
+        assert warm['pending'] == [] and len(warm['entries']) == 500 and len(nas.calls) == 500
+        assert warm['entries'][0]['links'] == [{'kind':'title','target':'Note 1'}]
+        assert web.get('/api/resolve-note', params={'target':'synology-note://note/12345678-1234-4321-abcd-123456789abc'}).json() == {'note_id':'7'}
+        assert len(nas.calls) == 500  # Navigation shares the already verified index.
+
+        nas.versions['7'] = '2'
+        changed = web.get('/api/graph?summary=true').json()
+        assert changed['pending'] == ['7'] and len(nas.calls) == 500
+        web.get('/api/graph/entries', params={'ids':'["7"]'})
+        assert len(nas.calls) == 501
+        assert web.get('/api/graph/entries',params={'ids':json.dumps([str(i) for i in range(9)])}).status_code == 422
+        other = web.get('/api/graph?summary=true',headers={'x-account':'other'}).json()
+        assert len(other['pending']) == 500 and other['entries'] == []
+    with client() as web:
+        restarted = web.get('/api/graph?summary=true').json()
+        assert restarted['pending'] == [] and len(nas.calls) == 501
+    assert b'Note 1.md' not in (tmp_path/'web.sqlite3').read_bytes()
+
+
+def test_title_links_resolve_only_unique_plain_filenames(graph_http):
+    client, add, _, _ = graph_http
+    add('a', markdown='[target](<한글 노트.md>) [path](folder/한글%20노트.md)')
+    add('b', title='한글 노트')
+    assert client.get('/api/graph').json()['edges'] == [{'source':'a','target':'b'}]
+    assert client.get('/api/resolve-note',params={'target':'한글%20노트.md'}).json()['note_id'] == 'b'
+    add('c', title='한글 노트')
+    assert client.get('/api/graph').json()['edges'] == []
+    assert client.get('/api/resolve-note',params={'target':'한글%20노트.md'}).status_code == 409
+
+
+def test_batched_reads_keep_authentication_and_session_expiry(graph_http):
+    client, add, errors, seen = graph_http
+    add('a')
+    errors['a'] = 119
+    assert client.get('/api/graph/entries',params={'ids':'["a"]'}).json() == {'error':'NAS_SESSION_EXPIRED'}
+    client.cookies.clear(); seen.clear()
+    assert client.get('/api/graph/entries',params={'ids':'["a"]'}).status_code == 401
+    assert seen == []

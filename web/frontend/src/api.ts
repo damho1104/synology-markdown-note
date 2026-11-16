@@ -23,7 +23,7 @@ const messages: Record<string, string> = {
   HTML_PATCH_INVALID:
     "원본 텍스트 변경을 검증하지 못했습니다. 최신 노트를 다시 열어 주세요.",
   MARKDOWN_UNSUPPORTED:
-    "수식 PNG 내보내기 또는 첨부·보존 블록을 지원하지 않는 변경입니다. 원문을 유지했습니다.",
+    "수식 이미지 또는 첨부·보존 블록을 검증하지 못했습니다. 원문을 유지했습니다.",
   SECURE_COOKIE_REQUIRES_HTTPS:
     "HTTP 접속에서는 현재 Secure 로그인 쿠키를 사용할 수 없습니다. HTTPS로 접속하거나, 신뢰하는 내부망에서 HTTP를 사용하려면 서버의 WEB_COOKIE_SECURE=false 설정 후 웹 컨테이너를 재생성하세요.",
   LOGIN_COOKIE_MISSING:
@@ -135,4 +135,12 @@ export async function request<T>(
     if (init.signal?.aborted) throw new DOMException("Aborted", "AbortError");
   }
   return rawRequest<T>(path, init);
+}
+
+
+/** Continue a sequential read after request() has completed the session boundary.
+ * The server still authenticates every request; avoid a redundant /auth/me per
+ * graph indexing batch. Do not use for independent or concurrent mutations. */
+export function readInSession<T>(path: string, init: RequestInit = {}): Promise<T> {
+  return rawRequest<T>(path, {...init, method: "GET"});
 }

@@ -10,6 +10,43 @@ async function renderedPage(frame: HTMLIFrameElement): Promise<string> {
   await waitFor(() => expect(send).toHaveBeenCalled());
   return send.mock.calls.at(-1)![0].page as string;
 }
+it.each([
+  ["---\nname: '<img src=x onerror=alert(1)>'\nformula: $x$\n---\n\n# 본문\n\n문단", 6, 8],
+  ["\uFEFF---\r\nname: BOM\r\n...\r\n\r\n# 본문\r\n\r\n문단", 5, 7],
+  ["---\rname: CR\r---\r\r# 본문\r\r문단", 5, 7],
+])("folds leading metadata like the Mac preview: %s", async (markdown, headingLine, paragraphLine) => {
+  render(<NotePreview html="" markdown={markdown} />);
+  const source = await renderedPage(screen.getByTitle("노트 HTML 미리보기") as HTMLIFrameElement);
+  const doc = new DOMParser().parseFromString(source, "text/html");
+  const details = doc.querySelector("details.note-frontmatter");
+  expect(details).not.toBeNull();
+  expect(details!.hasAttribute("open")).toBe(false);
+  expect(details!.querySelector("summary")?.textContent).toBe("문서 정보");
+  expect(details!.querySelector("code")?.textContent).toContain("name:");
+  expect(details!.querySelector("img, .katex")).toBeNull();
+  if (markdown.includes("formula:")) {
+    expect(details!.querySelector("code")?.textContent).toContain("<img src=x onerror=alert(1)>");
+    expect(details!.querySelector("code")?.textContent).toContain("formula: $x$");
+  }
+  expect(doc.querySelector("h1")?.textContent).toBe("본문");
+  expect(doc.querySelector("h1")?.parentElement?.getAttribute("data-source-line")).toBe(String(headingLine));
+  expect(doc.querySelector("p")?.parentElement?.getAttribute("data-source-line")).toBe(String(paragraphLine));
+  expect(doc.querySelector("hr")).toBeNull();
+});
+
+it.each([
+  "---\ntype: daily\n# 종료 없는 문서",
+  "# 본문\n\n---\ntype: daily\n---",
+  "```yaml\n---\ntype: daily\n---\n```",
+  "\n---\ntype: daily\n---",
+])("does not fold incomplete or non-leading metadata: %s", async markdown => {
+  render(<NotePreview html="" markdown={markdown} />);
+  const source = await renderedPage(screen.getByTitle("노트 HTML 미리보기") as HTMLIFrameElement);
+  const doc = new DOMParser().parseFromString(source, "text/html");
+  expect(doc.querySelector("details.note-frontmatter")).toBeNull();
+  expect(doc.body.textContent).toContain("type: daily");
+});
+
 it("blocks untrusted scripts, events and external images without enabling iframe scripts", async () => {
   render(
     <NotePreview

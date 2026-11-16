@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling>=1.26,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "synonote-web"
+version = "1.2.17"
+description = "Self-hosted Synology Markdown Note web client API"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.34,<1",
+    "httpx>=0.28,<1",
+    "cryptography>=44,<47",
+    "markdown-it-py>=3,<5",
+]
+
+[dependency-groups]
+dev = ["pytest>=8,<10"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["synonote_web"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

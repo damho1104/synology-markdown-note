@@ -1,0 +1,94 @@
+.note-graph, .graph-navigation {
+  --graph-outgoing: #089bb5;
+  --graph-incoming: #d87820;
+  color: var(--text);
+  background: var(--surface);
+  box-sizing: border-box;
+  min-width: 0;
+}
+.note-graph { display:flex; flex-direction:column; flex:1; height:100%; min-height:0; padding:16px; gap:10px; overflow:auto; }
+.note-graph button, .note-graph select, .graph-navigation button {
+  font:inherit; color:var(--text); background:var(--toolbar); border:1px solid var(--line);
+  border-radius:6px; padding:5px 9px; cursor:pointer;
+}
+.note-graph button:disabled { opacity:.4; cursor:default; }
+.note-graph :is(button, select, input):focus-visible, .graph-navigation button:focus-visible {
+  outline:2px solid var(--accent); outline-offset:2px;
+}
+.graph-filters { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.graph-filters input { flex:1 1 160px; min-width:100px; border:1px solid var(--line); border-radius:6px;
+  padding:7px 9px; font:inherit; background:var(--surface); color:var(--text); }
+.graph-filters select { max-width:175px; min-width:0; }
+.graph-summary { display:flex; align-items:center; flex-wrap:wrap; gap:8px; font-size:12px; }
+.graph-summary strong { font-size:14px; margin-right:auto; }
+.graph-isolates { display:flex; align-items:center; gap:4px; }
+.graph-muted, .graph-hint { color:var(--muted); font-size:12px; }
+.graph-hint { margin:0; text-align:center; }
+.graph-stage { position:relative; display:flex; flex:1 0 350px; min-height:350px;
+  border:1px solid var(--line); border-radius:9px; overflow:hidden;
+  background:var(--sidebar); isolation:isolate; }
+.graph-stage svg { display:block; width:100%; height:100%; min-height:350px; flex:1;
+  position:absolute; inset:0; touch-action:none; }
+.graph-node { cursor:pointer; outline:none; }
+.graph-node:focus-visible > circle:nth-of-type(2) { stroke:var(--accent); stroke-width:4; }
+.graph-node-label { font-size:12px; fill:var(--text); pointer-events:none; paint-order:stroke;
+  stroke:var(--sidebar); stroke-width:4px; stroke-linejoin:round; }
+.graph-zoom { position:absolute; bottom:12px; right:12px; z-index:1; display:flex; align-items:center;
+  gap:3px; padding:5px; border:1px solid var(--line); border-radius:9px; background:var(--surface);
+  box-shadow:0 2px 12px #00000012; }
+.graph-zoom button { min-width:30px; min-height:30px; }
+.graph-zoom output { min-width:44px; text-align:center; font-size:12px; font-variant-numeric:tabular-nums; }
+.graph-selection { display:flex; align-items:center; gap:8px; font-size:12px; flex-wrap:wrap; }
+.graph-selection strong { flex:1; min-width:0; overflow-wrap:anywhere; }
+.graph-empty { flex:1; align-self:center; text-align:center; padding:24px 16px 72px; color:var(--muted); font-size:13px; }
+.graph-warning { border:1px solid var(--line); padding:8px; border-radius:6px; font-size:12px; }
+.graph-warning p { margin:0 0 6px; }
+.graph-warning details { margin:6px 0; }
+.graph-warning summary { cursor:pointer; }
+.graph-warning ul { max-height:100px; overflow:auto; margin:6px 0; padding-left:20px; }
+.note-graph progress { display:block; width:100%; height:4px; margin-top:5px; }
+.graph-outgoing { color:var(--graph-outgoing); }
+.graph-incoming { color:var(--graph-incoming); }
+.graph-navigation { height:100%; min-height:0; overflow:auto; padding:18px 14px; }
+.graph-navigation h2, .graph-mobile-navigation h2 { font-size:16px; margin:0 0 6px; }
+.graph-navigation h3, .graph-mobile-navigation h3, .graph-connections h3 { font-size:13px; margin:0 0 8px; }
+.graph-navigation p, .graph-mobile-navigation p { margin:4px 0 8px; overflow-wrap:anywhere; }
+.graph-navigation section, .graph-mobile-navigation section { border-top:1px solid var(--line); margin-top:14px; padding-top:14px; }
+.graph-navigation .graph-note-row, .graph-mobile-navigation .graph-note-row {
+  display:flex; align-items:center; gap:8px; width:100%; text-align:left; padding:8px 4px;
+  border:0; background:transparent; border-radius:5px; min-height:36px;
+}
+.graph-note-row > span:nth-child(2), .graph-legend-row > span:nth-child(2) { flex:1; min-width:0; overflow-wrap:anywhere; }
+.graph-note-row small, .graph-legend-row small { color:var(--muted); font-variant-numeric:tabular-nums; }
+.graph-note-row:hover, .graph-note-row[aria-pressed=true] { background:var(--toolbar); }
+.graph-note-row[aria-pressed=true] { box-shadow:inset 2px 0 var(--accent); }
+.graph-swatch { display:inline-block; flex:0 0 8px; width:8px; height:8px; border-radius:50%; }
+.graph-legend-row { display:flex; align-items:center; gap:8px; padding:6px 4px; font-size:12px; }
+.graph-actions { display:flex; gap:6px; flex-wrap:wrap; }
+.graph-connections { display:flex; flex-wrap:wrap; gap:16px; }
+.graph-connections section { flex:1 1 160px; min-width:0; }
+.graph-standalone-details:empty { display:none; }
+.graph-standalone-details button { margin:3px; overflow-wrap:anywhere; max-width:100%; }
+.graph-mobile-navigation { display:none; }
+.note-graph-compact { padding:4px; gap:6px; }
+.note-graph-compact .graph-stage { min-height:175px; flex-basis:175px; }
+.note-graph-compact .graph-stage svg { min-height:175px; }
+.note-graph-compact .graph-summary { gap:5px; }
+.note-graph-compact .graph-summary strong { font-size:12px; }
+.note-graph-compact .graph-zoom { bottom:5px; right:5px; gap:0; padding:3px; }
+.note-graph-compact .graph-zoom button { padding:3px 6px; }
+.native-dark .note-graph, .native-dark .graph-navigation { --graph-outgoing:#49cde3; --graph-incoming:#ffa35b; }
+@media (max-width: 760px) {
+  .note-graph { padding:10px; }
+  .note-graph-compact { padding:4px; }
+  .graph-filters { gap:6px; }
+  .graph-filters input { flex-basis:100%; }
+  .graph-filters select { flex:1; max-width:none; width:0; }
+  .graph-summary { gap:6px; }
+  .graph-stage { min-height:300px; flex-basis:300px; }
+  .graph-stage svg { min-height:300px; }
+  .graph-mobile-navigation { display:block; font-size:13px; }
+  .graph-mobile-navigation > summary { cursor:pointer; padding:8px 0; font-weight:600; }
+  .graph-mobile-navigation[open] { max-height:45vh; overflow:auto; }
+  .graph-zoom { right:8px; bottom:8px; }
+}

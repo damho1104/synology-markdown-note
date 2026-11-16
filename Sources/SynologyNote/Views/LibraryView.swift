@@ -11,6 +11,7 @@ struct LibraryView: View {
     @State private var insertNoteLinkRequest = 0
     @SceneStorage("editorModeV2") private var modeValue = EditorMode.read.rawValue
     @FocusState private var searchFocused: Bool
+    @State private var showingGlobalSearch = false
     @State private var showingAdvancedSearch = false
     @State private var showingCreateStack = false
     @State private var initialStackSelection: Set<String> = []
@@ -40,7 +41,7 @@ struct LibraryView: View {
     var body: some View {
         navigationContent
         .onAppear { expandedStacks = stackExpansion.load() }
-        .focusedSceneValue(\.noteActions, NoteActions(newNote: newNote, save: { Task { if let session { await library.save(session) } } }, importNote: { library.importMarkdown() }, exportNote: { if let session { library.exportMarkdown(session) } }, togglePreview: togglePreview, search: { searchFocused = true }, undo: { session?.undoManager.undo() }, redo: { session?.undoManager.redo() }, insertNoteLink: { insertNoteLinkRequest += 1 }, canInsertNoteLink: session?.note.mode == .markdown && session?.note.isTrashed == false && mode.wrappedValue != .read))
+        .focusedSceneValue(\.noteActions, NoteActions(newNote: newNote, save: { Task { if let session { await library.save(session) } } }, importNote: { library.importMarkdown() }, exportNote: { if let session { library.exportMarkdown(session) } }, togglePreview: togglePreview, search: { showingGlobalSearch = true }, undo: { session?.undoManager.undo() }, redo: { session?.undoManager.redo() }, insertNoteLink: { insertNoteLinkRequest += 1 }, canInsertNoteLink: session?.note.mode == .markdown && session?.note.isTrashed == false && mode.wrappedValue != .read))
         .task {
             if library.summaries.isEmpty { await library.load() }
             if selection == nil { selection = rows.first?.id }
@@ -76,6 +77,7 @@ struct LibraryView: View {
         .onChange(of: filter) { _, newFilter in handleFilterChange(newFilter) }
         .onChange(of: library.search) { _, _ in library.searchChanged() }
         .onChange(of: library.profile.storageKey) { _, _ in
+            showingGlobalSearch = false
             selection = nil; session = nil; filter = .all
             graphNavigation = NoteGraphNavigation()
             noteNavigation = NoteNavigationHistory()
@@ -95,6 +97,10 @@ struct LibraryView: View {
         }
         .sheet(isPresented: $showingCreateStack, onDismiss: { initialStackSelection = [] }) {
             StackCreationSheet(initialSelection: initialStackSelection)
+        }
+        .sheet(isPresented: $showingGlobalSearch) {
+            GlobalSearchSheet(library: library, onSelect: openGlobalSearchResult,
+                              onClose: { showingGlobalSearch = false })
         }
         .onChange(of: library.summaries.map(\.id)) { _, ids in if selection == nil { selection = rows.first?.id } else if let selection, !ids.contains(selection) { self.selection = rows.first?.id } }
         .alert(library.errorMessage == nil ? "책장 이름 변경 완료" : "확인이 필요합니다",
@@ -129,7 +135,7 @@ struct LibraryView: View {
                 Button(action: newNote) { IconButtonLabel(title: "새 노트", systemImage: "square.and.pencil") }
                     .disabled(!library.canCreateNotes)
                     .help("새 노트 (⌘N)")
-                Button { searchFocused = true } label: { IconButtonLabel(title: "전체 검색", systemImage: "magnifyingglass") }
+                Button { showingGlobalSearch = true } label: { IconButtonLabel(title: "전체 검색", systemImage: "magnifyingglass") }
                     .help("전체 검색 (⇧⌘F)")
                 Button { showingAdvancedSearch.toggle() } label: { IconButtonLabel(title: "고급 검색", systemImage: "line.3.horizontal.decrease.circle") }
                     .help("고급 검색 및 스마트 메모장 저장")
@@ -194,6 +200,13 @@ struct LibraryView: View {
         if filter == .graph || !library.filtered(filter).contains(where: { $0.id == note.id }) { filter = .all }
         selection = id
         noteNavigation.navigate(from: origin, to: currentLocation)
+    }
+
+    private func openGlobalSearchResult(_ id: UUID) {
+        guard library.summaries.contains(where: { $0.id == id && !$0.isTrashed }) else { return }
+        let destination = noteNavigation.openGlobalSearchResult(id, from: currentLocation)
+        restore(destination)
+        showingGlobalSearch = false
     }
 
     @ViewBuilder private var libraryContent: some View {

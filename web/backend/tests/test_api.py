@@ -654,6 +654,50 @@ def test_nas_logs_share_web_request_id_without_logging_form_data(tmp_path, monke
     assert any(event["event"] == "nas_request_completed" and event["api"] == NOTEBOOK and event["method"] == "list" for event in events)
 
 
+@pytest.mark.parametrize("omitted_arrays", [("shortcuts",), ("tags",), ("shortcuts", "tags")])
+def test_notes_api_accepts_empty_shortcut_and_tag_pages_without_arrays(tmp_path, monkeypatch, omitted_arrays):
+    from urllib.parse import parse_qs
+    import httpx
+    from synonote_web.nas import AUTH, NOTE, NasClient
+
+    shortcut, tag = "SYNO.NoteStation.Shortcut", "SYNO.NoteStation.Tag"
+    info = {api: {"path": "entry.cgi", "minVersion": 1, "maxVersion": version}
+            for api, version in [(AUTH, 6), (NOTE, 3), (shortcut, 1), (tag, 1)]}
+
+    def handler(request):
+        form = {k: v[0] for k, v in parse_qs(request.content.decode()).items()}
+        api = form["api"]
+        if api == "SYNO.API.Info":
+            data = info
+        elif api == AUTH:
+            data = {"sid": "sid"}
+        elif api == NOTE:
+            # Missing inline tags must exercise Tag.list as well as Shortcut.list.
+            data = {"offset": 0, "total": 1, "notes": [{
+                "object_id": "note1", "parent_id": "book1", "title": "hello", "ver": "v1",
+                "encrypt": False, "recycle": False,
+            }]}
+        else:
+            assert api in (shortcut, tag)
+            assert form["version"] == "1" and form["offset"] == "0" and form["limit"] == "500"
+            key = "shortcuts" if api == shortcut else "tags"
+            data = {"offset": 0, "total": 0}
+            if key not in omitted_arrays:
+                data[key] = []
+        return httpx.Response(200, json={"success": True, "data": data})
+
+    monkeypatch.setattr(NasClient, "_client", lambda self: httpx.Client(transport=httpx.MockTransport(handler)))
+    client = TestClient(app_at(tmp_path, NasClient(), nas_url="https://nas.example"))
+    assert post(client, "/api/auth/login", {"username": "alice", "password": "correct"}).status_code == 200
+    response = client.get("/api/notes")
+    assert response.status_code == 200
+    assert response.json() == {"notes": [{
+        "id": "note1", "title": "hello", "notebook_id": "book1", "version": "v1",
+        "locked": False, "trashed": False, "created_at": None, "modified_at": None,
+        "favorite": False, "tags": [], "excerpt": "",
+    }]}
+
+
 def test_stale_request_after_rotation_cannot_delete_the_new_cookie(tmp_path):
     app = app_at(tmp_path, nas_url="https://nas.example")
     client = TestClient(app)

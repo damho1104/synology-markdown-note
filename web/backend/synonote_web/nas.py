@@ -394,6 +394,10 @@ class NasClient(LibraryNasOperations):
             response = cls._post(client, base, path, cls._fields(api, "list", version, login.sid,
                 {"offset": len(rows), "limit": 500}, as_json))
             total, offset, page = response.get("total"), response.get("offset"), response.get(key)
+            # Note Station can omit the array entirely for an empty first page.
+            # Explicit nulls and incomplete/nonempty pages must still be rejected.
+            if key not in response and total == 0 and offset == 0:
+                page = []
             if (type(total) is not int or total < 0 or total > 100000
                     or type(offset) is not int or offset != len(rows) or not isinstance(page, list)
                     or (expected_total is not None and total != expected_total)):

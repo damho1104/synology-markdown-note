@@ -187,9 +187,28 @@ export function NotePreview({
     async function render() {
       let source = html;
       if (markdown !== undefined) {
-        const tokens = marked.lexer(markdown);
-        let line = 1;
-        source = tokens.map(token => {
+        // Match the Mac app's preview-only front matter handling.
+        const lines = markdown.split(/\r\n|\r|\n/);
+        const end = lines[0].replace(/^\uFEFF/, "") === "---"
+          ? lines.findIndex((value, index) => index > 0 && (value === "---" || value === "..."))
+          : -1;
+        let metadata = "";
+        if (end > 0) {
+          const details = document.createElement("details");
+          details.className = "note-frontmatter";
+          details.setAttribute("data-source-line", "1");
+          const summary = document.createElement("summary");
+          summary.textContent = "문서 정보";
+          const pre = document.createElement("pre");
+          const code = document.createElement("code");
+          code.textContent = lines.slice(1, end).join("\n").replace(/^\n+|\n+$/g, "");
+          pre.append(code);
+          details.append(summary, pre);
+          metadata = details.outerHTML;
+        }
+        const tokens = marked.lexer(end > 0 ? lines.slice(end + 1).join("\n") : markdown);
+        let line = end > 0 ? end + 2 : 1;
+        source = metadata + tokens.map(token => {
           const start = line;
           line += (token.raw.match(/\n/g) ?? []).length;
           const list = [token] as TokensList; list.links = tokens.links;
@@ -359,10 +378,11 @@ export function NotePreview({
       }
       const csp = `default-src 'none'; script-src ${linkEnabled ? `'nonce-${nonce}'` : "'none'"}; connect-src 'none'; form-action 'none'; base-uri 'none'; img-src data: blob:; style-src 'unsafe-inline'; font-src ${window.location.origin} data:`;
       const css = `html{overflow-y:scroll;scrollbar-gutter:stable;overflow-anchor:none} :root{color-scheme:${dark ? "dark" : "light"}}body{margin:24px;font:15px/1.75 -apple-system,BlinkMacSystemFont,sans-serif;color:${dark ? "#eee" : "#222"};overflow-wrap:anywhere}pre,code{font-family:ui-monospace,monospace}pre{padding:14px;background:${dark ? "#292929" : "#f4f5f7"};border-radius:6px;white-space:pre-wrap}img,svg{max-width:100%;height:auto}.mermaid{text-align:center;overflow:auto}table{border-collapse:collapse}td,th{border:1px solid #888;padding:6px 10px}blockquote{border-left:3px solid #888;margin-left:0;padding-left:16px}a{color:#3989e8}.diagram-error{color:#c75c49}`;
+      const frontMatterCss = `.note-frontmatter{border:1px solid ${dark ? "#505050" : "#ddd"};border-radius:8px;padding:8px 12px;background:${dark ? "#252525" : "#fafafa"}}.note-frontmatter summary{cursor:pointer;font-weight:600}.note-frontmatter pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:340px;overflow:auto;margin-bottom:2px}`;
       const fonts = `<style>${katexCss}</style>`;
       if (active)
         setPage(
-          `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}">${fonts}<style>${css}</style></head><body>${body.innerHTML}</body></html>`,
+          `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}">${fonts}<style>${css}${frontMatterCss}</style></head><body>${body.innerHTML}</body></html>`,
         );
     }
     void render();

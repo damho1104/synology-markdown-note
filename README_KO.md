@@ -1,6 +1,14 @@
-# Synology Markdown Note
+<h1 align="center">Synology Markdown Note</h1>
 
-[English](README.md) | **한국어**
+<p align="center">
+  <a href="README.md">English</a> | <strong>한국어</strong>
+</p>
+
+<p align="center">
+  <a href="https://buymeacoffee.com/damho1104q">
+    <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" width="217" height="60">
+  </a>
+</p>
 
 **Synology Note Station의 노트를 Markdown으로 작성하고 관리하는 macOS 앱·웹·CLI입니다.**
 

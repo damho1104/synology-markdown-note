@@ -1,5 +1,7 @@
 # Synology Markdown Note 진단 로그
 
+[English](diagnostics.md) | **한국어**
+
 설정 → 진단 → 진단 로그 → 로그 폴더 열기에서 확인한다.
 
 ## 개발자 진단 자료 내보내기

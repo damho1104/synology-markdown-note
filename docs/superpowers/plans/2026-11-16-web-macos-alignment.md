@@ -1,5 +1,7 @@
 # Web/macOS alignment implementation record
 
+**English** | [한국어](2026-11-16-web-macos-alignment.ko.md)
+
 Goal: follow the existing macOS LibraryView/EditorView and published screenshot instead of a separate web design. This continues the already authorized web client implementation.
 
 Reference: Sources/SynologyNote/Views/LibraryView.swift, EditorView.swift, Stores/EditorSession.swift, Sources/NoteCore/NoteListSort.swift, docs/images/markdown-split-preview.png, and the existing web client design.

@@ -1,146 +1,148 @@
-# Synology Markdown Note 웹 클라이언트 설계 초안
+# Synology Markdown Note Web Client Draft Design
 
-- 작성일: 2026-11-15 (Asia/Seoul)
-- 상태: 구현 전 검토안 (NAS 주소 설정·로그인 유지 요구 반영)
-- 기준 작업 저장소: `<repository-root>` (`feature/web-client`, `develop`에서 분기)
+**English** | [한국어](2026-11-15-synonote-web-client-design.ko.md)
 
-## 목적과 범위
+- Written: 2026-11-15 (Asia/Seoul)
+- Status: pre-implementation review proposal (incorporates NAS address configuration and keep-me-signed-in requirements)
+- Working repository: `<repository-root>` (`feature/web-client`, branched from `develop`)
 
-기존 **macOS 앱과 Python CLI를 그대로 유지**하면서 동일한 Synology Note Station 데이터를 사용하는 **세 번째 클라이언트(Web)**를 추가한다. 목표는 macOS 앱의 주요 사용자 기능과 데이터 보호 수준을 웹에서도 제공하는 것이다. 웹 앱은 별도 서버에 Docker로 배포할 수 있고, Synology NAS의 **Container Manager → 프로젝트**에서 `compose.yaml`로도 설치할 수 있어야 한다.
+## Purpose and Scope
 
-- 기존 `Sources/`, `Tests/`, `cli/`의 제품 동작을 변경하지 않는 것이 기본 원칙이다. 필요한 호환성 계약은 `contracts/`에 추가한다.
-- 서버·클라이언트가 서로 다른 기기에서 실행되는 경우와 동일 NAS에서 컨테이너로 실행되는 경우를 모두 지원한다.
-- Note Station이 원본 데이터 저장소다. 웹 전용 SQLite와 브라우저 IndexedDB는 캐시·저장 대기·충돌 복구를 위한 보조 저장소다.
-- 최초 목표 기능: NAS 로그인/OTP, 책장·메모장·노트, Markdown 및 기존 HTML 편집, 이미지·첨부, KaTeX·Mermaid, 자동 저장/오프라인/동기화, 버전 충돌 해결, 검색·스마트 메모장, 태그·즐겨찾기, 링크·백링크·그래프, 이동·휴지통·복원, 가져오기·내보내기, 버전 기록, 설정·진단, 반응형 UI.
-- 암호화된 Note Station 노트의 본문 편집과 공식 앱의 지원되지 않는 위젯 복제는 범위 밖이다. 기존 앱이 보호하는 복잡한 HTML은 웹에서도 보호한다.
-- 다중 사용자에게 공개되는 중앙 SaaS 서비스는 범위 밖이다. 셀프호스팅 배포에서 각 사용자의 NAS 권한과 웹 세션을 분리한다.
-- **설치 인스턴스당 NAS 1대**에만 접속한다. NAS 주소는 Compose 환경변수 또는 웹의 최초 설정에서 정한다. 같은 웹 인스턴스에 로그인하는 사용자는 동일 NAS의 각자 계정을 사용한다.
-- 개발과 설계 문서는 `github/` 저장소의 `feature/web-client` 브랜치에서 관리하고, 검증 후 `develop`으로 통합한다. `main` 및 기존 macOS·CLI 릴리스는 직접 변경하지 않는다.
+Add a **third client (Web)** using the same Synology Note Station data while **keeping the existing macOS app and Python CLI unchanged**. The goal is to provide the macOS app's main user features and level of data protection on the web as well. The web app must be deployable with Docker on a separate server and installable through `compose.yaml` in **Container Manager → Project** on a Synology NAS.
 
-## 검토한 방식
+- The default principle is to leave product behavior in the existing `Sources/`, `Tests/`, and `cli/` unchanged. Add necessary compatibility contracts under `contracts/`.
+- Support both server and client running on separate devices and a container running on the same NAS.
+- Note Station is the authoritative data store. Web-specific SQLite and browser IndexedDB are auxiliary stores for caching, pending saves, and conflict recovery.
+- Initial target features: NAS login/OTP, stacks/notebooks/notes, Markdown and existing HTML editing, images/attachments, KaTeX/Mermaid, autosave/offline/synchronization, version conflict resolution, search/smart notebooks, tags/favorites, links/backlinks/graph, move/trash/restore, import/export, version history, settings/diagnostics, and responsive UI.
+- Body editing for encrypted Note Station notes and reproducing unsupported widgets from the official app are out of scope. Protect complex HTML on the web as the existing app does.
+- A central SaaS service open to multiple users is out of scope. Isolate each user's NAS permissions and web session in self-hosted deployments.
+- Connect to **one NAS per installation instance** only. Set the NAS address through a Compose environment variable or initial web setup. Users signing in to the same web instance use their own accounts on that same NAS.
+- Manage development and design documents on the `feature/web-client` branch of the `github/` repository, then integrate into `develop` after verification. Do not directly change `main` or existing macOS/CLI releases.
 
-| 방식 | 장점 | 단점 / 결정 |
+## Approaches Considered
+
+| Approach | Advantages | Disadvantages / decision |
 | --- | --- | --- |
-| 브라우저에서 NAS WebAPI 직접 호출 | 웹 서버가 단순 | NAS 직접 노출, 브라우저 origin/세션/인증 문제 및 오프라인 동기화 난이도 때문에 채택하지 않음 |
-| **React + FastAPI, 단일 배포 이미지** | 웹 세션을 서버에서 관리하고 Compose 서비스 1개로 설치 가능 | FastAPI와 프런트엔드 자산을 함께 패키징해야 함. **권장안** |
-| 프런트엔드·API·DB를 별도 컨테이너로 분리 | 개별 확장 및 운영에 유리 | NAS 설치 및 볼륨·네트워크 관리가 복잡해 초기 요구에 비해 부담이 큼 |
+| Call NAS WebAPI directly from the browser | Simple web server | Rejected because of direct NAS exposure, browser origin/session/authentication issues, and offline synchronization complexity |
+| **React + FastAPI, single deployment image** | Server-managed web sessions; installable as one Compose service | Requires packaging FastAPI and frontend assets together. **Recommended** |
+| Separate frontend, API, and DB containers | Suited to independent scaling and operations | NAS installation and volume/network management are too complex for the initial requirements |
 
-## 저장소와 실행 구조
+## Repository and Runtime Structure
 
 ```text
-github/                          # 독립 GitHub 저장소 (작업 브랜치: feature/web-client)
-├── Sources/                     # 기존 macOS: 유지
-├── cli/                         # 기존 Python CLI: 유지
-├── contracts/                   # 세 클라이언트 호환성 fixture/계약
+github/                          # Independent GitHub repository (working branch: feature/web-client)
+├── Sources/                     # Existing macOS: retain
+├── cli/                         # Existing Python CLI: retain
+├── contracts/                   # Compatibility fixtures/contracts for all three clients
 ├── web/
 │   ├── frontend/                # React, TypeScript, Vite
-│   ├── backend/                 # FastAPI, NAS 어댑터, 동기화/저장
-│   ├── tests/                   # 브라우저·API·계약·동기화 테스트
-│   ├── Dockerfile               # 멀티스테이지 빌드, 단일 실행 이미지
-│   ├── compose.yaml             # Docker Compose / Container Manager 프로젝트용
-│   ├── .env.example             # 선택 환경 설정 예시, 실제 비밀정보 금지
-│   └── README.md                # 일반 Docker 및 DSM 설치·백업 안내
-├── .github/workflows/           # 이후 Web 테스트와 이미지 게시 연동
-└── docs/superpowers/specs/      # 이 설계 초안
+│   ├── backend/                 # FastAPI, NAS adapter, synchronization/storage
+│   ├── tests/                   # Browser/API/contract/synchronization tests
+│   ├── Dockerfile               # Multi-stage build, single runtime image
+│   ├── compose.yaml             # For Docker Compose / Container Manager projects
+│   ├── .env.example             # Optional configuration examples; no real secrets
+│   └── README.md                # General Docker and DSM installation/backup guide
+├── .github/workflows/           # Later integration of Web tests and image publication
+└── docs/superpowers/specs/      # This draft design
 ```
 
 ```text
 Chrome / Safari / Edge (React + CodeMirror + IndexedDB)
-                      │ HTTPS, 세션 쿠키
+                      │ HTTPS, session cookies
                       ▼
-      FastAPI (프런트 정적 자산 + /api)
-         ├─ 세션/사용자별 NAS 연결
-         ├─ SQLite + 첨부/작업 journal
-         ├─ Note Station API 어댑터
-         └─ 동기화/충돌/원문 검증
+      FastAPI (frontend static assets + /api)
+         ├─ NAS connections per session/user
+         ├─ SQLite + attachment/operation journal
+         ├─ Note Station API adapter
+         └─ Synchronization/conflicts/source verification
                       │ HTTPS
                       ▼
              Synology Note Station
                       ▲
-                 macOS 앱 / CLI
+                 macOS app / CLI
 ```
 
-- 웹 API는 기존 `cli/src/synonote_cli`의 검증된 HTTP·원문 포맷 코드를 **가능한 부분에 한해 의존성으로 사용**한다. 기존 CLI 자체를 웹 서버로 실행하거나 CLI의 전역 자격 증명 저장을 공유하지 않는다.
-- CLI에 없는 작업(동기화 journal, 버전 이력 관리, 책장·휴지통 전체 기능, HTML 보존 편집 등)은 `web/backend/`에 새로 구현한다. 이 영역은 Swift NoteCore의 검증 동작과 계약 fixture를 대조한다.
-- Markdown 편집기: CodeMirror 6, 안전한 미리보기: KaTeX + Mermaid, HTML 편집: 기존 HTML 보호 규칙을 충족하는 별도 편집 모드.
-- React 라우팅/내비게이션은 모든 화면에서 동일한 뒤로/앞으로 이동 상태를 사용한다. 모바일/태블릿에서는 탐색 패널을 재배치한다.
+- The web API **uses the proven HTTP/source-format code in the existing `cli/src/synonote_cli` as a dependency where feasible**. Do not run the existing CLI itself as a web server or share the CLI's global credential storage.
+- Implement operations absent from the CLI (synchronization journal, version history management, full stack/trash functionality, HTML-preserving editing, etc.) in `web/backend/`. Cross-check this area against Swift NoteCore's verified behavior and contract fixtures.
+- Markdown editor: CodeMirror 6; safe preview: KaTeX + Mermaid; HTML editing: a separate editing mode that satisfies existing HTML protection rules.
+- React routing/navigation uses the same back/forward navigation state on every screen. Rearrange navigation panels on mobile/tablet devices.
 
-## NAS 주소 설정과 최초 실행
+## NAS Address Configuration and First Launch
 
-**우선순위:** `NAS_URL` 환경변수(값이 있을 때) → 영속 데이터 볼륨에 저장한 NAS 주소 → 웹 최초 설정 화면.
+**Precedence:** `NAS_URL` environment variable (when nonempty) → NAS address saved in the persistent data volume → initial web setup screen.
 
-| 상태 | 웹에서 보이는 동작 | 설정 저장 방식 |
+| State | Web behavior | Configuration storage |
 | --- | --- | --- |
-| Compose의 `NAS_URL`에 HTTPS 주소 설정 | NAS 주소는 이미 설정된 것으로 표시하고 로그인 화면을 바로 보여 준다. 일반 화면에서 주소 수정은 불가하다. | 환경변수가 우선이며 웹 DB의 기존 주소를 덮어쓰지 않는다. 변경은 Compose 수정·컨테이너 재시작으로 반영한다. |
-| `NAS_URL`이 없거나 빈 문자열, 저장된 주소 있음 | 저장한 NAS 주소로 로그인 화면을 표시한다. | SQLite의 단일 인스턴스 설정에서 로드한다. 컨테이너 재시작·이미지 갱신 후에도 영속 볼륨에서 복원한다. |
-| `NAS_URL`이 없거나 빈 문자열, 저장된 주소 없음 | 초기 설정 화면에서 NAS HTTPS 주소를 입력한다. 연결 확인 후 한 번만 저장하고 로그인 화면으로 이동한다. | 인스턴스 설정 SQLite에 저장한다. 첫 설정은 일회용 초기 설정 코드 등으로 보호하여 임의 방문자의 주소 선점을 막는다. |
+| An HTTPS address is set in Compose's `NAS_URL` | Show the NAS address as already configured and display the login screen immediately. The address cannot be edited from ordinary screens. | The environment variable takes precedence and does not overwrite the existing address in the web DB. Apply changes by editing Compose and restarting the container. |
+| `NAS_URL` is absent or empty; a saved address exists | Display the login screen using the saved NAS address. | Load it from the single-instance settings in SQLite. Restore it from the persistent volume after container restarts and image updates. |
+| `NAS_URL` is absent or empty; no saved address exists | Enter the NAS HTTPS address on the initial setup screen. After a connectivity check, save it once and proceed to login. | Save it in the instance settings SQLite database. Protect initial setup with a one-time setup code or similar mechanism so an arbitrary visitor cannot claim the address setting first. |
 
-- 설정 값은 `https://nas.example.com:5001` 또는 역방향 프록시의 HTTPS 경로를 허용하되 사용자 정보·쿼리·fragment는 거부한다. 연결 전후 호스트/IP 확인, 리디렉션 차단, TLS 인증서 확인 등 서버 측 SSRF 방어가 필수다.
-- 처음 웹에서 입력한 NAS 주소는 **설치 전체에 적용**한다. 개인별 서버 선택 기능은 제공하지 않는다. 관리자의 주소 변경은 별도 보호된 설정 작업으로 제공하고, 변경 시 기존 로그인 세션과 동기화 대기 작업의 안전한 전환/보류를 확인한다.
-- 환경변수에 주소가 있으면 웹 설정 필드는 읽기 전용이며 설정 출처를 표시한다. 빈 값으로 바꾸면 저장된 주소가 있으면 그것을 사용하고, 없으면 초기 설정 화면을 연다. 잘못된 비어 있지 않은 값은 조용히 무시하지 않고 설정 오류로 안내한다.
+- Allow values such as `https://nas.example.com:5001` or an HTTPS path through a reverse proxy, but reject user information, queries, and fragments. Server-side SSRF defenses are mandatory, including host/IP checks before and after connection, blocked redirects, and TLS certificate verification.
+- The NAS address first entered through the web **applies to the whole installation**. Do not provide per-user server selection. Offer administrator address changes as a separate protected configuration operation; verify safe transition/holding of existing login sessions and queued synchronization operations when changing it.
+- When the environment variable contains an address, make the web settings field read-only and display the configuration source. If changed to an empty value, use the saved address if present; otherwise open initial setup. Report invalid nonempty values as configuration errors instead of silently ignoring them.
 
-## 로그인 화면과 '로그인 유지'
+## Login Screen and “Keep Me Signed In”
 
-- UI는 기존 Note Station 웹의 익숙한 흐름을 기준으로 **사용자 이름 / 비밀번호 / 2단계 인증 코드(필요할 때) / `로그인 유지` 체크박스 / 로그인 버튼**을 표시한다. NAS URL은 위 규칙으로 결정하므로 보통 로그인 폼에서 재입력받지 않는다.
-- **체크 해제(기본값)**: 브라우저 세션 쿠키만 발급한다. 브라우저 종료 후 재로그인을 기본 동작으로 하고, 서버는 NAS 비밀번호를 영속 저장하지 않는다. 브라우저의 세션 복원 옵션 때문에 실제 종료 감지가 불확실할 수 있으므로 서버 측 유휴/최대 세션 만료도 둔다.
-- **체크 선택**: 브라우저를 닫고 다시 열거나 웹 컨테이너가 재시작되어도 세션을 복원할 수 있도록 만료 기간(초기 제안: 30일)의 영속 로그인 토큰을 발급한다. 서버는 토큰의 해시만 저장하고, 쿠키는 `HttpOnly`, HTTPS의 `Secure`, 적절한 `SameSite` 옵션을 적용한다. 토큰은 주기적으로 교체하며 로그아웃·관리자 세션 취소·만료 시 폐기한다.
-- NAS SID가 만료되어도 사용자가 선택한 **로그인 유지가 실제로 작동**하려면 재인증 수단이 필요하다. 따라서 체크 선택 시에만 NAS 비밀번호 및 신뢰 기기 ID를 서버에 암호화 저장하여 세션별로 자동 재로그인을 시도하도록 설계한다. 암호키는 생성·영속화·백업·교체 정책이 필요하고, 가능하면 별도 Docker secret/외부 관리 키를 지원한다. **OTP와 NAS SID를 브라우저 저장소나 로그에 저장하지 않는다.** 비밀번호 변경·OTP 재요청·토큰 폐기 등의 경우에는 다시 로그인 화면을 보여 준다.
-- 체크 해제 시 기존 영속 토큰·보관 자격 증명을 남기지 않고 세션 종료 시 폐기한다. 로그인 유지 여부는 브라우저/사용자 세션별로 독립된다. 웹의 `로그인 유지`와 Synology의 `신뢰할 수 있는 기기` 사용 여부는 별개의 개념으로 표시한다.
-- 2FA 코드는 필요할 때 별도 입력 단계로 보여 주고 절대 저장하지 않는다. 사용자별 접근 권한은 NAS 계정이 결정한다. 비밀번호와 디바이스 토큰을 웹이 저장할 수 있다는 점은 체크박스 도움말/설치 문서에 명확하게 고지한다.
+- Base the UI on the familiar existing Note Station web flow: **username / password / two-factor authentication code (when needed) / `Keep me signed in` checkbox / login button**. Since the rules above determine the NAS URL, users normally do not reenter it in the login form.
+- **Unchecked (default)**: issue only a browser session cookie. Require login again after the browser closes by default, and do not persist the NAS password on the server. Browser session restoration options may make actual browser closure detection unreliable, so also enforce server-side idle/maximum session expiry.
+- **Checked**: issue a persistent login token with an expiration period (initial proposal: 30 days) so the session can be restored after closing/reopening the browser or restarting the web container. Store only the token hash on the server; apply `HttpOnly`, HTTPS `Secure`, and an appropriate `SameSite` option to the cookie. Rotate tokens periodically and revoke them on logout, administrator session cancellation, or expiry.
+- Reauthentication is needed for the user's chosen **keep-me-signed-in behavior to actually work** even after the NAS SID expires. Therefore, design automatic per-session re-login using the NAS password and trusted-device ID stored encrypted on the server only when the checkbox is selected. Encryption keys require generation, persistence, backup, and rotation policies; support a separate Docker secret/externally managed key where possible. **Do not store OTPs or NAS SIDs in browser storage or logs.** Show the login screen again on password changes, renewed OTP requests, token revocation, or similar cases.
+- When unchecked, do not leave existing persistent tokens or retained credentials behind; discard them when the session ends. Keep-me-signed-in selection is independent for each browser/user session. Present the web's `Keep me signed in` and Synology's `Trusted device` choice as separate concepts.
+- Show a separate 2FA code entry step when needed and never save the code. NAS accounts determine per-user access permissions. Clearly disclose in the checkbox help/installation documentation that the web app may store passwords and device tokens.
 
-## NAS 데이터·동기화 안전성
+## NAS Data and Synchronization Safety
 
-1. 웹 서버는 인스턴스당 유효한 NAS 주소 하나만 사용한다. 초기 설정 보호, 서버 URL 검증, DNS 재해석/리디렉션 제한, HTTPS 인증서 검증으로 SSRF와 NAS 연결 오용을 막는다.
-2. 사용자 NAS 자격 증명·SID·OTP는 프런트엔드에 반환하지 않는다. 서버 측 세션은 사용자별로 격리하고 쿠키에 HttpOnly/Secure/SameSite를 적용한다. 로그인·쓰기 API에는 CSRF 및 요청 출처를 검사한다. `로그인 유지`를 켠 경우에만 암호화 자격 증명/영속 세션을 저장한다.
-3. 브라우저는 편집 변경을 IndexedDB에 먼저 기록한다. 웹 서버는 사용자·NAS 계정별 SQLite와 첨부 저장소에 전송 대기 상태를 유지한다. 브라우저 종료/새로고침·서버 재시작에서 재생 가능한 범위를 정의한다.
-4. 쓰기는 항상 기준 NAS 버전과 `check_conflict`를 사용한다. 응답 유실 시 재조회·작업 ID·원문 지문으로 실제 반영을 검증하고, 결과가 불명확하면 재시도를 보류한다.
-5. `SourceEnvelope` v1/v2/v3, 보존 블록, 첨부 참조, KaTeX 이미지, Markdown 원문 바이트 검증을 세 클라이언트 공통 계약으로 검증한다.
-6. 충돌 시 NAS 사본과 편집 중 로컬 사본을 모두 보존하여 비교/선택하도록 한다. 암호화/지원 불가 문서는 읽기 전용 또는 편집 차단으로 보호한다.
-7. 브라우저 캐시(오프라인 문서)에 개인정보가 남는 점을 UI에서 알리고, 로그아웃 시 로컬 데이터 삭제/유지 정책과 계정별 격리를 구현한다.
-8. 오프라인 기능(PWA 서비스워커)은 HTTPS 또는 localhost 등 브라우저 보안 컨텍스트에서 동작하는 것으로 정의하고, 백그라운드 동기화의 브라우저 제약을 반영해 재접속 시 확실히 복구한다.
+1. The web server uses only one valid NAS address per instance. Prevent SSRF and misuse of NAS connections through initial setup protection, server URL validation, DNS re-resolution/redirect restrictions, and HTTPS certificate verification.
+2. Do not return user NAS credentials, SIDs, or OTPs to the frontend. Isolate server-side sessions per user and apply HttpOnly/Secure/SameSite to cookies. Check CSRF and request origins on login/write APIs. Store encrypted credentials/persistent sessions only when `Keep me signed in` is enabled.
+3. The browser records edits in IndexedDB first. The web server maintains pending transmission state in SQLite and attachment storage separated by user/NAS account. Define what can be replayed after browser closure/refresh or server restart.
+4. Always use the base NAS version and `check_conflict` for writes. If a response is lost, verify whether the write actually took effect through rereads, operation IDs, and source fingerprints; hold retries when the outcome is uncertain.
+5. Verify `SourceEnvelope` v1/v2/v3, preserved blocks, attachment references, KaTeX images, and Markdown source byte verification as shared contracts across all three clients.
+6. Preserve both the NAS copy and the local copy being edited on conflicts, allowing comparison/selection. Protect encrypted/unsupported documents through read-only mode or blocked editing.
+7. Inform users in the UI that personal information remains in the browser cache (offline documents), and implement a local data deletion/retention policy on logout and per-account isolation.
+8. Define offline functionality (PWA service worker) as operating in browser secure contexts such as HTTPS or localhost, and ensure reliable recovery on reconnection while accounting for browser limitations on background synchronization.
 
 ## Docker Compose / Synology Container Manager
 
-**목표: `compose.yaml` 한 파일을 Container Manager의 프로젝트 설정에 업로드하여 컨테이너 1개로 시작할 수 있는 배포.** 실행 이미지는 릴리스 버전으로 고정하고, 추후 레지스트리에 게시한 멀티아키텍처 이미지(`linux/amd64`, `linux/arm64`)를 사용한다. 이미지 게시 전에는 배포 가능하다고 표시하지 않는다.
+**Goal: a deployment that starts with one container by uploading a single `compose.yaml` file to Container Manager's project settings.** Pin the runtime image to a release version and later use published multi-architecture images (`linux/amd64`, `linux/arm64`). Do not describe deployment as available before image publication.
 
-- `web/compose.yaml`: 이미지 참조, 포트(예: 호스트 `8787` → 컨테이너 `8080`), 재시작 정책, 상태 검사, 영속 데이터 볼륨, 시간대와 선택형 `NAS_URL` 등 최소 설정. CLI, 별도 DB 서버, Redis, 권한 상승, host network는 요구하지 않는다.
-- `web/.env.example`: 일반 Docker Compose 운영자용 설정 예시. `NAS_URL`을 생략하거나 비워 두어도 **웹 최초 설정으로 진행**하므로 `.env` 파일 동반을 강제하지 않는다. Container Manager의 프로젝트 YAML 편집 화면에 `NAS_URL`을 직접 지정할 수도 있다. DSM의 프로젝트 작업 디렉터리에서 상대 경로가 해석되는 점을 문서화한다.
-- 데이터 경로는 SQLite/첨부/작업 journal을 한 영속 마운트 아래에 둔다. NAS에서는 예컨대 프로젝트 전용 공유 폴더를 bind mount하여 백업할 수 있게 안내하고, 파일 소유권/권한 및 업그레이드 백업 절차를 검증한다.
-- 웹 포트의 기본 노출 범위와 DSM 역방향 프록시의 HTTPS 설정을 명시한다. NAS가 자기 자신에 접속할 때 `localhost`가 컨테이너 자신을 가리키므로 DSM의 접근 가능한 LAN 주소/FQDN을 쓰도록 안내한다. 자체 서명/사설 CA는 CA 인증서 마운트를 지원하되 TLS 검증 우회 옵션을 기본으로 제공하지 않는다.
-- Synology에서 Container Manager 패키지를 지원하는 모델/DSM 버전만 대상으로 한다. `amd64`와 `arm64` 이미지를 빌드·테스트하더라도 **모든 NAS 모델에서 동작을 보장하는 것은 아니다**. 배포 검증 매트릭스에서 대상 장비와 이미지 아키텍처를 기록한다.
-- 웹 서버에서 NAS에 나가는 HTTPS 요청이 네트워크·방화벽상 허용되는지 검사하는 연결 진단과 Readiness/Health 엔드포인트를 제공한다.
-- NAS 주소 설정과 `로그인 유지` 정보는 모두 영속 볼륨에 저장된다. Compose 변경·프로젝트 재생성·컨테이너 이미지 교체 뒤에도 유지되도록 볼륨 및 암호키 경로를 문서화한다.
+- `web/compose.yaml`: minimal configuration including image reference, ports (e.g. host `8787` → container `8080`), restart policy, health check, persistent data volume, timezone, and optional `NAS_URL`. Do not require the CLI, a separate DB server, Redis, elevated privileges, or host network.
+- `web/.env.example`: configuration examples for general Docker Compose operators. Omitting or leaving `NAS_URL` empty **proceeds to initial web setup**, so do not require an accompanying `.env` file. `NAS_URL` can also be set directly in Container Manager's project YAML editor. Document that relative paths resolve against the DSM project working directory.
+- Keep SQLite/attachments/operation journals beneath one persistent mount. For NAS deployments, explain how to back up through a bind mount of, for example, a project-specific shared folder; verify file ownership/permissions and upgrade backup procedures.
+- State the web port's default exposure scope and DSM reverse-proxy HTTPS configuration. Explain that `localhost` points to the container itself when the NAS connects to itself, so users must use an accessible DSM LAN address/FQDN. Support mounting CA certificates for self-signed/private CAs, but do not provide a TLS verification bypass option by default.
+- Target only models/DSM versions that support Synology's Container Manager package. Building and testing `amd64` and `arm64` images **does not guarantee operation on every NAS model**. Record target devices and image architectures in the deployment verification matrix.
+- Provide connection diagnostics and Readiness/Health endpoints to check whether the web server's outbound HTTPS requests to the NAS are permitted by the network/firewall.
+- NAS address settings and `Keep me signed in` information are all saved in the persistent volume. Document volume and encryption-key paths so they survive Compose changes, project recreation, and container image replacement.
 
-### 설치·배포 계약
+### Installation and Deployment Contracts
 
-- 일반 Docker: 릴리스 버전의 이미지와 `web/compose.yaml` 제공, `docker compose up -d`로 시작, 백업/업데이트/복구 명령 문서화.
-- Synology: **Container Manager → 프로젝트 → 생성 → YAML 업로드/편집**으로 동일한 Compose 파일 설치. GUI 프로젝트 경로, 포트 충돌, 볼륨 권한, 역방향 프록시 설정을 단계별로 설명.
-- GitHub 릴리스: 버전 태그에 맞는 웹 이미지(GHCR 게시 예정)와 다운로드 가능한 Compose 예시/설치 설명을 함께 제공. 기존 macOS/CLI 릴리스 파이프라인은 유지.
-- 기존 Linux X64 셀프호스팅 러너에서 Web 테스트와 Docker 이미지 게시를 설계하되, `arm64`는 Buildx 교차 빌드 및 에뮬레이션/실장비 검증 가능성을 먼저 확인한다. macOS ARM64 러너는 기존 macOS 검사에 활용한다. 태그/`main` 보호 규칙을 준수한다.
+- General Docker: provide a release-version image and `web/compose.yaml`, start with `docker compose up -d`, and document backup/update/recovery commands.
+- Synology: install the same Compose file through **Container Manager → Project → Create → Upload/Edit YAML**. Explain GUI project paths, port conflicts, volume permissions, and reverse-proxy configuration step by step.
+- GitHub releases: provide a web image matching the version tag (planned GHCR publication), downloadable Compose examples, and installation instructions together. Preserve existing macOS/CLI release pipelines.
+- Design Web tests and Docker image publication on the existing Linux X64 self-hosted runner, but first check whether Buildx cross-builds and emulation/physical-device verification are possible for `arm64`. Use the macOS ARM64 runner for existing macOS checks. Follow tag/`main` protection rules.
 
-## 구현 순서 / 완료 조건 / 예산
+## Implementation Order / Completion Criteria / Budget
 
-| 단계 | 주요 작업 | 단계 검증 | 대략적인 총 입력·출력 토큰 |
+| Phase | Main work | Phase verification | Approximate total input/output tokens |
 | --- | --- | --- | ---: |
-| 1. 공통 계약 | Swift/CLI 기능 지도, API 스키마, 계약 fixture | macOS/CLI/웹 읽기 포맷 일치 | 5만–8만 |
-| 2. 백엔드 | 로그인·OTP, API, 사용자 세션/격리, NAS 작업 | 모의 NAS 인증·읽기/쓰기, 오류 처리 | 10만–18만 |
-| 3. 화면/검색 | 반응형 UI, 책장·메모장·노트, 검색/탐색 | 브라우저 E2E/키보드/한국어 입력 | 12만–20만 |
-| 4. 편집·첨부 | Markdown/HTML, 원문 보존, 수식/이미지/첨부 | macOS/CLI와 왕복·손실 방지 | 20만–36만 |
-| 5. 지식 관리 | 태그, 즐겨찾기, 백링크, 그래프, 휴지통 등 | CRUD/링크/버전 충돌 케이스 | 12만–20만 |
-| 6. 오프라인/동기화 | IndexedDB, 작업 큐, 재시도, 충돌 UI | 단절/재시작/다중 브라우저 검증 | 15만–28만 |
-| 7. 배포/안정화 | 이미지/Compose, GHCR, CI, 보안/성능 검증 | Docker Linux와 실제 Container Manager 테스트 | 13만–25만 |
-| **합계** | **macOS 주요 기능 수준 웹 클라이언트** | **실제 NAS 왕복까지 검증** | **87만–155만** |
+| 1. Shared contracts | Swift/CLI feature map, API schemas, contract fixtures | Matching read formats across macOS/CLI/web | 50,000–80,000 |
+| 2. Backend | Login/OTP, API, user sessions/isolation, NAS operations | Mock NAS authentication/read/write, error handling | 100,000–180,000 |
+| 3. Screens/search | Responsive UI, stacks/notebooks/notes, search/navigation | Browser E2E/keyboard/Korean input | 120,000–200,000 |
+| 4. Editing/attachments | Markdown/HTML, source preservation, math/images/attachments | Round trips with macOS/CLI and loss prevention | 200,000–360,000 |
+| 5. Knowledge management | Tags, favorites, backlinks, graph, trash, etc. | CRUD/links/version conflict cases | 120,000–200,000 |
+| 6. Offline/synchronization | IndexedDB, operation queues, retries, conflict UI | Disconnection/restart/multiple-browser verification | 150,000–280,000 |
+| 7. Deployment/stabilization | Images/Compose, GHCR, CI, security/performance verification | Docker Linux and actual Container Manager tests | 130,000–250,000 |
+| **Total** | **Web client covering the main macOS features** | **Verification through actual NAS round trips** | **870,000–1,550,000** |
 
-예산은 구현·검증·디버깅을 포함한 대략치이며 모델/도구/컨텍스트 재사용 정도에 따라 달라진다. 계획상 기준은 약 **120만 토큰**, 여유 한도는 약 **160만 토큰**으로 본다. Docker/Container Manager 호환성 검증 중 추가 작업이 발생할 수 있다.
+The budget is a rough estimate including implementation, verification, and debugging; it varies with the model, tools, and context reuse. The planning baseline is about **1.2 million tokens**, with a contingency ceiling of about **1.6 million tokens**. Docker/Container Manager compatibility verification may require additional work.
 
-**최종 수용 조건:** `NAS_URL` 설정/미설정 두 경로와 재시작 후 설정 복원, 로그인 유지 체크 해제/선택에 따른 브라우저·컨테이너 재시작 및 NAS 세션 만료 시나리오, macOS 앱과 웹의 동일 노트 연속 편집, 충돌/응답 유실 후 데이터 보존, 첨부·Markdown 원문 무결성, HTML 비파괴 편집, 오프라인 후 재연결, 사용자별 세션 분리, Docker Compose 및 지원 NAS의 Container Manager 실배포와 복구가 모두 확인되어야 한다. 실제 NAS 쓰기 검증은 전용 테스트 노트를 사용한다.
+**Final acceptance criteria:** verify both configured/unconfigured `NAS_URL` paths and configuration restoration after restart; browser/container restarts and NAS session expiry with keep-me-signed-in unchecked/checked; consecutive editing of the same note in the macOS app and web; data preservation after conflicts/lost responses; attachment/Markdown source integrity; nondestructive HTML editing; reconnection after offline use; per-user session isolation; and actual Docker Compose deployment and deployment/recovery through Container Manager on a supported NAS. Use dedicated test notes for actual NAS write verification.
 
-## 구현 시작 전에 검증할 사항
+## Items to Verify Before Implementation
 
-- NAS SSL 인증서/연결 경로/권한, macOS와 웹의 `SourceEnvelope`/HTML/첨부 왕복 계약.
-- CLI Python `NoteStationAPI`를 웹 백엔드에서 세션별로 안전하게 재사용할 수 있는 범위와 스레드/타임아웃 처리.
-- Linux X64 러너가 Docker Buildx로 arm64 이미지를 빌드·스모크 테스트할 수 있는지, 테스트 가능한 Synology 모델·아키텍처.
-- 초기 배포는 **설치당 NAS 1곳**으로 제한한다. 주소는 `NAS_URL`이 우선이며, 없을 때는 웹 최초 설정에서 관리자 인증 후 저장한다. 초기 설정 코드 발급·표시 방법과 설정 변경 시 큐/세션 정책은 구현 상세 설계에서 확정한다.
-- `로그인 유지`에 필요한 NAS 자격 증명의 암호화 키 수명주기, 계정별 폐기와 재로그인 오류 처리, HTTPS 역방향 프록시의 쿠키 동작을 검증한다.
+- NAS SSL certificate/connection path/permissions, and `SourceEnvelope`/HTML/attachment round-trip contracts between macOS and web.
+- The extent to which the CLI's Python `NoteStationAPI` can be safely reused per session in the web backend, including thread/timeout handling.
+- Whether the Linux X64 runner can build and smoke-test arm64 images with Docker Buildx, and which Synology models/architectures are available for testing.
+- Limit the initial deployment to **one NAS per installation**. Prefer `NAS_URL`; otherwise save the address after administrator authentication during initial web setup. Finalize initial setup code issuance/display and queue/session policies for configuration changes in the detailed implementation design.
+- Verify the encryption-key lifecycle for NAS credentials required by `Keep me signed in`, per-account revocation and re-login error handling, and cookie behavior behind an HTTPS reverse proxy.
 
-이 문서는 구현 계획의 기준이 되는 **검토용 설계안**이다. 실행 코드, Docker 이미지, Compose 파일의 실제 구현과 릴리스는 이후 단계에서 수행한다.
+This document is a **design proposal for review** that forms the basis for the implementation plan. Actual implementation and release of runtime code, Docker images, and Compose files take place in later phases.

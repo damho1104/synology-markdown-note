@@ -1,5 +1,7 @@
 # GitHub 자동 릴리스
 
+[English](github-release.md) | **한국어**
+
 `.github/workflows/release.yml`은 GitHub 저장소에 등록한 **셀프호스팅 러너**에서 실행합니다. 버전 검증·Linux 빌드·릴리스 게시에는 `[self-hosted, Linux, X64, docker-compose]`, macOS 빌드에는 `[self-hosted, macOS, ARM64]` 라벨을 사용합니다. Linux 러너에는 Docker가, macOS 러너에는 호환되는 Swift 개발 도구가 필요합니다.
 
 ## 태그와 버전
@@ -51,7 +53,7 @@ git push origin v1.2.17
 
 최초 게시 후 GitHub Packages에서 `synology-md-note-web` 패키지가 **Public**인지 확인합니다. 비공개 상태에서는 설치자가 인증 없이 이미지를 내려받을 수 없습니다. 다른 소유자 계정으로 포크하여 게시한다면 Compose와 `.env.example`의 GHCR 소유자 부분도 맞춥니다.
 
-사용자용 다운로드·실행 명령은 [셀프호스팅 설치 안내](../web/SELF-HOSTING.md)에 있습니다. 워크플로 파일을 작성한 상태와 실제 태그 실행·이미지 게시 성공은 구분해서 확인합니다.
+사용자용 다운로드·실행 명령은 [셀프호스팅 설치 안내](../web/SELF-HOSTING_KO.md)에 있습니다. 워크플로 파일을 작성한 상태와 실제 태그 실행·이미지 게시 성공은 구분해서 확인합니다.
 
 ## Linux 공용 실행 파일 검증
 

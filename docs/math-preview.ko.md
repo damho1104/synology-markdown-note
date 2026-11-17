@@ -1,5 +1,7 @@
 # LaTeX 수식 미리보기
 
+[English](math-preview.md) | **한국어**
+
 Markdown 미리보기에서 [KaTeX](https://katex.org/)로 수식을 표시한다. KaTeX 0.19.0과 글꼴을 앱에 포함하므로 인터넷 연결과 별도 설정이 필요 없다.
 
 인라인 수식은 `$…$` 또는 `\(…\)`로 작성한다.

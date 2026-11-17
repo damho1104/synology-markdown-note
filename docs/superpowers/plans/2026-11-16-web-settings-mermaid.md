@@ -1,5 +1,7 @@
 # Web settings and Mermaid correction
 
+**English** | [한국어](2026-11-16-web-settings-mermaid.ko.md)
+
 Goal: settings gear opens a real Mac-like preferences dialog; Mermaid text stays aligned and themes retain readable labels.
 
 User direction: continue implementation matching the Mac app. Implement directly using existing React/CodeMirror/Mermaid, without another design approval round.

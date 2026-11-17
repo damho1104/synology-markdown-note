@@ -1,5 +1,7 @@
 # NAS session invalidation and diagnostics
 
+**English** | [한국어](2026-11-16-web-session-logging.ko.md)
+
 User requirement: NAS login failure must log the web user out; logs must expose the failing request and actual NAS error. New Aside login read successfully; original failing browser returned NAS_API_ERROR with no diagnostic, so its precise upstream cause remains unproven.
 
 - [x] Add regression coverage for transient expiry, repeated expiry after one remembered read retry, every failed NAS relogin including network/API errors, cookie removal and token replay rejection.

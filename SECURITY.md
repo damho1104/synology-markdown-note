@@ -1,7 +1,9 @@
-# 보안 취약점 제보
+# Reporting security vulnerabilities
 
-인증 우회, NAS 데이터 손상, 사용자 정보 노출처럼 보안에 영향을 줄 수 있는 문제는 **공개 Issue에 상세 재현 방법·토큰·로그를 올리지 말아 주세요.**
+**English** | [한국어](SECURITY_KO.md)
 
-GitHub 저장소의 **Security → Advisories → Report a vulnerability** 기능이 활성화되어 있으면 이를 통해 비공개로 제보해 주세요. 기능을 사용할 수 없다면 민감한 세부사항을 제외하고 Issue를 열어 비공개 연락 방법을 요청해 주세요.
+For issues that may affect security, such as authentication bypass, NAS data corruption, or disclosure of user information, **do not post detailed reproduction steps, tokens, or logs in a public issue.**
 
-제보에는 영향받는 버전, 문제의 일반적 설명, 재현 조건과 예상 영향을 포함해 주세요. NAS 실제 계정·비밀번호·토큰, 개인 노트, 내부 IP 또는 원본 진단 로그는 첨부하지 말아 주세요.
+If the repository's **Security → Advisories → Report a vulnerability** feature is enabled, use it to report the issue privately. If it is unavailable, open an issue without sensitive details and ask for a private contact method.
+
+Include the affected version, a general description of the issue, reproduction conditions, and the expected impact. Do not attach real NAS accounts, passwords, tokens, personal notes, internal IP addresses, or raw diagnostic logs.

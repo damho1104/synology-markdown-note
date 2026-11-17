@@ -1,5 +1,7 @@
 # synonote CLI 0.1.0
 
+[English](cli-0.1.0.md) | **한국어**
+
 태그: `cli-v0.1.0` (macOS 앱 릴리스 `1.2.2`와 별도)
 
 Python 3.13 기반의 독립적인 Synology Note Station Markdown 업로드·다운로드 CLI 첫 배포다. `uv`로 패키지를 관리하며 PyInstaller `--onefile` 실행 파일을 지원한다.

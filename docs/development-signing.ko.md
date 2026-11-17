@@ -1,5 +1,7 @@
 # 개발 빌드의 자동 로그인
 
+[English](development-signing.md) | **한국어**
+
 UI를 다시 빌드한 뒤 키체인 확인을 반복하던 원인은 임시 서명과 macOS의 키체인 partition 검사다. 자체 서명 인증서로 designated requirement를 고정해도, Apple 팀 식별자가 없는 프로그램에는 빌드별 `cdhash` partition이 적용될 수 있다. 실제 검사에서도 본문이 다른 두 프로그램의 키체인 공유가 거부됐다.
 
 현재 빌드는 다음 방식으로 처리한다.

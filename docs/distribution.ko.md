@@ -1,5 +1,7 @@
 # Synology Markdown Note 설치 및 배포
 
+[English](distribution.md) | **한국어**
+
 ## 지원 환경
 
 macOS 앱은 **Apple Silicon(arm64), macOS 14 이상**을 대상으로 합니다. Synology NAS에 Note Station이 설치되어 있어야 하며, NAS 서버에는 HTTPS로 연결합니다. CLI는 별도의 소스 빌드 또는 검증된 릴리스 실행 파일을 사용할 수 있습니다.
@@ -35,7 +37,7 @@ uv run --locked pytest -q tests
 uv run --locked python build_onefile.py
 ```
 
-빌드 실행 파일은 `cli/dist/synonote`이며, 실행 환경과 같은 OS·아키텍처에서 빌드해야 합니다. 사용법은 [CLI 문서](../cli/README.md)를 참고하세요.
+빌드 실행 파일은 `cli/dist/synonote`이며, 실행 환경과 같은 OS·아키텍처에서 빌드해야 합니다. 사용법은 [CLI 문서](../cli/README_KO.md)를 참고하세요.
 
 ## 릴리스 검증 범위
 

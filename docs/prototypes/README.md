@@ -1,27 +1,29 @@
-# Markdown macOS 앱 UI/UX 시안
+# Markdown macOS App UI/UX Concepts
 
-생성일: 2026-10-10 (Asia/Seoul)
-도구: 내장 Image Gen. 앱 구현이나 실행 화면이 아닌 검토용 이미지다.
-기준: `../superpowers/specs/2026-10-10-markdown-macos-design.md`.
+**English** | [한국어](README_KO.md)
 
-채팅에 표시된 순서대로 번호를 부여했다.
+Created: 2026-10-10 (Asia/Seoul)
+Tool: built-in Image Gen. These are review images, not an implemented app or screenshots of a running app.
+Reference: `../superpowers/specs/2026-10-10-markdown-macos-design.md`.
 
-| 번호 | 파일 | 화면 구성 |
+Numbered in the order they appeared in the chat.
+
+| Number | File | Screen layout |
 | --- | --- | --- |
-| 1 | [01-native-library-v1.png](01-native-library-v1.png) | 노트북·노트 목록·Markdown 원문을 함께 보여주는 기본 화면 |
-| 2 | [02-parallel-writing-v1.png](02-parallel-writing-v1.png) | 원문과 렌더링 결과를 나란히 확인하는 분할 화면 |
-| 3 | [03-focused-writing-v1.png](03-focused-writing-v1.png) | 목록을 접은 다크 모드 편집 화면과 문서 정보 인스펙터 |
+| 1 | [01-native-library-v1.png](01-native-library-v1.png) | Default screen showing notebooks, the note list, and Markdown source together |
+| 2 | [02-parallel-writing-v1.png](02-parallel-writing-v1.png) | Split screen showing source and rendered output side by side |
+| 3 | [03-focused-writing-v1.png](03-focused-writing-v1.png) | Dark-mode editing screen with the lists collapsed and a document information inspector |
 
-## 공통 프롬프트 방향
+## Shared Prompt Direction
 
-1440×1024 비율의 실제 macOS 앱처럼 보이는 단일 화면. 한글 UI, 시스템 글꼴과 원문용 고정폭 글꼴, 가벼운 목록과 구분선, 읽을 수 있는 텍스트 크기, 과한 카드나 장식 배제. Note Station 서버를 유지하는 새 Markdown 클라이언트. 사용자 실제 노트 대신 가상의 프로젝트 기록 사용. 날짜 기준 2026-10-10. 원문/분할/읽기 전환, 노트 탐색, 로컬 저장과 NAS 반영 상태 구분.
+A single screen at a 1440×1024 aspect ratio that looks like a real macOS app. Korean UI, a system font and a monospaced font for source, lightweight lists and dividers, readable text sizes, and no excessive cards or decoration. A new Markdown client that keeps the Note Station server. Use fictional project records instead of the user's actual notes. Reference date: 2026-10-10. Source/split/read switching, note navigation, and distinct local-save and NAS-update states.
 
-시안별 프롬프트 방향:
+Prompt direction for each concept:
 
-1. Native Library: 밝은 macOS 3단 목록, 파란 선택 표시, 넓은 원문 편집기, 인스펙터 닫힘. 하단에 로컬 저장됨과 NAS 반영됨.
-2. Parallel Writing: 좁은 탐색 영역, 청록색 선택 표시, 같은 문서의 원문과 미리보기, 체크리스트와 표. 하단에 로컬 저장됨과 NAS 반영됨.
-3. Focused Writing: 흑연색 다크 모드와 절제된 보라색 강조, 노트 목록 다시 열기 버튼, 넓은 편집기, 문서 정보·목차·첨부 인스펙터. 오프라인이어도 로컬 저장은 완료되고 NAS 연결을 기다린다는 상태.
+1. Native Library: bright macOS three-column lists, blue selection, a spacious source editor, and a closed inspector. Locally saved and updated on NAS states at the bottom.
+2. Parallel Writing: narrow navigation area, teal selection, source and preview of the same document, checklists and tables. Locally saved and updated on NAS states at the bottom.
+3. Focused Writing: graphite dark mode with restrained purple accents, a button to reopen the note list, a spacious editor, and an inspector for document information, table of contents, and attachments. A state indicating that local saving is complete even offline and the app is waiting for the NAS connection.
 
-## 검토 범위
+## Review Scope
 
-이미지에서 정보 위계, 여백, 한글 가독성, 선택 상태, 보기 모드, 저장 상태 구분을 검토했다. 클릭 동작, 실제 키보드 탐색, VoiceOver, 원문/미리보기 내용 일치, 창 크기 대응은 구현 후 별도 검증해야 한다. 생성 이미지의 문법 강조와 체크박스 표현은 개념이며 원문 편집의 정확한 동작을 보증하지 않는다.
+The images were reviewed for information hierarchy, spacing, Korean readability, selection states, view modes, and the distinction between save states. Click behavior, actual keyboard navigation, VoiceOver, source/preview content consistency, and window resizing require separate verification after implementation. Syntax highlighting and checkbox representations in the generated images are conceptual and do not guarantee the exact behavior of source editing.

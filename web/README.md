@@ -1,94 +1,96 @@
 # Synology Markdown Note Web
 
-설치와 운영 절차는 [셀프호스팅 안내](SELF-HOSTING.md)를 참고하세요. 환경변수, 기존 Compose 이전, HTTPS 프록시, 사설 CA, 백업·복원을 예시와 함께 설명합니다.
+**English** | [한국어](README_KO.md)
 
-macOS 앱의 `LibraryView`·`EditorView`를 기준으로 만든 웹 클라이언트입니다. 책장 아래 메모장을 펼치는 사이드바, 제목·추가 날짜·수정 날짜 정렬, 원문·분할·읽기 보기, CodeMirror Markdown 편집, Mermaid 손그림 다이어그램, KaTeX 미리보기, 노트 정보 패널, 내부 링크·그래프·백링크, 첨부 다운로드를 제공합니다. 즐겨찾기·태그 변경, 휴지통 이동/복원, 노트 이동, 책장·메모장 생성·이름 변경·이동을 지원합니다.
+See the [self-hosting guide](SELF-HOSTING.md) for installation and operation. It explains environment variables, migration from an existing Compose setup, HTTPS proxies, private CAs, and backup and restore with examples.
 
-## 화면·편집기 설정
+This web client is based on the macOS app's `LibraryView` and `EditorView`. It provides a sidebar that expands notebooks under bookshelves; sorting by title, date added, and date modified; source, split, and reading views; CodeMirror Markdown editing; Mermaid hand-drawn diagrams; KaTeX previews; a note information panel; internal links, graphs, and backlinks; and attachment downloads. It supports changing favorites and tags, moving notes to and restoring them from the trash, moving notes, and creating, renaming, and moving bookshelves and notebooks.
 
-설정 맨 아래 **앱 정보 → 버전**에서 현재 앱 버전을 확인할 수 있습니다.
+## Appearance and editor settings
 
-사이드바 아래 톱니바퀴는 노트 정보 패널과 별개의 설정 팝업을 엽니다. 화면 모드(시스템·라이트·다크), 편집기 글꼴 크기(11–22px), Markdown 줄 번호·자동 줄바꿈, Mermaid 기본/스케치 스타일과 색상 테마(화면 모드에 맞춤·라이트·다크·무채색·포레스트)를 설정합니다. 변경은 즉시 반영하고 이 브라우저의 localStorage에 저장합니다. 시스템 모드는 OS 화면 변경을 따라갑니다. 설정을 바꾸어도 편집 중인 본문·기준 버전은 유지하며 NAS에 저장하지 않습니다.
+You can check the current app version under **About → Version** at the bottom of Settings.
 
-Mermaid SVG는 글자 배치에 사용한 폰트와 정렬·색상 스타일을 유지하며, 표시 속성만 허용하고 각 SVG 안으로 범위를 제한합니다. 외부 리소스·스타일 로딩, 스크립트, foreignObject는 허용하지 않습니다.
+The gear at the bottom of the sidebar opens a settings popover separate from the note information panel. You can configure appearance (system, light, or dark), editor font size (11–22px), Markdown line numbers and line wrapping, and Mermaid's default/sketch style and color theme (match appearance, light, dark, monochrome, or forest). Changes take effect immediately and are saved in this browser's localStorage. System mode follows OS appearance changes. Changing settings preserves the text being edited and its base version and does not save them to the NAS.
 
-## 패널과 그래프
+Mermaid SVGs retain the fonts used for text placement and their alignment and color styles. Only presentation properties are allowed, and their scope is restricted to each SVG. External resource and style loading, scripts, and foreignObject are not allowed.
 
-상단 돋보기는 전체 노트 검색창을 엽니다. 패널이 접혔거나 그래프 화면이어도 동작하며, 휴지통을 제외한 전체 목록의 제목·미리보기·태그를 검색합니다. 이미 불러온 목록을 사용하므로 검색 입력 중 NAS 본문을 추가 조회하지 않습니다. 결과를 선택하면 메모장·태그 범위를 해제해 해당 노트를 열고, 공통 뒤로 가기로 이전 화면과 검색 상태를 복원합니다. 창 닫기·Esc·배경 클릭으로 검색을 취소할 수 있으며 편집 중인 내용은 유지합니다.
+## Panels and graphs
 
-상단의 뒤로·앞으로 버튼은 노트·책장·메모장·즐겨찾기·태그·휴지통·그래프를 하나의 이동 기록으로 다룹니다. 그래프 안의 노트 선택·주변 보기·연결 깊이·메모장/태그 필터·미연결 표시 변경도 기록합니다. 검색 입력·확대·드래그는 현재 단계만 갱신하며, 복귀할 때 검색어와 그래프 상태를 함께 복원합니다. 뒤로 간 뒤 새 기능으로 이동하면 이전 앞으로 기록을 지웁니다. 이동할 기록이 없는 버튼은 비활성화하며, 편집 중 공통 버튼을 누르면 자동 저장이 확인된 뒤 이동합니다. 노트 본문과 자격 정보는 이동 기록에 넣지 않습니다.
+The magnifying glass at the top opens a search dialog for all notes. It works even when panels are collapsed or the graph is displayed, and searches titles, previews, and tags across the entire list excluding the trash. It uses the list already loaded, so typing a search does not fetch additional note bodies from the NAS. Selecting a result clears notebook and tag scopes and opens that note; the shared Back button restores the previous screen and search state. You can cancel the search by closing the dialog, pressing Esc, or clicking the backdrop, while preserving your edits.
 
-책장·노트 목록 패널의 상단 오른쪽 경계에 있는 접기 버튼으로 각 패널을 접습니다. 접힌 패널의 펼치기 버튼은 해당 경계에 남습니다. 모바일에서는 책장 메뉴와 별도의 노트 목록 전환 버튼을 사용합니다. 책장 만들기·노트북 추가는 목록 위 별도의 강조 버튼 영역에 표시합니다. 접은 상태는 이 브라우저에 저장합니다.
+The Back and Forward buttons at the top treat notes, bookshelves, notebooks, favorites, tags, trash, and graphs as a single navigation history. They also record changes to note selection, neighborhood view, connection depth, notebook/tag filters, and the display of unconnected notes within the graph. Search input, zooming, and dragging only update the current entry; returning restores both the search query and graph state. Navigating somewhere new after going back clears the previous forward history. Buttons are disabled when there is no corresponding history, and clicking the shared buttons while editing waits for confirmed autosave before navigating. Note bodies and credentials are not included in navigation history.
 
-로그인 후 노트 목록을 불러오면 전체 그래프 방문 여부와 관계없이 백그라운드에서 링크 인덱싱을 시작합니다. 노트 편집·검색·화면 이동 중에도 이어지며, 로그아웃하거나 웹 앱을 닫으면 중단합니다. 다음 접속에서는 서버에 저장된 진행 결과를 재사용합니다. 목록 아래에 진행률과 실패 시 재시도를 표시합니다. 전체 그래프와 로컬 그래프는 이 작업을 공유하므로 화면을 열 때마다 별도로 인덱싱하지 않습니다. 자동 저장으로 버전이 바뀌면 진행 중인 묶음을 중단하지 않고 완료 후 변경분을 확인합니다.
+Use the collapse buttons at the upper-right edges of the bookshelf and note list panels to collapse each panel. A collapsed panel's expand button remains at that edge. On mobile, use the bookshelf menu and a separate note list toggle. Create bookshelf and Add notebook appear in a separate highlighted button area above the list. The collapsed state is saved in this browser.
 
-전체 그래프는 노트 목록과 저장된 링크를 먼저 표시하고, 아직 읽지 않은 노트의 링크를 작은 묶음으로 인덱싱합니다. 최초 실행에서도 전체 본문 조회가 끝날 때까지 화면을 막지 않으며 `노트 링크 인덱싱 중… 완료/전체` 진행률을 표시합니다. 본문 조회는 한 묶음당 최대 8개, 동시 최대 4개로 제한합니다. 중간에 실패하면 수집된 그래프를 유지하고 다시 시도할 수 있습니다.
+Once the note list loads after login, link indexing starts in the background whether or not you have visited the full graph. It continues while you edit notes, search, and navigate, and stops when you log out or close the web app. The next visit reuses progress saved on the server. Progress and a retry option on failure appear below the list. The full and local graphs share this work, so opening a view does not trigger separate indexing each time. If autosave changes a version, the current batch finishes without interruption and then checks for changes.
 
-링크 인덱스는 NAS·계정별로 구분해 서버 SQLite에 암호화하여 보관합니다. 재진입·서버 재시작 후에는 목록의 버전을 비교해 새 노트와 변경된 노트만 읽습니다. 일반 노트 열기와 저장에서 이미 읽은 결과도 재사용합니다. macOS의 로컬 SQLite 파일을 동기화할 필요는 없습니다. 최초 인덱싱에는 각 노트의 링크를 확인하기 위한 NAS 조회가 필요합니다.
+The full graph first displays the note list and saved links, then indexes links in unread notes in small batches. Even on the first run, it does not block the screen until all note bodies have been fetched, and displays progress as `노트 링크 인덱싱 중… 완료/전체` (Indexing note links… completed/total). Body fetches are limited to at most 8 per batch and at most 4 concurrently. If a batch fails, the collected graph is retained and you can retry.
 
-문서 ID·NAS 노트 ID 링크와 고유한 `제목.md` 링크를 연결하며, 같은 제목이 여럿이면 임의로 연결하지 않습니다. 메모장·태그 필터, 로컬 그래프의 연결 깊이, 연결 없는 노트 표시를 지원합니다. 전체 그래프에서는 가운데 노트 목록을 맥 앱과 같은 노트 연결 지도 패널로 전환합니다. 주요 노트·검색 결과·선택 노트의 들어오는/나가는 연결·메모장 색상 범례를 표시하고, 캔버스의 노드 색과 연결 방향 강조를 공유합니다.
+The link index is encrypted in the server's SQLite database, separated by NAS and account. After reentry or a server restart, it compares list versions and reads only new and changed notes. It also reuses results already read when opening and saving notes normally. There is no need to synchronize the macOS local SQLite file. Initial indexing requires NAS requests to check each note's links.
 
-## 실행
+Links using document IDs, NAS note IDs, and unique `title.md` filenames are connected; if multiple notes have the same title, no arbitrary connection is made. Notebook and tag filters, connection depth for the local graph, and showing unconnected notes are supported. In the full graph, the middle note list becomes a note connection map panel like the Mac app's. It shows key notes, search results, incoming/outgoing connections for the selected note, and a notebook color legend, sharing node colors and connection-direction highlighting with the canvas.
 
-[빠른 설치 명령](SELF-HOSTING.md#빠른-설치)으로 Compose와 `.env`만 내려받아 실행할 수 있습니다. 소스 빌드 없이 GHCR의 `synology-md-note-web:latest` 이미지를 사용합니다. NAS 주소는 실행 후 웹에서 한 번 입력해도 됩니다.
+## Running
+
+Use the [quick installation commands](SELF-HOSTING.md#quick-installation) to download just Compose and `.env` and start the service. It uses the `synology-md-note-web:latest` image from GHCR without building from source. You can also enter the NAS address once in the web interface after startup.
 
 ```sh
 docker compose up -d
 docker compose exec web cat /data/setup-code
 ```
 
-브라우저에서 `http://localhost:8787`을 열고 NAS 주소와 위 초기 설정 코드를 입력합니다. 다른 PC에서 접근하려면 `.env.example`을 `.env`로 복사하고 `WEB_BIND_ADDRESS=0.0.0.0`을 설정하거나 기존 HTTPS 프록시를 연결하세요. 공개 GHCR 이미지를 사용하므로 소스 빌드 없이 실행합니다.
+Open `http://localhost:8787` in a browser and enter the NAS address and the initial setup code above. To access it from another PC, copy `.env.example` to `.env` and set `WEB_BIND_ADDRESS=0.0.0.0`, or connect your existing HTTPS proxy. It runs from the public GHCR image without a source build.
 
-**HTTP/HTTPS 쿠키와 접속 origin은 자동 처리합니다. `WEB_PUBLIC_ORIGIN`, `WEB_COOKIE_SECURE`를 일반 설치에서 설정할 필요가 없습니다.** HTTP 접속은 일반 HttpOnly 쿠키, HTTPS 접속은 Secure/HttpOnly `__Host-` 쿠키를 사용합니다. 상태 변경 요청은 브라우저 Origin의 호스트·포트와 요청 Host가 같아야 하며 CSRF 토큰도 검사합니다. HTTPS 역방향 프록시는 브라우저가 사용한 Host를 그대로 전달하세요. 임의 `X-Forwarded-*` 헤더를 신뢰하지 않습니다.
+**HTTP/HTTPS cookies and the access origin are handled automatically. Normal installations do not need to set `WEB_PUBLIC_ORIGIN` or `WEB_COOKIE_SECURE`.** HTTP access uses regular HttpOnly cookies; HTTPS access uses Secure/HttpOnly `__Host-` cookies. For state-changing requests, the browser Origin's host and port must match the request Host, and a CSRF token is also checked. An HTTPS reverse proxy must forward the Host used by the browser unchanged. Arbitrary `X-Forwarded-*` headers are not trusted.
 
-0.2.x의 Compose를 재사용한다면 새 `docker-compose.yaml`로 교체하세요. 예전 YAML을 유지해야 하면 `WEB_COOKIE_SECURE=auto`, `WEB_PUBLIC_ORIGIN=`으로 두어 자동 모드를 선택할 수 있습니다. 프록시가 Host를 바꿔야 하는 특수 배포만 컨테이너 환경변수 `WEB_PUBLIC_ORIGIN`에 프로토콜을 포함한 정확한 origin을 지정합니다. 이전의 명시적 `WEB_COOKIE_SECURE=true/false`도 호환용으로 지원합니다.
+If you are reusing Compose from 0.2.x, replace it with the new `docker-compose.yaml`. If you must retain the old YAML, select automatic mode with `WEB_COOKIE_SECURE=auto` and `WEB_PUBLIC_ORIGIN=`. Only special deployments where the proxy must change Host should set the container environment variable `WEB_PUBLIC_ORIGIN` to the exact origin including the protocol. Previous explicit `WEB_COOKIE_SECURE=true/false` settings remain supported for compatibility.
 
-## NAS 연결
+## NAS connection
 
-- `NAS_URL`이 비어 있으면 웹 최초 설정을 사용합니다. 설정한 NAS 주소는 SQLite에 보존됩니다. 환경변수에 주소를 지정하면 그 값이 우선입니다.
-- 내부망 NAS 또는 HTTP NAS 연결을 쓰는 경우에만 `NAS_ALLOW_PRIVATE=true`로 설정합니다. false이면 HTTP와 사설 주소 연결을 차단합니다. 웹 브라우저의 HTTP/HTTPS와 NAS 연결의 HTTP/HTTPS는 별개입니다.
-- HTTP NAS에서는 비밀번호·OTP·세션·노트 전송이 암호화되지 않습니다. 신뢰하는 내부망에서 사용하세요. 연결 경고는 X로 닫을 수 있으며 이 브라우저에서 닫은 상태를 기억합니다. NAS 주소가 바뀌면 숨김 상태를 초기화합니다.
-- 사설 CA는 파일을 읽기 전용 마운트하고 `NAS_CA_FILE`을 지정합니다. `docker-compose.yaml`의 선택 CA 마운트 예시는 [셀프호스팅 안내](SELF-HOSTING.md#7-사설-ca--자체-서명-인증서)를 참고하세요. HTTPS 인증서 검증을 끄는 옵션은 없습니다.
-- SSRF 방어를 위해 DNS 주소를 검증한 뒤 IP를 고정해 연결합니다. 루프백·링크 로컬·메타데이터 주소와 리디렉션은 허용하지 않습니다. 컨테이너의 `localhost`는 NAS가 아닌 컨테이너 자신입니다.
+- If `NAS_URL` is empty, use the initial web setup. The configured NAS address is retained in SQLite. An address specified in the environment variable takes precedence.
+- Set `NAS_ALLOW_PRIVATE=true` only when using a NAS on a private network or an HTTP NAS connection. When false, HTTP and private-address connections are blocked. The browser's HTTP/HTTPS connection and the NAS connection's HTTP/HTTPS are separate.
+- With an HTTP NAS, passwords, OTPs, sessions, and notes are transmitted without encryption. Use it on a trusted private network. You can dismiss the connection warning with X, and this browser remembers the dismissal. Changing the NAS address resets the hidden state.
+- For a private CA, mount the file read-only and specify `NAS_CA_FILE`. See the [self-hosting guide](SELF-HOSTING.md#optional-private-ca-certificate) for the optional CA mount example in `docker-compose.yaml`. There is no option to disable HTTPS certificate verification.
+- To defend against SSRF, DNS addresses are validated and connections are pinned to an IP. Loopback, link-local, and metadata addresses and redirects are not allowed. A container's `localhost` refers to the container itself, not the NAS.
 
-## 저장과 호환성
+## Saving and compatibility
 
-편집을 멈춘 뒤 0.8초가 지나면 NAS에 자동 저장합니다. 별도의 저장·편집 시작·취소 버튼은 없으며, 원문/분할 보기에서 바로 편집합니다. 저장 중에도 입력할 수 있고, 응답 대기 중 바뀐 내용은 확인된 새 버전을 기준으로 이어서 저장합니다. 한글 조합 중에는 저장을 기다립니다. 하단에 저장 대기·진행·완료·중단 상태를 표시합니다. 노트를 이동하거나 로그아웃할 때도 남은 변경을 먼저 저장합니다. 충돌이나 결과 불확실 시 편집본을 보존하고 자동 재전송을 멈춥니다.
+Changes are autosaved to the NAS 0.8 seconds after you stop editing. There are no separate Save, Start editing, or Cancel buttons; edit directly in source/split view. You can continue typing while saving, and changes made while awaiting a response are saved next using the confirmed new version as their base. Saving waits during Korean character composition. The bottom status area shows saves as pending, in progress, complete, or stopped. Remaining changes are also saved before navigating away from a note or logging out. In a conflict or when the outcome is uncertain, your edits are preserved and automatic resending stops.
 
-맥 앱·CLI의 `SourceEnvelope` v1/v2/v3 원문 지문을 확인해 기존 Markdown 노트를 읽습니다. 지원하는 Markdown은 임시 원문 등록 → 본문 저장 → 검증된 최종 원문 게시 순서로 저장하며, 매 단계에서 원격 버전과 본문을 다시 확인합니다. 기존 이미지 첨부와 원문 보존 블록을 유지합니다. Mermaid·KaTeX 라이브러리와 폰트는 이미지에 포함되며 CDN에 의존하지 않습니다. 미리보기에서 문서가 포함한 스크립트는 제거합니다. 내부 링크는 nonce로 제한한 자체 전달 코드만 opaque iframe에서 실행하며, 부모는 iframe 출처와 nonce를 검증합니다. 외부 자동 네트워크 요청은 차단합니다.
+Existing Markdown notes are read by checking source fingerprints in the Mac app/CLI's `SourceEnvelope` v1/v2/v3. Supported Markdown is saved in the sequence: register temporary source → save body → publish verified final source, rechecking the remote version and body at every step. Existing image attachments and source-preservation blocks are retained. Mermaid and KaTeX libraries and fonts are included in the image and do not depend on a CDN. Scripts included in documents are removed from previews. For internal links, only the app's nonce-restricted forwarding code runs in an opaque iframe, and the parent validates the iframe source and nonce. Automatic external network requests are blocked.
 
-지원하지 않는 변경을 손실 없이 처리하기 위해 다음은 제한합니다.
+The following limitations apply to avoid data loss when handling unsupported changes:
 
-- 암호화·휴지통 노트의 본문 편집. 기존 첨부·복합 HTML은 원본 바이트와 속성을 유지하는 텍스트 편집을 지원하며, 원본 서식을 자유롭게 다시 구성하는 편집은 제한합니다.
-- 일반 첨부파일 추가·삭제, 원문 보존 블록의 임의 변경
-- 버전 이력 관리와 오프라인 동기화는 아직 macOS와 같은 기능 수준이 아닙니다. 영구 삭제 기능은 이번 범위에서 제공하지 않습니다.
+- Body editing for encrypted notes and notes in the trash. Existing attachments and complex HTML support text editing that preserves original bytes and attributes, while editing that freely restructures the original formatting is restricted.
+- Adding or deleting general attachments, and arbitrary changes to source-preservation blocks.
+- Version history management and offline synchronization do not yet have feature parity with macOS. Permanent deletion is not provided in this scope.
 
-편집본과 기준 버전은 사용자·NAS별로 현재 탭의 sessionStorage에 임시 보관하고 새로고침 후 복원합니다. 탭 종료 시 사라질 수 있습니다. 로그아웃 성공 시 해당 계정의 임시본을 지우며 로그아웃 실패 시 유지합니다. NAS 비밀번호·SID·인증 토큰은 브라우저 저장소에 보관하지 않습니다.
+Your edits and their base version are temporarily stored in the current tab's sessionStorage, separated by user and NAS, and restored after a refresh. They may disappear when the tab closes. Successful logout clears that account's drafts; failed logout retains them. NAS passwords, SIDs, and authentication tokens are not kept in browser storage.
 
-버전 충돌은 내 편집본을 보존한 채 NAS 최신 내용과 비교합니다. 응답 유실 등 결과가 불확실하면 자동 재시도하지 않습니다. 서버에 암호화한 쓰기 의도와 대상 잠금을 보존하므로 Note Station에서 저장 결과를 확인한 뒤 보류를 해제하세요. 진행 중인 작업은 1시간 동안 해제할 수 없습니다.
+Version conflicts let you compare the latest NAS content while preserving your edits. If the outcome is uncertain, for example because a response was lost, no automatic retry is made. The server retains encrypted write intents and target locks, so check the save result in Note Station before clearing the hold. In-progress operations cannot be released for 1 hour.
 
-## NAS 세션 실패와 로그
+## NAS session failures and logs
 
-NAS 세션이 만료되면 일반 로그인은 웹 세션·쿠키를 정리하고 로그인 화면으로 돌아갑니다. 로그인 유지는 읽기 요청에서 한 번 NAS 재인증을 시도하며, 재로그인이 실패하거나 재인증 후에도 세션이 거절되면 웹 세션과 저장된 로그인 정보를 폐기합니다. 네트워크 장애로 NAS 재로그인이 실패한 경우에도 다시 수동 로그인해야 합니다. 본문 임시 편집본은 현재 탭에 유지합니다. 그래프·첨부 조회에서 발생한 인증 실패도 로그인 화면으로 전환합니다. 쓰기 작업을 자동 재전송하지 않습니다.
+When a NAS session expires, a regular login clears the web session and cookies and returns to the login screen. With Remember login, a read request attempts NAS reauthentication once; if relogin fails or the session is still rejected after reauthentication, the web session and saved login information are discarded. Manual login is required again even if NAS relogin failed because of a network outage. Temporary body edits remain in the current tab. Authentication failures during graph or attachment retrieval also return to the login screen. Write operations are not automatically resent.
 
-별도 환경변수 없이 컨테이너 표준 출력에 구조화된 이벤트를 남깁니다.
+Structured events are written to container standard output without additional environment variables.
 
 ```sh
 docker compose logs -f --tail=100 web
 ```
 
-- `request_completed`: 웹 API 경로 템플릿, HTTP 메서드, 상태 코드, 처리 시간, 요청 ID
-- `nas_request_completed`: 같은 요청 ID의 NAS API·메서드, 처리 시간, 결과 및 실패 진단
-- `session_invalidated`: 웹 로그인 폐기 사유와 원래 NAS 실패 코드
-- `nas_error`: NAS 원래 숫자 오류 코드 또는 응답 검증 실패 사유
+- `request_completed`: web API path template, HTTP method, status code, duration, and request ID
+- `nas_request_completed`: NAS API and method, duration, result, and failure diagnostics for the same request ID
+- `session_invalidated`: reason for invalidating the web login and the original NAS failure code
+- `nas_error`: original numeric NAS error code or reason for response validation failure
 
-응답 헤더 `X-Request-ID`를 로그의 `request_id`와 대조하면 실패한 호출을 찾을 수 있습니다. 오류 JSON에도 허용된 API 이름·메서드·오류 숫자·분류만 포함합니다. 계정명, 비밀번호, OTP, 쿠키, SID, 신뢰 기기 토큰, 원본 응답 본문 및 노트 본문은 기록하지 않습니다. 요청 쿼리 문자열이나 외부에서 보낸 요청 ID도 기록하지 않습니다.
+Match the `X-Request-ID` response header against the log's `request_id` to find a failed call. Error JSON also includes only allowed API names, methods, error numbers, and classifications. Account names, passwords, OTPs, cookies, SIDs, trusted-device tokens, original response bodies, and note bodies are not logged. Request query strings and externally supplied request IDs are not logged either.
 
-## 데이터 보관과 권한
+## Data storage and permissions
 
-기본 `WEB_DATA_PATH=synonote-web-data`는 Docker named volume입니다. 컨테이너는 **UID/GID 10001:10001**로 실행합니다. 새 볼륨은 이미지의 `/data` 소유권을 상속합니다.
+The default `WEB_DATA_PATH=synonote-web-data` is a Docker named volume. The container runs as **UID/GID 10001:10001**. New volumes inherit ownership from the image's `/data` directory.
 
-NAS 폴더를 직접 연결하려면 새 빈 폴더만 준비하고 `.env`의 `WEB_DATA_PATH`를 지정합니다.
+To mount a NAS folder directly, prepare only a new empty folder and specify `WEB_DATA_PATH` in `.env`.
 
 ```sh
 sudo mkdir -p /volume1/docker/synonote-web/data
@@ -96,13 +98,13 @@ sudo chown 10001:10001 /volume1/docker/synonote-web/data
 sudo chmod 700 /volume1/docker/synonote-web/data
 ```
 
-`/data`는 0700, SQLite·키 파일은 0600을 사용합니다. 기존 파일의 소유권을 일괄 변경하거나 777로 열지 마세요. 업데이트·백업 전에 서비스를 중지하고 **`/data` 전체**를 보관합니다. SQLite `-wal`/`-shm`을 포함하고 `web.sqlite3`와 `master.key`를 함께 백업해야 합니다. 키를 잃으면 로그인 유지 정보와 암호화된 저장 의도를 복구할 수 없습니다. `docker compose down -v`는 데이터를 삭제하므로 실행하지 마세요.
+`/data` uses 0700 permissions, and SQLite and key files use 0600. Do not change ownership of existing files in bulk or open permissions to 777. Stop the service before updating or backing up, and retain **all of `/data`**. Include SQLite `-wal`/`-shm` files, and back up `web.sqlite3` and `master.key` together. Losing the key makes saved login information and encrypted write intents unrecoverable. Do not run `docker compose down -v`, which deletes the data.
 
-로그인 유지 사용 시에만 비밀번호·신뢰 기기 ID를 서버에 암호화해 저장합니다. OTP는 저장하지 않습니다. 일반 세션은 최대 24시간/12시간 미사용, 로그인 유지 세션은 최대 30일/7일 미사용으로 만료됩니다.
+Passwords and trusted-device IDs are stored encrypted on the server only when Remember login is used. OTPs are not stored. Regular sessions expire after at most 24 hours or 12 hours of inactivity; remembered sessions expire after at most 30 days or 7 days of inactivity.
 
-## 업데이트와 검증
+## Updates and verification
 
-이미지: `ghcr.io/damho1104/synology-md-note-web:latest` (`linux/amd64`, `linux/arm64`). 게시 여부는 해당 작업의 빌드 결과로 확인합니다.
+Image: `ghcr.io/damho1104/synology-md-note-web:latest` (`linux/amd64`, `linux/arm64`). Check the relevant job's build results to confirm publication.
 
 ```sh
 docker compose pull web
@@ -110,19 +112,19 @@ docker compose up -d --force-recreate web
 docker compose logs --tail=100 web
 ```
 
-개발용 소스 빌드: 저장소 루트에서 `docker build -t synology-md-note-web:dev web`. 실제 Synology Container Manager에서의 실행과 실제 NAS 쓰기는 별도 검증이 필요합니다. 모의 NAS/HTTP 계약·원문 fixture·브라우저 검증은 실제 NAS 검증과 구분합니다.
+Development source build: run `docker build -t synology-md-note-web:dev web` from the repository root. Running in an actual Synology Container Manager and writing to an actual NAS require separate verification. Mock NAS/HTTP contracts, source fixtures, and browser verification are distinguished from actual NAS verification.
 
-개발 실행 및 검사:
+Development run and checks:
 
 ```sh
 cd web/backend
 uv sync --group dev
 WEB_DATA_DIR=/tmp/synonote-web-dev uv run uvicorn synonote_web.main:create_app --factory --host 127.0.0.1 --port 8000
-# 별도 터미널: web/frontend에서 npm ci && npm run dev
+# Separate terminal: npm ci && npm run dev in web/frontend
 uv run pytest -q
-# web/frontend에서 npm test && npm run build
+# npm test && npm run build in web/frontend
 ```
 
-수식은 KaTeX로 미리 보고 저장 시 글꼴을 포함한 PNG 첨부로 변환합니다. Markdown 원문과 수식 연결 정보는 macOS 앱과 같은 v3 원문 형식으로 보존하며, 업로드 바이트와 저장 결과를 재조회합니다. 같은 수식 이미지는 재사용하고 더 이상 쓰이지 않는 생성 이미지는 정리합니다.
+Math is previewed with KaTeX and converted to PNG attachments with embedded fonts when saved. Markdown source and math association information are preserved in the same v3 source format as the macOS app, and uploaded bytes and save results are fetched again for verification. Identical math images are reused, and generated images no longer in use are cleaned up.
 
-분할 편집 중 커서를 이동하거나 입력하면 미리보기가 해당 원문 문단을 따라갑니다. 읽기 모드에서는 자동 이동하지 않습니다. 미리보기는 문서·스타일과 동일한 앞뒤 문단을 유지하고 스크롤바 공간을 고정하며, Mermaid 임시 렌더링은 화면 밖에서 수행합니다.
+When you move the cursor or type during split editing, the preview follows the corresponding source paragraph. Reading mode does not scroll automatically. The preview maintains the same surrounding paragraphs as the document and styles, reserves scrollbar space, and performs temporary Mermaid rendering offscreen.

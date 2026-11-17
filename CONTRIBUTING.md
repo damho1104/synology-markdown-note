@@ -1,25 +1,27 @@
-# 기여 안내
+# Contributing
 
-Synology Markdown Note에 관심을 가져주셔서 감사합니다. 변경 전 기존 Issue와 Pull Request를 확인하고, 동작 변경은 가능하면 재현 절차와 테스트를 포함해 주세요.
+**English** | [한국어](CONTRIBUTING_KO.md)
 
-## 브랜치 운영
+Thank you for your interest in Synology Markdown Note. Before making changes, check existing issues and pull requests. For behavior changes, include reproduction steps and tests where possible.
 
-- `develop`: 개발·통합 브랜치. 기능 수정 Pull Request는 기본적으로 이 브랜치를 대상으로 합니다.
-- `main`: 기본 브랜치이자 정식 릴리스 기준. 검증된 `develop`을 Pull Request로 병합합니다.
-- 정식 버전 태그는 `main`에서 만들고, 게시된 태그는 이동하지 않습니다. 릴리스 워크플로는 태그 커밋이 `origin/main`에 포함되지 않으면 중단합니다.
-- 릴리스 워크플로는 버전 태그 푸시로만 실행합니다. 브랜치 푸시나 수동 실행으로는 릴리스를 시작할 수 없습니다.
+## Branch workflow
 
-자세한 절차는 [GitHub 릴리스 안내](docs/github-release.ko.md)를 참고하세요.
+- `develop`: The development and integration branch. Target this branch for feature and bug-fix pull requests by default.
+- `main`: The default branch and the basis for stable releases. Merge verified changes from `develop` through a pull request.
+- Create stable version tags on `main` and do not move published tags. The release workflow stops if the tagged commit is not included in `origin/main`.
+- Releases run only when a version tag is pushed. Branch pushes and manual runs cannot start a release.
 
-## 로컬 검증
+See the [GitHub release guide](docs/github-release.md) for the full procedure.
 
-macOS 앱과 공통 로직은 Xcode 및 Swift 도구가 필요합니다.
+## Local verification
+
+The macOS app and shared logic require Xcode and Swift tooling.
 
 ```sh
 ./script/test.sh
 ```
 
-CLI는 Python 3.13과 [uv](https://docs.astral.sh/uv/)를 사용합니다.
+The CLI uses Python 3.13 and [uv](https://docs.astral.sh/uv/).
 
 ```sh
 cd cli
@@ -27,14 +29,14 @@ uv sync --locked
 uv run --locked pytest -q tests
 ```
 
-Pull Request에는 변경 목적, 테스트 결과, 알려진 제한 사항을 적어 주세요. 내부 NAS를 사용한 검증은 공개 테스트 계정 대신 개인 환경에서 수행하되, 실제 노트·서버 URL·인증정보·진단 원본을 Issue/PR/커밋에 올리지 마세요. 서명 인증서, 키체인과 실행 로그도 공유하지 마세요.
+Describe the purpose of your change, test results, and known limitations in your pull request. Run checks against an internal NAS in your own environment rather than using a public test account. Do not publish real notes, server URLs, credentials, or raw diagnostic data in issues, pull requests, or commits. Do not share signing certificates, Keychain data, or execution logs.
 
-## 코드와 문서
+## Code and documentation
 
-기존 스타일을 유지하고, 관련 기능의 동작이 바뀌면 README 또는 문서도 업데이트해 주세요. 스크립트·워크플로에 개인 경로와 서버 주소를 하드코딩하지 마세요.
+Follow the existing style. When a feature's behavior changes, update the README or related documentation. Do not hard-code personal paths or server addresses in scripts or workflows.
 
-이 프로젝트는 Synology가 제작하거나 지원하는 공식 제품이 아닙니다.
+This project is not an official product made or supported by Synology.
 
-## 외부 PR 실행
+## External pull request checks
 
-PR 코드는 GitHub 제공 Ubuntu·macOS 러너에서 검사하며 저장소의 Linux·Mac 자체 러너로 전달하지 않습니다. PR에서는 uv 캐시를 사용하지 않고 체크아웃 토큰을 Git 설정에 남기지 않습니다. 공개 저장소로 전환할 때 Actions 설정에서 외부 기여자의 모든 PR 실행에 승인을 요구하도록 설정하고, 워크플로 변경은 특히 확인해야 합니다. 저장소 수준 러너의 접근 범위는 YAML만으로 강제 격리되는 것은 아닙니다.
+Pull request code runs on GitHub-hosted Ubuntu and macOS runners, not the repository's self-hosted Linux or Mac runners. Pull request workflows do not use the uv cache or retain the checkout token in Git configuration. When making the repository public, configure Actions to require approval for all runs from external contributors and review workflow changes especially carefully. YAML alone does not enforce isolation of access to repository-level runners.

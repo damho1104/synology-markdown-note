@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="https://buymeacoffee.com/damho1104q">
-    <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" width="217" height="60">
+    <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" width="145" height="40">
   </a>
 </p>
 

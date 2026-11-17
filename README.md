@@ -1,6 +1,14 @@
-# Synology Markdown Note
+<h1 align="center">Synology Markdown Note</h1>
 
-**English** | [한국어](README_KO.md)
+<p align="center">
+  <strong>English</strong> | <a href="README_KO.md">한국어</a>
+</p>
+
+<p align="center">
+  <a href="https://buymeacoffee.com/damho1104q">
+    <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" width="217" height="60">
+  </a>
+</p>
 
 **A macOS app, web client, and CLI for writing and managing Synology Note Station notes in Markdown.**
 

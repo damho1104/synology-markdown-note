@@ -180,6 +180,13 @@ class Store:
             columns = {row["name"] for row in db.execute("PRAGMA table_info(sessions)")}
             if "nas_url" not in columns:
                 db.execute("ALTER TABLE sessions ADD COLUMN nas_url TEXT NOT NULL DEFAULT ''")
+            from .attachment_uploads import REVIEWED_TTL
+
+            # Older versions released a reviewed lock without transitioning its uploads.
+            db.execute("""UPDATE draft_uploads SET status='reviewed', expires=?
+                          WHERE status='pinned' AND operation_id IS NOT NULL AND NOT EXISTS
+                          (SELECT 1 FROM write_operations WHERE operation_id=draft_uploads.operation_id)""",
+                       (time.time() + REVIEWED_TTL,))
         self.db.chmod(0o600)
 
     @contextmanager
@@ -419,7 +426,12 @@ class Store:
                 (owner, operation_id, time.time() - 3600)).fetchone()
             if not row:
                 return False
-            # Keep any pinned uploads as evidence until the NAS outcome is verified.
+            from .attachment_uploads import REVIEWED_TTL
+
+            # The acknowledgement does not prove that a NAS write succeeded.
+            db.execute("""UPDATE draft_uploads SET status='reviewed', expires=?
+                          WHERE owner=? AND operation_id=? AND status='pinned'""",
+                       (time.time() + REVIEWED_TTL, owner, operation_id))
             db.execute("DELETE FROM write_operations WHERE owner=? AND operation_id=?",
                        (owner, operation_id))
             db.execute("UPDATE create_receipts SET status='reviewed' WHERE owner=? AND operation_id=?",

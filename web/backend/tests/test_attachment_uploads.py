@@ -180,12 +180,47 @@ def test_preflight_release_and_uncertain_ack_retains_bytes(storage, monkeypatch)
     assert store.start_write("unknown", "owner", "new:lock", None, "Title", intent,
                              client_request_id=client_id, request_hash="hash", upload_keys=manifest)
     store.finish_write("unknown", uncertain=True)
+    assert_error("UPLOAD_PINNED", uploads.delete, "owner", *keys)
     assert store.acknowledge_write("owner", "unknown")
     store.finish_write("unknown", uncertain=False)
-    now += 8 * 86400
-    assert uploads.get("owner", *keys)["status"] == "pinned"
+    store.finish_write("unknown", uncertain=False, result={"id": "late-result"})
+    assert uploads.get("owner", *keys)["status"] == "reviewed"
     assert b"".join(uploads.iter_content("owner", *keys)) == b"attachment bytes"
     assert store.create_receipt("owner", client_id)["status"] == "reviewed"
+    assert_error("UPLOAD_NOT_READY", store.start_write, "retry", "owner", target, target, "Title",
+                 intent, upload_keys=manifest)
+
+    monkeypatch.setattr(module, "OWNER_QUOTA", len(b"attachment bytes"))
+    assert_error("UPLOAD_QUOTA_EXCEEDED", receive, uploads, ids())
+    now += 8 * 86400
+    assert receive(uploads, ids())["status"] == "ready"
+    assert_error("UPLOAD_NOT_FOUND", uploads.get, "owner", *keys)
+    assert_error("UPLOAD_ID_REUSED", receive, uploads, keys, target=target)
+
+
+def test_legacy_acknowledged_upload_is_discardable_without_affecting_active_upload(storage):
+    from synonote_web.attachment_uploads import Uploads
+
+    store, uploads = storage
+    legacy, active = ids(), ids()
+    for keys, operation in ((legacy, "legacy"), (active, "active")):
+        meta = receive(uploads, keys, target=operation)
+        assert store.start_write(operation, "owner", operation, operation, "Title", {},
+                                 upload_keys=[(*keys, operation, "book", meta["sha256"])])
+    # Simulate an ack produced by a previous installation.
+    with store.connect() as db:
+        db.execute("DELETE FROM write_operations WHERE operation_id='legacy'")
+    uploads = Uploads(Store(store.dir))
+    assert uploads.get("owner", *legacy)["status"] == "reviewed"
+    assert_error("UPLOAD_NOT_FOUND", uploads.delete, "other", *legacy)
+    uploads.delete("owner", *legacy)
+    assert_error("UPLOAD_NOT_FOUND", uploads.get, "owner", *legacy)
+    assert_error("UPLOAD_ID_REUSED", receive, uploads, legacy, target="legacy")
+    assert_error("UPLOAD_PINNED", uploads.delete, "owner", *active)
+    with store.connect() as db:
+        remaining = db.execute("""SELECT u.upload_id FROM draft_upload_chunks AS c
+                                  JOIN draft_uploads AS u USING (upload_key)""").fetchall()
+    assert {row["upload_id"] for row in remaining} == {active[1]}
 
 
 def test_image_requires_valid_server_detected_structure(storage):

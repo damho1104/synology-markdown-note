@@ -17,10 +17,10 @@ export type UploadMetadata = {
   sha256: string;
   mime: string;
   image: boolean;
-  status: "ready" | "pinned" | "committed" | "receiving";
+  status: "ready" | "pinned" | "reviewed" | "committed" | "receiving";
 };
 type UploadPhase = "queued" | "uploading" | "checking" | "ready" | "committed" |
-  "failed" | "uncertain" | "missing" | "canceling" | "cancelFailed";
+  "failed" | "uncertain" | "missing" | "canceling" | "cancelFailed" | "reviewed" | "discarding";
 export type DraftUpload = {
   id: string;
   name: string;
@@ -31,6 +31,7 @@ export type DraftUpload = {
   insertedText?: string;
   metadata?: UploadMetadata;
   error?: string;
+  recoveryOnly?: boolean;
 };
 export type DraftUploads = { id: string; items: DraftUpload[] };
 
@@ -55,20 +56,23 @@ async function lookup(path: string, signal: AbortSignal) {
 }
 
 function confirmedUpload(item: DraftUpload, metadata: UploadMetadata): DraftUpload {
-  if (metadata.upload_id !== item.id || !["ready", "pinned", "committed"].includes(metadata.status) ||
+  if (metadata.upload_id !== item.id || !["ready", "pinned", "reviewed", "committed"].includes(metadata.status) ||
       !/^[0-9a-f]{64}$/.test(metadata.sha256) || typeof metadata.image !== "boolean" || typeof metadata.name !== "string")
     throw new Error("서버의 첨부 확인 정보가 올바르지 않습니다.");
   if (metadata.status === "pinned") return {...item, phase: "uncertain", metadata,
     error: "NAS 저장 결과를 확인해야 합니다."};
+  if (metadata.status === "reviewed") return {...item, phase: "reviewed", metadata, error: undefined};
   return {...item, phase: metadata.status === "committed" ? "committed" : "ready", metadata, error: undefined};
 }
 
 export async function transferUpload(draftId: string, item: DraftUpload, file: File | undefined,
-  csrf: string, signal: AbortSignal): Promise<DraftUpload> {
+  csrf: string, signal: AbortSignal, lookupOnly: boolean): Promise<DraftUpload> {
   const path = uploadPath(draftId, item.id, item.target);
   if (item.phase === "checking") {
     const found = await lookup(path, signal);
     if (found) return confirmedUpload(item, found);
+    if (lookupOnly || item.metadata?.status === "pinned" || item.metadata?.status === "reviewed")
+      return {...item, phase: "missing", recoveryOnly: true, metadata: undefined, error: undefined};
   }
   if (!file) return {...item, phase: "missing", error: "임시 파일을 찾을 수 없습니다. 취소한 뒤 파일을 다시 선택하세요."};
   try {
@@ -125,18 +129,65 @@ export function uploadReferences(markdown: string | undefined): Set<string> {
   return references;
 }
 
+export function recoveryUploadReferences(markdown: string | undefined): Set<string> {
+  const references = uploadReferences(markdown);
+  if (!markdown || !/attachment:|&(?:#|colon;)/i.test(markdown)) return references;
+  // Markdown can include raw HTML. Inspect URL attributes in an inert fragment
+  // so attachment examples inside code do not count as live references.
+  const template = document.createElement("template");
+  template.innerHTML = marked.parse(markdown, {async:false});
+  const attributes = ["href", "src", "data", "poster", "action", "formaction", "xlink:href", "srcset", "imagesrcset"];
+  for (const element of template.content.querySelectorAll("*")) {
+    for (const name of attributes) {
+      const url = element.getAttribute(name)?.trim().toLowerCase();
+      if (!url || !url.includes("attachment:")) continue;
+      const id = url.startsWith("attachment://") ? url.slice(13) : "";
+      const supported = (element.localName === "a" && name === "href") || (element.localName === "img" && name === "src");
+      // Invalid or unsupported destinations must also block recovered saves.
+      if (url.startsWith("attachment:") || name.endsWith("srcset"))
+        references.add(supported && UUID.test(id) ? id : "");
+    }
+  }
+  return references;
+}
+
+export function detachUploadReferences(markdown: string, detach: (id: string) => boolean): string {
+  if (!/attachment:\/\//i.test(markdown)) return markdown;
+  const source = markdown.replace(/\r\n?/g, "\n");
+  let offset = 0;
+  let output = "";
+  marked.walkTokens(marked.lexer(source), token => {
+    if (!["link", "image", "code", "codespan", "html", "def"].includes(token.type)) return;
+    const isReference = (token.type === "image" || token.type === "link" || token.type === "def") &&
+      token.href.toLowerCase().startsWith("attachment://") && detach(token.href.slice(13).toLowerCase());
+    if ((token.type === "link" || token.type === "image") && !isReference) return;
+    const start = source.indexOf(token.raw, offset);
+    if (start < 0) return;
+    const end = start + token.raw.length;
+    output += source.slice(offset, start);
+    offset = end;
+    if ((token.type === "image" || token.type === "link") && isReference) {
+      // Escape the label so names containing Markdown punctuation stay text.
+      output += token.text.replace(/\\([!-/:-@\[-`{-~])/g, "$1").replace(/[\\\[\]`*_~<>!&]/g, "\\$&");
+    } else if (token.type !== "def" || !isReference) {
+      output += token.raw;
+    }
+  });
+  return output + source.slice(offset);
+}
+
 export function uploadManifest(uploads: DraftUploads | undefined, markdown: string | undefined,
   bindings: Record<string, string> | undefined) {
   const references = uploadReferences(markdown);
   return uploads?.items.flatMap(item => references.has(item.id) && !bindings?.[item.id] &&
-    item.phase === "ready" && item.metadata
+    item.phase === "ready" && !item.recoveryOnly && item.metadata
     ? [{upload_id: item.id, sha256: item.metadata.sha256}]
     : []) ?? [];
 }
 
-export function restoreUploads(uploads: DraftUploads | undefined): DraftUploads | undefined {
+export function restoreUploads(uploads: DraftUploads | undefined, reviewing = false): DraftUploads | undefined {
   if (!uploads) return undefined;
   return {...uploads, items: uploads.items.map(item => item.phase === "committed" ? item : {
-    ...item, phase: item.phase === "canceling" || item.phase === "cancelFailed" ? "cancelFailed" : "checking",
+    ...item, phase: !reviewing && (item.phase === "canceling" || item.phase === "cancelFailed") ? "cancelFailed" : "checking",
   })};
 }

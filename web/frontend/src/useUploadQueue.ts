@@ -6,7 +6,7 @@ export type UploadPatch = (draftId: string, uploadId: string,
   update: (item: DraftUpload) => DraftUpload | null) => void;
 
 export function useUploadQueue(uploads: DraftUploads | undefined, csrf: string,
-  holdTransfers: boolean, patch: UploadPatch) {
+  holdTransfers: boolean, reviewing: boolean, patch: UploadPatch) {
   const files = useRef(new Map<string, File>());
   const jobs = useRef(new Map<string, AbortController>());
   const draftId = uploads?.id;
@@ -27,7 +27,9 @@ export function useUploadQueue(uploads: DraftUploads | undefined, csrf: string,
     for (const item of uploads.items) {
       if (jobs.current.has(item.id)) continue;
       const canceling = item.phase === "canceling";
-      if (!canceling && (holdTransfers || (item.phase !== "queued" && item.phase !== "checking"))) continue;
+      const lookupOnly = reviewing || !!item.recoveryOnly;
+      if (lookupOnly ? item.phase !== "checking" :
+        !canceling && (holdTransfers || (item.phase !== "queued" && item.phase !== "checking"))) continue;
       if (jobs.current.size >= UPLOAD_CONCURRENCY) break;
       const controller = new AbortController();
       const { signal } = controller;
@@ -42,7 +44,7 @@ export function useUploadQueue(uploads: DraftUploads | undefined, csrf: string,
               {...jsonRequest({}, {"X-CSRF-Token": csrf}, "DELETE"), signal});
             return null;
           }
-          return await transferUpload(uploads.id, item, files.current.get(fileKey), csrf, signal);
+          return await transferUpload(uploads.id, item, files.current.get(fileKey), csrf, signal, lookupOnly);
         } catch (error) {
           if (canceling && error instanceof ApiFailure && error.status === 404) return null;
           return {...item, phase: canceling ? "cancelFailed" : "uncertain",
@@ -57,14 +59,15 @@ export function useUploadQueue(uploads: DraftUploads | undefined, csrf: string,
           patch(uploads.id, item.id, current => ({...current}));
           return;
         }
-        if (!result || result.metadata) files.current.delete(fileKey);
+        if (!result || (!lookupOnly && result.metadata)) files.current.delete(fileKey);
         patch(uploads.id, item.id, current => {
           if (!canceling && current.phase === "canceling") return {...current};
-          return result && {...current, phase: result.phase, metadata: result.metadata, error: result.error};
+          return result && {...current, phase: result.phase, metadata: result.metadata, error: result.error,
+            recoveryOnly: current.recoveryOnly || result.recoveryOnly};
         });
       });
     }
-  }, [uploads, csrf, holdTransfers, patch]);
+  }, [uploads, csrf, holdTransfers, reviewing, patch]);
 
   return {files: files.current, abort: (id: string) => jobs.current.get(id)?.abort()};
 }

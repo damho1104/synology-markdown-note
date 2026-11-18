@@ -59,17 +59,19 @@ Changes are autosaved to the NAS 0.8 seconds after you stop editing. There are n
 
 Existing Markdown notes are read by checking source fingerprints in the Mac app/CLI's `SourceEnvelope` v1/v2/v3. Supported Markdown is saved in the sequence: register temporary source → save body → publish verified final source, rechecking the remote version and body at every step. Existing image attachments and source-preservation blocks are retained. Mermaid and KaTeX libraries and fonts are included in the image and do not depend on a CDN. Scripts included in documents are removed from previews. For internal links, only the app's nonce-restricted forwarding code runs in an opaque iframe, and the parent validates the iframe source and nonce. Automatic external network requests are blocked.
 
+In editable Markdown notes, paste an image, drop a file, or choose files from the editor. Each file can be up to 50 MB (50,000,000 bytes). Larger files are rejected. The web server encrypts staged uploads and transfers them to the NAS when the note autosaves.
+
 The following limitations apply to avoid data loss when handling unsupported changes:
 
 - Body editing for encrypted notes and notes in the trash. Existing attachments and complex HTML support text editing that preserves original bytes and attributes, while editing that freely restructures the original formatting is restricted.
 - Deleting general attachments already stored on the NAS, and arbitrary changes to source-preservation blocks.
-
-In editable Markdown notes, paste an image, drop a file, or choose files from the editor. Each file can be up to 50 MB (50,000,000 bytes). Larger files are rejected. The web server encrypts staged uploads and transfers them to the NAS when the note autosaves.
 - Version history management and offline synchronization do not yet have feature parity with macOS. Permanent deletion is not provided in this scope.
 
 Your edits and their base version are temporarily stored in the current tab's sessionStorage, separated by user and NAS, and restored after a refresh. They may disappear when the tab closes. Successful logout clears that account's drafts; failed logout retains them. NAS passwords, SIDs, and authentication tokens are not kept in browser storage.
 
 Version conflicts let you compare the latest NAS content while preserving your edits. If the outcome is uncertain, for example because a response was lost, no automatic retry is made. The server retains encrypted write intents and target locks, so check the save result in Note Station before clearing the hold. In-progress operations cannot be released for 1 hour.
+
+After you acknowledge an uncertain save, you can download or discard the web server's temporary attachment copies for seven days. The server reclaims expired copies on the next upload. Discarding a temporary copy does not remove any NAS attachment.
 
 ## NAS session failures and logs
 

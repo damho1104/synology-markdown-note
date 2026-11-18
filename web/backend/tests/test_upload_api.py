@@ -3,23 +3,29 @@ import hashlib
 import uuid
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
+from synonote_web.nas import NasError
 
 from test_api import FakeNas, app_at, post
 
 
 class WritingNas(FakeNas):
-    def __init__(self):
+    def __init__(self, uncertain=False):
         super().__init__()
         self.attachments = []
+        self.uncertain = uncertain
 
     def write_markdown(self, base, active, **args):
         self.attachments.extend(b"".join(item["chunks"]()) for item in args["uploads"])
+        if self.uncertain:
+            raise NasError("WRITE_UNCERTAIN")
         return {"id": "note-1"}
 
 
-def test_staged_upload_is_private_and_used_once_by_create_receipt(tmp_path):
-    nas = WritingNas()
+@pytest.mark.parametrize("uncertain", [False, True])
+def test_staged_upload_is_private_and_used_once_by_create_receipt(tmp_path, uncertain):
+    nas = WritingNas(uncertain)
     app = app_at(tmp_path, nas, nas_url="https://nas.example")
     client = TestClient(app)
     other = TestClient(app)
@@ -42,8 +48,21 @@ def test_staged_upload_is_private_and_used_once_by_create_receipt(tmp_path):
             "markdown": f"[notes.txt](attachment://{upload})",
             "uploads": [{"upload_id": upload, "sha256": uploaded.json()["sha256"]}]}
     assert post(client, "/api/notes", {**body, "draft_id": str(uuid.uuid4())}, csrf=csrf).status_code == 404
-    assert post(client, "/api/notes", body, csrf=csrf).json() == {"id": "note-1"}
-    assert post(client, "/api/notes", body, csrf=csrf).json() == {"id": "note-1"}
+    result = post(client, "/api/notes", body, csrf=csrf)
+    if uncertain:
+        assert result.json()["error"] == "WRITE_UNCERTAIN"
+        operation = client.get("/api/writes").json()["operations"][0]["operation_id"]
+        assert post(client, f"/api/writes/{operation}/ack", {}, csrf=csrf).is_success
+        assert client.get(url).json()["status"] == "reviewed"
+        assert client.get(url + "/content").content == payload
+        assert other.get(url).status_code == 404
+        assert post(client, "/api/notes", body, csrf=csrf).json()["detail"] == "WRITE_REVIEW_REQUIRED"
+        removal = client.delete(url, headers={**headers, "Content-Type": "application/json"})
+        assert removal.is_success
+        assert client.get(url + "/content").status_code == 404
+    else:
+        assert result.json() == {"id": "note-1"}
+        assert post(client, "/api/notes", body, csrf=csrf).json() == {"id": "note-1"}
     assert nas.attachments == [payload]
 
 

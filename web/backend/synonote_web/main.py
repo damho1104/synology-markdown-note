@@ -673,7 +673,7 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
         upload_ids(draft_id, upload_id)
         owner = nas_access(request, response)[2]
         meta = uploads.get(owner, draft_id, upload_id)
-        if meta["status"] not in {"ready", "pinned"}:
+        if meta["status"] not in {"ready", "pinned", "reviewed"}:
             raise HTTPException(404, detail="UPLOAD_NOT_FOUND")
         result = stream_file(uploads.iter_content(owner, draft_id, upload_id),
                              meta["mime"] if meta["image"] else "application/octet-stream",

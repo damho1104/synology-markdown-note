@@ -27,6 +27,7 @@ RECEIVING_TTL = 630
 OWNER_RECEIVING_LIMIT = 2
 INSTALLATION_RECEIVING_LIMIT = 8
 READY_TTL = 7 * 86400
+REVIEWED_TTL = 7 * 86400
 _CHUNK_SIZE = 256 * 1024
 _MAX_IMAGE_RECORDS = 262_144
 _BINARY = "application/octet-stream"
@@ -113,10 +114,20 @@ def _finish_uploads(db: sqlite3.Connection, operation_id: str, *,
                       WHERE operation_id=?""", (time.time() + READY_TTL, operation_id))
 
 
+def _discard_reviewed(db: sqlite3.Connection, *, upload_key: str | None = None) -> None:
+    condition, args = ("expires<=?", (time.time(),)) if upload_key is None else ("upload_key=?", (upload_key,))
+    selector = f"status='reviewed' AND {condition}"
+    db.execute(f"""DELETE FROM draft_upload_chunks WHERE upload_key IN
+                   (SELECT upload_key FROM draft_uploads WHERE {selector})""", args)
+    db.execute(f"""UPDATE draft_uploads SET status='discarded', expires=NULL,
+                   name='', size=0, received=0, sha256=NULL, mime=?, image=0
+                   WHERE {selector}""", (_BINARY, *args))
+
+
 def _lookup(db: sqlite3.Connection, owner: str, draft_id: str, upload_id: str,
             now: float) -> sqlite3.Row:
     row = db.execute("""SELECT * FROM draft_uploads
-                        WHERE owner=? AND draft_id=? AND upload_id=?
+                        WHERE owner=? AND draft_id=? AND upload_id=? AND status!='discarded'
                         AND (expires IS NULL OR expires>?)""",
                      (owner, draft_id, upload_id, now)).fetchone()
     if row is None:
@@ -150,7 +161,8 @@ class Uploads:
         # new reservation ultimately succeeds.
         with self._connect(write=True) as db:
             now = time.time()
-            db.execute("DELETE FROM draft_uploads WHERE expires<=?", (now,))
+            _discard_reviewed(db)
+            db.execute("DELETE FROM draft_uploads WHERE expires<=? AND status!='reviewed'", (now,))
             db.execute("DELETE FROM draft_upload_leases WHERE expires<=?", (now,))
         with self._connect(write=True) as db:
             now = time.time()
@@ -159,9 +171,12 @@ class Uploads:
                                      WHERE owner=? AND draft_id=? AND upload_id=?""",
                                   (owner, draft_id, upload_id)).fetchone()
             if existing and existing["expires"] is not None and existing["expires"] <= now:
-                db.execute("DELETE FROM draft_uploads WHERE upload_key=?", (existing["upload_key"],))
-                existing = None
+                if existing["status"] != "reviewed":
+                    db.execute("DELETE FROM draft_uploads WHERE upload_key=?", (existing["upload_key"],))
+                    existing = None
             if existing:
+                if existing["status"] in ("reviewed", "discarded"):
+                    raise UploadError("UPLOAD_ID_REUSED", 409)
                 if (existing["target"], existing["notebook_id"], existing["name"],
                         existing["size"]) != (target, notebook_id, name, size):
                     raise UploadError("UPLOAD_ID_REUSED", 409)
@@ -179,7 +194,7 @@ class Uploads:
                 counts = db.execute("""SELECT
                     COALESCE(SUM(size) FILTER (WHERE owner=? AND draft_id=?), 0),
                     COALESCE(SUM(size) FILTER (WHERE owner=?), 0), COALESCE(SUM(size), 0)
-                    FROM draft_uploads WHERE status != 'committed'
+                    FROM draft_uploads WHERE status!='committed' AND status!='discarded'
                       AND (expires IS NULL OR expires>?)""", (owner, draft_id, owner, now)).fetchone()
                 if any(used + size > quota for used, quota in
                        zip(counts, (DRAFT_QUOTA, OWNER_QUOTA, INSTALLATION_QUOTA))):
@@ -269,14 +284,17 @@ class Uploads:
             row = _lookup(db, owner, draft_id, upload_id, time.time())
             if row["status"] in ("pinned", "committed"):
                 raise UploadError("UPLOAD_PINNED", 409)
-            db.execute("DELETE FROM draft_uploads WHERE upload_key=?", (row["upload_key"],))
+            if row["status"] == "reviewed":
+                _discard_reviewed(db, upload_key=row["upload_key"])
+            else:
+                db.execute("DELETE FROM draft_uploads WHERE upload_key=?", (row["upload_key"],))
 
     def iter_content(self, owner: str, draft_id: str, upload_id: str) -> Iterator[bytes]:
         # The streaming response steps this read-only iterator sequentially,
         # but each step may use a different worker thread.
         with self._connect(thread_bound=False) as db:
             row = _lookup(db, owner, draft_id, upload_id, time.time())
-            if row["status"] not in ("ready", "pinned"):
+            if row["status"] not in ("ready", "pinned", "reviewed"):
                 raise _not_found()
             yield from self._chunks(db, row["upload_key"], row["size"])
 
@@ -285,7 +303,7 @@ class Uploads:
         now = time.time()
         row = db.execute("""SELECT u.* FROM draft_uploads AS u
             JOIN draft_upload_leases AS l USING (upload_key)
-            WHERE u.upload_key=? AND l.lease_id=? AND l.expires>?
+            WHERE u.upload_key=? AND l.lease_id=? AND l.expires>? AND u.status NOT IN ('reviewed', 'discarded')
               AND (u.expires IS NULL OR u.expires>?)""",
                          (receipt.key, receipt.lease, now, now)).fetchone()
         if row is None:

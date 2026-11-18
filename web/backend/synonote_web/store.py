@@ -141,21 +141,63 @@ class Store:
                     PRIMARY KEY(owner, client_request_id)
                 );
                 CREATE INDEX IF NOT EXISTS create_receipts_operation ON create_receipts(operation_id);
+                CREATE TABLE IF NOT EXISTS draft_uploads (
+                    upload_key TEXT PRIMARY KEY,
+                    owner TEXT NOT NULL,
+                    draft_id TEXT NOT NULL,
+                    upload_id TEXT NOT NULL,
+                    target TEXT NOT NULL,
+                    notebook_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    size INTEGER NOT NULL,
+                    received INTEGER NOT NULL DEFAULT 0,
+                    sha256 TEXT,
+                    mime TEXT NOT NULL DEFAULT 'application/octet-stream',
+                    image INTEGER NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'receiving',
+                    expires REAL,
+                    operation_id TEXT,
+                    UNIQUE(owner, draft_id, upload_id)
+                );
+                CREATE INDEX IF NOT EXISTS uploads_expiry ON draft_uploads(expires);
+                CREATE INDEX IF NOT EXISTS uploads_operation ON draft_uploads(operation_id)
+                    WHERE operation_id IS NOT NULL;
+                CREATE INDEX IF NOT EXISTS uploads_quota ON draft_uploads(owner, draft_id, size, expires)
+                    WHERE status != 'committed';
+                CREATE TABLE IF NOT EXISTS draft_upload_leases (
+                    upload_key TEXT PRIMARY KEY REFERENCES draft_uploads(upload_key) ON DELETE CASCADE,
+                    lease_id TEXT NOT NULL,
+                    expires REAL NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS draft_upload_chunks (
+                    upload_key TEXT NOT NULL REFERENCES draft_uploads(upload_key) ON DELETE CASCADE,
+                    offset INTEGER NOT NULL,
+                    data BLOB NOT NULL,
+                    PRIMARY KEY(upload_key, offset)
+                ) WITHOUT ROWID;
             """)
             # Support databases created by the initial development build.
             columns = {row["name"] for row in db.execute("PRAGMA table_info(sessions)")}
             if "nas_url" not in columns:
                 db.execute("ALTER TABLE sessions ADD COLUMN nas_url TEXT NOT NULL DEFAULT ''")
+            from .attachment_uploads import REVIEWED_TTL
+
+            # Older versions released a reviewed lock without transitioning its uploads.
+            db.execute("""UPDATE draft_uploads SET status='reviewed', expires=?
+                          WHERE status='pinned' AND operation_id IS NOT NULL AND NOT EXISTS
+                          (SELECT 1 FROM write_operations WHERE operation_id=draft_uploads.operation_id)""",
+                       (time.time() + REVIEWED_TTL,))
         self.db.chmod(0o600)
 
     @contextmanager
-    def connect(self) -> Iterator[sqlite3.Connection]:
+    def connect(self, *, thread_bound: bool = True) -> Iterator[sqlite3.Connection]:
         db: sqlite3.Connection | None = None
         try:
-            db = sqlite3.connect(self.db, timeout=5)
+            db = sqlite3.connect(self.db, timeout=5, check_same_thread=thread_bound)
             db.row_factory = sqlite3.Row
             db.execute("PRAGMA journal_mode=WAL")
             db.execute("PRAGMA synchronous=FULL")
+            db.execute("PRAGMA foreign_keys=ON")
             with db:
                 yield db
         except sqlite3.Error as exc:
@@ -286,7 +328,8 @@ class Store:
 
     def start_write(self, operation_id: str, owner: str, target: str,
                     note_id: str | None, title: str, intent: dict, *,
-                    client_request_id: str | None = None, request_hash: str | None = None) -> bool:
+                    client_request_id: str | None = None, request_hash: str | None = None,
+                    upload_keys: list[tuple[str, str, str, str, str]] | None = None) -> bool:
         """Durably record a one-shot mutation before sending it to the NAS."""
         encrypted = self.cipher.encrypt(json.dumps(intent, ensure_ascii=False).encode())
         with self.connect() as db:
@@ -309,6 +352,12 @@ class Store:
                 (operation_id, owner, target, note_id, title, intent, status, created)
                 VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)""",
                 (operation_id, owner, target, note_id, title, encrypted, time.time()))
+            if upload_keys:
+                from .attachment_uploads import _pin_uploads
+
+                upload_target = note_id if note_id is not None else f"draft-create:{client_request_id}"
+                _pin_uploads(db, operation_id, owner, upload_target,
+                             intent.get("notebook_id"), upload_keys)
             if client_request_id:
                 db.execute('INSERT INTO create_receipts VALUES(?,?,?,?,?,NULL)',
                            (owner, client_request_id, request_hash, operation_id, 'pending'))
@@ -333,21 +382,28 @@ class Store:
         encrypted_result = self.cipher.encrypt(json.dumps(result, ensure_ascii=False).encode()) if result is not None else None
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT owner, target, status FROM write_operations WHERE operation_id=?",
+                             (operation_id,)).fetchone()
+            # A late worker must not modify a reviewed receipt after acknowledgement.
+            if row is None:
+                return
             if uncertain:
                 db.execute("UPDATE write_operations SET status='uncertain' WHERE operation_id=?",
                            (operation_id,))
                 db.execute("UPDATE create_receipts SET status='uncertain' WHERE operation_id=?", (operation_id,))
+                return
+            if encrypted_result is not None:
+                db.execute("UPDATE create_receipts SET status='completed',result=? WHERE operation_id=?",
+                           (encrypted_result, operation_id))
+            elif row["status"] == "pending":
+                db.execute('DELETE FROM create_receipts WHERE operation_id=?', (operation_id,))
             else:
-                if encrypted_result is not None:
-                    db.execute("UPDATE create_receipts SET status='completed',result=? WHERE operation_id=?",
-                               (encrypted_result, operation_id))
-                else:
-                    db.execute('DELETE FROM create_receipts WHERE operation_id=?', (operation_id,))
-                row = db.execute("SELECT owner, target FROM write_operations WHERE operation_id=?",
-                                 (operation_id,)).fetchone()
-                db.execute("DELETE FROM write_operations WHERE operation_id=?", (operation_id,))
-                if row:
-                    self._release_target_if_clear(db, row["owner"], row["target"])
+                return
+            from .attachment_uploads import _finish_uploads
+
+            _finish_uploads(db, operation_id, verified=result is not None)
+            db.execute("DELETE FROM write_operations WHERE operation_id=?", (operation_id,))
+            self._release_target_if_clear(db, row["owner"], row["target"])
 
     @staticmethod
     def _release_target_if_clear(db: sqlite3.Connection, owner: str, target: str) -> None:
@@ -370,6 +426,12 @@ class Store:
                 (owner, operation_id, time.time() - 3600)).fetchone()
             if not row:
                 return False
+            from .attachment_uploads import REVIEWED_TTL
+
+            # The acknowledgement does not prove that a NAS write succeeded.
+            db.execute("""UPDATE draft_uploads SET status='reviewed', expires=?
+                          WHERE owner=? AND operation_id=? AND status='pinned'""",
+                       (time.time() + REVIEWED_TTL, owner, operation_id))
             db.execute("DELETE FROM write_operations WHERE owner=? AND operation_id=?",
                        (owner, operation_id))
             db.execute("UPDATE create_receipts SET status='reviewed' WHERE owner=? AND operation_id=?",

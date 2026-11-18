@@ -2,6 +2,8 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { Workspace } from './Workspace'
+import type { Status } from './api'
+import { exportMath } from './mathExport'
 import { DEFAULT_PREFERENCES, PREFERENCES_KEY, loadPreferences } from './preferences'
 
 vi.mock('./mathExport', () => ({ exportMath: vi.fn(async () => []) }))
@@ -23,7 +25,7 @@ beforeEach(() => {
   vi.spyOn(window, 'confirm').mockReturnValue(true)
 })
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
-function mount(onLogout = async () => {}) { return render(<Workspace session={session} status={status} onLogout={onLogout} onSessionExpired={() => {}} />) }
+function mount(onLogout = async () => {}, workspaceStatus: Status = status) { return render(<Workspace session={session} status={workspaceStatus} onLogout={onLogout} onSessionExpired={() => {}} />) }
 async function edit() { await screen.findByLabelText('노트 제목'); fireEvent.click(screen.getByRole('button', {name: '분할'})); fireEvent.change(screen.getByLabelText('노트 제목'), {target: {value: '수정 제목'}}) }
 it('autosaves without a Save button and keeps typing enabled while a request is pending', async () => {
   mount(); await edit()
@@ -69,6 +71,8 @@ it('coalesces consecutive edits into one automatic write', async () => {
   fireEvent.change(screen.getByLabelText('HTML 본문'), {target: {value: '<p>latest</p>'}})
   await waitFor(() => expect(writes).toHaveLength(1), {timeout: 2000})
   expect(writes[0]).toMatchObject({title: '최종 제목', html: '<p>latest</p>'})
+  expect(writes[0]).not.toHaveProperty('draft_id')
+  expect(writes[0]).not.toHaveProperty('uploads')
   resolveSave(new Response(JSON.stringify({...note, title: '최종 제목', html: '<p>latest</p>', version: 'v2'})))
   await screen.findByText('✓ NAS에 자동 저장됨')
   expect((screen.getByLabelText('노트 제목') as HTMLInputElement).value).toBe('최종 제목')
@@ -622,4 +626,407 @@ it('does not mutate the NAS when unresolved-write state cannot be persisted',asy
   await edit()
   await screen.findByText('편집본을 이 탭에 보관할 수 없어 저장을 중단했습니다. 브라우저 저장소 설정을 확인하세요.',{}, {timeout:2000})
   expect(writes).toHaveLength(0)
+})
+
+function attachmentHarness(markdown = 'base') {
+  const markdownNote = {...note, markdown}
+  const transfers: {path: string; init: RequestInit; resolve: (response: Response) => void; reject: (error: Error) => void}[] = []
+  const metadata = (index: number, image = false) => ({
+    upload_id: transfers[index].path.split('?')[0].split('/').at(-1)!,
+    name: (transfers[index].init.body as File).name,
+    size: (transfers[index].init.body as File).size, sha256: String(index + 1).repeat(64),
+    mime: image ? 'image/png' : 'application/pdf', image, status: 'ready',
+  })
+  const lookup = new Map<string, Response>()
+  const fetchMock = vi.fn(async (path: string, init: RequestInit = {}) => {
+    if (path.includes('/uploads/')) {
+      if (init.method === 'PUT') return new Promise<Response>((resolve, reject) => transfers.push({path, init, resolve, reject}))
+      return init.method === 'DELETE' ? Response.json({deleted:true}) : lookup.get(path) ?? new Response(null, {status: 404})
+    }
+    if (init.method === 'PUT' || init.method === 'POST' && path === '/api/notes') {
+      writes.push(JSON.parse(init.body as string))
+      return new Promise<Response>(resolve => {resolveSave = resolve})
+    }
+    return new Response(JSON.stringify(path === '/api/notebooks' ? {notebooks:[{id:'book1', name:'업무', stack:''}]} :
+      path === '/api/notes' ? {notes:[markdownNote]} : path === '/api/writes' ? {operations:[]} : markdownNote))
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  return {markdownNote, transfers, metadata, lookup, fetchMock}
+}
+
+async function attachmentEditor(workspaceStatus?: Parameters<typeof mount>[1]) {
+  if (!Range.prototype.getClientRects) {
+    Range.prototype.getClientRects = () => Object.assign([], {item: () => null});
+    Range.prototype.getBoundingClientRect = () => new DOMRect();
+  }
+  const {container} = mount(undefined, workspaceStatus)
+  await screen.findByLabelText('노트 제목')
+  fireEvent.click(screen.getByRole('button', {name:'분할'}))
+  return container.querySelector<HTMLElement>('.cm-content')!
+}
+
+it('sends raw files with bounded concurrency and inserts in selection order using server image metadata', async () => {
+  const {transfers, metadata} = attachmentHarness()
+  const editor = await attachmentEditor({...status, source:'environment', read_only:true})
+  const files = [new File(['1'], '한글[1].pdf', {type:'image/png'}), new File(['2'], 'photo.bin'), new File(['3'], 'third.pdf')]
+  fireEvent.change(screen.getByLabelText('첨부할 파일 선택'), {target:{files}})
+  await waitFor(() => expect(transfers).toHaveLength(2))
+  expect(transfers[0].path).toMatch(/^\/api\/drafts\/[a-f0-9-]+\/uploads\/[a-f0-9-]+\?notebook_id=book1&note_id=note1$/)
+  expect(transfers[0].init).toMatchObject({method:'PUT', body:files[0], headers:{
+    'Content-Type':'application/octet-stream', 'X-CSRF-Token':'csrf',
+    'X-Upload-Name':encodeURIComponent(files[0].name), 'X-Upload-Size':'1',
+  }})
+  transfers[1].resolve(Response.json(metadata(1, true)))
+  await waitFor(() => expect(transfers).toHaveLength(3))
+  expect(editor.textContent).toBe('base')
+  transfers[0].resolve(Response.json(metadata(0)))
+  transfers[2].resolve(Response.json(metadata(2)))
+  await waitFor(() => expect(writes).toHaveLength(1), {timeout: 2000})
+  expect(writes[0]).toMatchObject({draft_id:transfers[0].path.split('/')[3],
+    uploads: [0,1,2].map(index => {const {upload_id, sha256} = metadata(index); return {upload_id, sha256}})})
+  expect(writes[0].markdown).toBe(`[한글\\[1\\].pdf](attachment://${metadata(0).upload_id})![photo.bin](attachment://${metadata(1).upload_id})[third.pdf](attachment://${metadata(2).upload_id})base`)
+})
+
+it('recovers a lost upload response by GET and waits for composition before inserting at the mapped bookmark', async () => {
+  const { EditorView } = await import('@uiw/react-codemirror')
+  const {transfers, metadata, lookup, fetchMock} = attachmentHarness()
+  const editor = await attachmentEditor()
+  const view = EditorView.findFromDOM(editor.closest(".cm-editor") as HTMLElement)!
+  view.dispatch({selection:{anchor:2}})
+  fireEvent.paste(editor, {clipboardData:{files:[new File(['file'], 'photo.png')], types:['Files', 'text/plain'], getData:() => 'also text'}})
+  await waitFor(() => expect(transfers).toHaveLength(1))
+  fireEvent.compositionStart(editor)
+  view.dispatch({changes:{from:0, insert:'앞'}})
+  lookup.set(transfers[0].path, Response.json(metadata(0, true)))
+  transfers[0].reject(new Error('connection lost'))
+  await waitFor(() => expect(fetchMock.mock.calls.some(([path, init]) => path === transfers[0].path && (init?.method ?? 'GET') === 'GET')).toBe(true))
+  expect(view.state.doc.toString()).toBe('앞base')
+  expect(writes).toHaveLength(0)
+  fireEvent.compositionEnd(editor)
+  await waitFor(() => expect(view.state.doc.toString()).toBe(`앞ba![photo.png](attachment://${metadata(0).upload_id})se`))
+  expect(transfers).toHaveLength(1)
+})
+
+it('suppresses the late response of a canceled drop and sends the authenticated JSON DELETE', async () => {
+  const { EditorView } = await import('@uiw/react-codemirror')
+  const {transfers, metadata, fetchMock} = attachmentHarness()
+  const editor = await attachmentEditor()
+  const view = EditorView.findFromDOM(editor.closest('.cm-editor') as HTMLElement)!
+  vi.spyOn(view, 'posAtCoords').mockReturnValue(2)
+  fireEvent.drop(editor, {dataTransfer:{files:[new File(['example'], 'cancel.pdf')], types:['Files']}})
+  await waitFor(() => expect(transfers).toHaveLength(1))
+  fireEvent.click(screen.getByRole('button', {name:'새 노트'}))
+  expect(window.location.search).toContain('note=note1')
+  fireEvent.click(screen.getByRole('button', {name:/^취소$/}))
+  expect(transfers[0].init.signal?.aborted).toBe(true)
+  transfers[0].resolve(Response.json(metadata(0)))
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(transfers[0].path, expect.objectContaining({
+    method:'DELETE', headers:{'Content-Type':'application/json', 'X-CSRF-Token':'csrf'},
+  })))
+  await waitFor(() => expect(screen.queryByLabelText('첨부파일 업로드')).toBeNull())
+  expect(view.state.doc.toString()).toBe('base')
+  expect(writes).toHaveLength(0)
+})
+
+it('restores an upload bookmark with a status lookup after reload without serializing the file', async () => {
+  const {transfers, metadata, lookup, fetchMock} = attachmentHarness()
+  await attachmentEditor()
+  fireEvent.change(screen.getByLabelText('첨부할 파일 선택'), {target:{files:[new File(['private binary'], 'resume.pdf')]}})
+  await waitFor(() => expect(transfers).toHaveLength(1))
+  const stored = JSON.parse(sessionStorage.getItem(sessionStorage.key(0)!)!)
+  expect(stored.attachments.items[0]).toMatchObject({id:metadata(0).upload_id, position:0, phase:'uploading'})
+  expect(JSON.stringify(stored)).not.toContain('private binary')
+  cleanup()
+  lookup.set(transfers[0].path, Response.json(metadata(0)))
+  mount()
+  await waitFor(() => expect(writes).toHaveLength(1), {timeout:2000})
+  expect(fetchMock).toHaveBeenCalledWith(transfers[0].path, expect.objectContaining({signal:expect.any(AbortSignal)}))
+  expect(transfers).toHaveLength(1)
+  expect(writes[0]).toMatchObject({uploads:[{upload_id:metadata(0).upload_id, sha256:metadata(0).sha256}]})
+})
+
+it('checks an upload before retrying the same id and validates the inclusive size limit', async () => {
+  const {transfers, fetchMock} = attachmentHarness()
+  await attachmentEditor()
+  const exact = new File(['size stub'], 'exact.pdf')
+  Object.defineProperty(exact, 'size', {value:50_000_000})
+  const large = new File(['size stub'], 'large.pdf')
+  Object.defineProperty(large, 'size', {value:50_000_001})
+  fireEvent.change(screen.getByLabelText('첨부할 파일 선택'), {
+    target:{files:[large, new File([], 'empty.pdf'), exact]},
+  })
+  await waitFor(() => expect(transfers).toHaveLength(1))
+  expect(screen.getByRole('alert').textContent).toContain('large.pdf')
+  expect(screen.getByRole('alert').textContent).toContain('empty.pdf')
+  expect(transfers[0].init.headers).toMatchObject({'X-Upload-Size':'50000000'})
+  transfers[0].resolve(Response.json({error:'UPLOAD_SIZE_MISMATCH'}, {status:422}))
+  fireEvent.click(await within(screen.getByLabelText('첨부파일 업로드')).findByRole('button', {name:/^다시 시도$/}))
+  await waitFor(() => expect(transfers).toHaveLength(2))
+  expect(transfers[1].path).toBe(transfers[0].path)
+  const calls = fetchMock.mock.calls.filter(([path]) => path === transfers[0].path)
+  expect(calls.map(([, init]) => init?.method ?? 'GET')).toEqual(['PUT', 'GET', 'PUT'])
+})
+
+it('rebases the queued attachment added during creation onto the returned note and saves only its manifest', async () => {
+  window.history.replaceState({}, '', '/?n=book1&new=1')
+  const {transfers, metadata, markdownNote} = attachmentHarness()
+  await attachmentEditor()
+  fireEvent.change(screen.getByLabelText('첨부할 파일 선택'), {target:{files:[new File(['first'], 'first.pdf')]}})
+  await waitFor(() => expect(transfers).toHaveLength(1))
+  transfers[0].resolve(Response.json(metadata(0)))
+  await waitFor(() => expect(writes).toHaveLength(1), {timeout:2000})
+  expect(transfers[0].path).toContain(`&client_request_id=${writes[0].client_request_id}`)
+  expect(writes[0]).toMatchObject({uploads:[{upload_id:metadata(0).upload_id, sha256:metadata(0).sha256}]})
+  fireEvent.change(screen.getByLabelText('첨부할 파일 선택'), {target:{files:[new File(['second'], 'second.pdf')]}})
+  fireEvent.change(screen.getByLabelText('노트 제목'), {target:{value:'저장 중 변경'}})
+  expect(transfers).toHaveLength(1)
+  resolveSave(Response.json({...markdownNote, id:'created', version:'created-v1', title:'제목 없음',
+    markdown:writes[0].markdown, attachment_bindings:{[metadata(0).upload_id]:'file1'}}))
+  await waitFor(() => expect(transfers).toHaveLength(2))
+  expect(transfers[1].path).toContain('&note_id=created')
+  expect(screen.getByText('NAS에 저장됨', {exact:true})).toBeTruthy()
+  transfers[1].resolve(Response.json(metadata(1)))
+  await waitFor(() => expect(writes).toHaveLength(2), {timeout:2000})
+  expect(writes[1]).toMatchObject({version:'created-v1', title:'저장 중 변경', draft_id:writes[0].draft_id,
+    uploads:[{upload_id:metadata(1).upload_id, sha256:metadata(1).sha256}]})
+  expect(writes[1].markdown).toContain(metadata(0).upload_id)
+  expect(writes[1].markdown).toContain(metadata(1).upload_id)
+})
+
+it('keeps the local draft and upload ids read-only when reload finds a staged NAS write', async () => {
+  const staged = {...note, editable:false, read_only_reason:'WRITE_IN_PROGRESS', write_in_progress:true}
+  const key = 'synonote:web-draft:["https://nas.example","alice"]:note:note1'
+  const id = '0090cd10-a2a8-4ef9-98fc-aebba857dcc7'
+  const draftId = '0090cd10-a2a8-4ef9-98fc-aebba857dcc8'
+  const markdown = `로컬 편집 [영수증](attachment://${id})`
+  const metadata = {upload_id:id, name:'영수증.pdf', size:5, sha256:'a'.repeat(64), mime:'application/pdf', image:false, status:'pinned'}
+  const attachments = {id:draftId, items:[{id, name:metadata.name, phase:'ready',
+    position:6, inserted:true, target:{notebook_id:'book1', note_id:'note1'}, metadata}]}
+  sessionStorage.setItem(key, JSON.stringify({key:'note:note1', notebook_id:'book1', title:'보관한 제목',
+    html:'<p>local</p>', version:'v1', markdown, attachments}))
+  const fetchMock = vi.fn(async (path: string) => Response.json(
+    path === '/api/notebooks' ? {notebooks:[{id:'book1',name:'업무',stack:''}]} :
+    path === '/api/notes' ? {notes:[staged]} :
+    path === '/api/writes' ? {operations:[]} :
+    path.includes('/uploads/') ? metadata : staged))
+  vi.stubGlobal('fetch', fetchMock)
+  const {container} = mount()
+  const review = await screen.findByRole('button', {name:'NAS 확인본 다시 불러오기'})
+  expect((screen.getByLabelText('노트 제목') as HTMLInputElement).readOnly).toBe(true)
+  expect(container.querySelector('.cm-content')?.getAttribute('contenteditable')).toBe('false')
+  expect(container.querySelector('.cm-content')?.textContent).toBe(markdown)
+  await screen.findByText(/NAS 저장 결과를 확인해야 합니다/)
+  fireEvent.click(review)
+  await screen.findByText(/확인한 NAS 결과와 보관한 편집본/)
+  expect(JSON.parse(sessionStorage.getItem(key)!)).toMatchObject({
+    review_required:true, version:'v1', markdown, attachments:{id:draftId, items:[{id, metadata}]},
+  })
+  expect(writes).toHaveLength(0)
+})
+
+it('keeps a heading at the caret as a heading when files are inserted before it', async () => {
+  const {transfers, metadata} = attachmentHarness('# 제목\n\n문단')
+  const editor = await attachmentEditor()
+  fireEvent.change(screen.getByLabelText('첨부할 파일 선택'), {target:{files:[new File(['contents'], 'report.pdf')]}})
+  await waitFor(() => expect(transfers).toHaveLength(1))
+  transfers[0].resolve(Response.json(metadata(0)))
+  await waitFor(() => expect(editor.textContent).toContain(metadata(0).upload_id))
+  const { EditorView } = await import('@uiw/react-codemirror')
+  const view = EditorView.findFromDOM(editor.closest('.cm-editor') as HTMLElement)!
+  expect(view.state.doc.toString()).toBe(`[report.pdf](attachment://${metadata(0).upload_id})\n\n# 제목\n\n문단`)
+})
+
+const unresolvedUpload = '0090cd10-a2a8-4ef9-98fc-aebba857dcc7'
+const committedUpload = '0090cd10-a2a8-4ef9-98fc-aebba857dcc8'
+const recoveryDraftId = '0090cd10-a2a8-4ef9-98fc-aebba857dcc9'
+const recoveryCreateId = '0090cd10-a2a8-4ef9-98fc-aebba857dcca'
+const heldMarkdown = `로컬 [영수증](attachment://${unresolvedUpload}) · [NAS 파일](attachment://${committedUpload})`
+
+function attachmentRecovery({compose = false, staged = false, gone = false, deleteGone = false,
+  markdown = heldMarkdown} = {}) {
+  if (compose) window.history.replaceState({}, '', '/?n=book1&new=1')
+  const key = compose ? draftKey.replace('note:note1', 'new:book1') : draftKey
+  const target = compose ? {notebook_id:'book1',client_request_id:recoveryCreateId} : {notebook_id:'book1',note_id:'note1'}
+  const metadata = {upload_id:unresolvedUpload, name:'영수증.pdf', size:5, sha256:'a'.repeat(64),
+    mime:'application/pdf', image:false, status:'pinned'}
+  const held = {key:compose?'new:book1':'note:note1', notebook_id:'book1', title:'보관 제목', html:'<p>local</p>',
+    markdown, version:'v1', review_required:true, pending_upload_ids:[unresolvedUpload],
+    ...(compose ? {client_request_id:recoveryCreateId} : {}),
+    attachments:{id:recoveryDraftId,items:[{id:unresolvedUpload,name:metadata.name,phase:'uncertain',inserted:true,
+      position:3,target,metadata} ]}}
+  sessionStorage.setItem(key,JSON.stringify(held))
+  const currentNote = {...note, markdown:`NAS [파일](attachment://${committedUpload})`, version:'v2',
+    attachment_bindings:{[committedUpload]:'file1'}, editable:!staged, write_in_progress:staged}
+  let acked = false
+  const base = vi.mocked(fetch).getMockImplementation()!
+  const fetcher = vi.fn(async (path:string, init:RequestInit = {}) => {
+    if (path === '/api/writes') return Response.json({operations:acked?[]:[{operation_id:'op',
+      note_id:compose?null:'note1',target:'book1',title:'보관 제목',status:'uncertain',created:0}]})
+    if (path === '/api/writes/op/ack') { acked = true; return Response.json({}) }
+    if (path.startsWith('/api/creates/')) return Response.json({status:acked?'reviewed':'uncertain',operation_id:'op'})
+    if (path === '/api/notes/note1' && !init.method) return Response.json(currentNote)
+    if (path.includes('/uploads/')) {
+      if (init.method === 'PUT') return Response.json({...metadata,status:'ready',
+        upload_id:path.split('?')[0].split('/').at(-1)})
+      if (gone && acked) return Response.json({}, {status:404})
+      if (init.method === 'DELETE') return deleteGone ? Response.json({}, {status:404}) : Response.json({deleted:true})
+      return Response.json({...metadata,status:acked?'reviewed':'pinned'})
+    }
+    if (path === '/api/notes' && init.method === 'POST') {
+      writes.push(JSON.parse(init.body as string))
+      return new Promise<Response>(() => {})
+    }
+    return base(path, init)
+  })
+  vi.stubGlobal('fetch', fetcher)
+  return {key, held, fetcher}
+}
+
+it('acknowledges a pinned create without replay and explicitly creates from preserved text with fresh IDs', async () => {
+  const {key,fetcher} = attachmentRecovery({compose:true})
+  await attachmentEditor()
+  fireEvent.click(await screen.findByRole('button',{name:/NAS 확인 후 보류 해제/}))
+  const restart = await screen.findByRole('button',{name:'초안 보관하고 별도 노트 생성'})
+  const queue = screen.getByLabelText('첨부파일 업로드')
+  expect((await within(queue).findByRole('link',{name:'영수증.pdf'})).getAttribute('href')).toContain(recoveryCreateId)
+  expect(within(queue).queryByRole('button',{name:'다시 시도'})).toBeNull()
+  await new Promise(resolve => setTimeout(resolve, 900))
+  expect(fetcher.mock.calls.filter(([,init])=>['PUT','DELETE'].includes(init?.method ?? ''))).toHaveLength(0)
+  expect(writes).toHaveLength(0)
+  fireEvent.click(restart)
+  const save = await screen.findByRole('button',{name:'편집본 저장하고 자동 저장 재개'})
+  cleanup(); mount()
+  await screen.findByRole('button',{name:save.textContent!})
+  fireEvent.change(screen.getByLabelText('첨부할 파일 선택'),{target:{files:[new File(['new'],'영수증.pdf')]}})
+  await waitFor(() => expect(fetcher.mock.calls.some(([path,init])=>path.includes('/uploads/') && init?.method==='PUT')).toBe(true))
+  const freshPath = fetcher.mock.calls.find(([path,init])=>path.includes('/uploads/') && init?.method==='PUT')![0]
+  expect(freshPath).not.toContain(unresolvedUpload)
+  expect(freshPath).not.toContain(recoveryCreateId)
+  expect(freshPath).not.toContain(recoveryDraftId)
+  await waitFor(() => expect(JSON.parse(sessionStorage.getItem(key)!).markdown).toContain('로컬 영수증 · NAS 파일'))
+  expect(JSON.parse(sessionStorage.getItem(`${key}:held:${recoveryCreateId}`)!)).toMatchObject({markdown:heldMarkdown})
+  await new Promise(resolve => setTimeout(resolve, 900))
+  expect(writes).toHaveLength(0)
+  fireEvent.click(screen.getByRole('button',{name:'편집본 저장하고 자동 저장 재개'}))
+  await waitFor(() => expect(writes).toHaveLength(1))
+  expect(writes[0].client_request_id).not.toBe(recoveryCreateId)
+  expect(writes[0].markdown).not.toContain(unresolvedUpload)
+  expect(writes[0].uploads).toEqual([{upload_id:freshPath.split('?')[0].split('/').at(-1),sha256:'a'.repeat(64)}])
+})
+
+it('resumes an editable NAS note with confirmed bindings and stays paused over reload until explicitly saved', async () => {
+  const {key} = attachmentRecovery()
+  const editor = await attachmentEditor()
+  fireEvent.click(await screen.findByRole('button',{name:/NAS 확인 후 보류 해제/}))
+  fireEvent.click(await screen.findByRole('button',{name:'보관한 편집본으로 계속'}))
+  await waitFor(() => expect(editor.textContent).toBe(`로컬 영수증 · [NAS 파일](attachment://${committedUpload})`))
+  expect(JSON.parse(sessionStorage.getItem(key)!)).toMatchObject({version:'v2'})
+  cleanup(); mount()
+  const save = await screen.findByRole('button',{name:'편집본 저장하고 자동 저장 재개'})
+  await new Promise(resolve => setTimeout(resolve, 900))
+  expect(writes).toHaveLength(0)
+  fireEvent.click(save)
+  await waitFor(() => expect(writes).toHaveLength(1))
+  expect(writes[0]).toMatchObject({version:'v2',markdown:`로컬 영수증 · [NAS 파일](attachment://${committedUpload})`})
+  expect(writes[0]).not.toHaveProperty('uploads')
+})
+
+it('opens a separate draft from preserved text when the NAS note remains staged', async () => {
+  const {key} = attachmentRecovery({staged:true})
+  await attachmentEditor()
+  fireEvent.click(await screen.findByRole('button',{name:/NAS 확인 후 보류 해제/}))
+  const copy = await screen.findByRole('button',{name:'보관한 본문으로 별도 노트 작성'})
+  expect(screen.queryByRole('button',{name:'보관한 편집본으로 계속'})).toBeNull()
+  fireEvent.click(copy)
+  await screen.findByRole('button',{name:'편집본 저장하고 자동 저장 재개'})
+  expect(window.location.search).toContain('new=1')
+  expect(JSON.parse(sessionStorage.getItem(key)!)).toMatchObject({markdown:heldMarkdown,review_required:true})
+  expect(JSON.parse(sessionStorage.getItem(key.replace('note:note1','new:book1'))!)).toMatchObject({markdown:'로컬 영수증 · NAS 파일'})
+  expect(writes).toHaveLength(0)
+  fireEvent.click(screen.getByRole('button',{name:'전체 그래프'}))
+  await waitFor(() => expect(window.location.search).not.toContain('new=1'))
+  expect(writes).toHaveLength(0)
+})
+
+it('preserves an existing compose draft when the separate recovery destination is occupied', async () => {
+  const {key} = attachmentRecovery({staged:true})
+  const composeKey = key.replace('note:note1','new:book1')
+  const saved = JSON.stringify({key:'new:book1',notebook_id:'book1',title:'기존 초안',html:'<p></p>',markdown:'별개 본문'})
+  sessionStorage.setItem(composeKey,saved)
+  await attachmentEditor()
+  fireEvent.click(await screen.findByRole('button',{name:/NAS 확인 후 보류 해제/}))
+  fireEvent.click(await screen.findByRole('button',{name:'보관한 본문으로 별도 노트 작성'}))
+  await screen.findByText(/이 메모장에 작성 중인 새 노트가 있습니다/)
+  expect(sessionStorage.getItem(composeKey)).toBe(saved)
+  expect(window.location.search).toContain('note=note1')
+  expect(writes).toHaveLength(0)
+})
+
+it('removes a CRLF reference-style attachment without changing an approved NAS link', async () => {
+  attachmentRecovery({markdown:`로컬 [영수증][첨부]\r\n\r\n[첨부]: <attachment://${unresolvedUpload}>\r\n\r\n[NAS 파일](attachment://${committedUpload})`})
+  const editor = await attachmentEditor()
+  fireEvent.click(await screen.findByRole('button',{name:/NAS 확인 후 보류 해제/}))
+  fireEvent.click(await screen.findByRole('button',{name:'보관한 편집본으로 계속'}))
+  await screen.findByRole('button',{name:'편집본 저장하고 자동 저장 재개'})
+  expect(editor.textContent).toContain('로컬 영수증')
+  expect(editor.textContent).toContain(`[NAS 파일](attachment://${committedUpload})`)
+  expect(editor.textContent).not.toContain(unresolvedUpload)
+  expect(writes).toHaveLength(0)
+})
+
+it.each([
+  ['multiline Markdown', `> [영수증](\n> attachment://${unresolvedUpload})`],
+  ['raw HTML', `<a href="attachment://${unresolvedUpload}">영수증</a>`],
+])('leaves recovery paused when a live %s attachment link cannot be safely rewritten', async (_, markdown) => {
+  const {key} = attachmentRecovery({markdown})
+  await attachmentEditor()
+  fireEvent.click(await screen.findByRole('button',{name:/NAS 확인 후 보류 해제/}))
+  fireEvent.click(await screen.findByRole('button',{name:'보관한 편집본으로 계속'}))
+  await screen.findByText(/해결되지 않은 첨부 링크가 남아 있습니다/)
+  expect(screen.queryByRole('button',{name:'편집본 저장하고 자동 저장 재개'})).toBeNull()
+  expect(JSON.parse(sessionStorage.getItem(key)!)).toMatchObject({markdown,review_required:true,recovery_acknowledged:true})
+  expect(writes).toHaveLength(0)
+})
+
+it.each(['reviewed','expired','expired during delete'])('clears a %s upload with an explicit discard', async state => {
+  const gone = state === 'expired'
+  const {key,fetcher} = attachmentRecovery({staged:true,gone,deleteGone:state === 'expired during delete'})
+  await attachmentEditor()
+  expect(screen.queryByRole('button',{name:'임시 파일 버리기'})).toBeNull()
+  fireEvent.click(await screen.findByRole('button',{name:/NAS 확인 후 보류 해제/}))
+  const discard = await screen.findByRole('button',{name:gone?'만료된 첨부 표시 지우기':'임시 파일 버리기'})
+  expect(fetcher.mock.calls.some(([,init])=>init?.method==='DELETE')).toBe(false)
+  vi.mocked(window.confirm).mockReturnValueOnce(false)
+  fireEvent.click(discard)
+  expect(window.confirm).toHaveBeenLastCalledWith(expect.stringContaining('본문의 첨부 링크는 이름만 남습니다.'))
+  expect(fetcher.mock.calls.some(([,init])=>init?.method==='DELETE')).toBe(false)
+  fireEvent.click(discard)
+  await waitFor(() => expect(screen.queryByLabelText('첨부파일 업로드')).toBeNull())
+  expect(fetcher.mock.calls.filter(([,init])=>init?.method==='DELETE')).toEqual(gone?[]:[
+    [`/api/drafts/${recoveryDraftId}/uploads/${unresolvedUpload}?notebook_id=book1&note_id=note1`,
+      expect.objectContaining({headers:{'Content-Type':'application/json','X-CSRF-Token':'csrf'}})],
+  ])
+  expect(JSON.parse(sessionStorage.getItem(key)!)).toMatchObject({review_required:true,pending_upload_ids:[],
+    markdown:`로컬 영수증 · [NAS 파일](attachment://${committedUpload})`})
+  expect(writes).toHaveLength(0)
+})
+
+it('preserves edits made during attachment save preparation before the network write starts', async () => {
+  const {transfers, metadata, markdownNote} = attachmentHarness()
+  let resumeMath!: (value: Awaited<ReturnType<typeof exportMath>>) => void
+  vi.mocked(exportMath).mockImplementationOnce(() => new Promise(resolve => {resumeMath = resolve}))
+  await attachmentEditor()
+  fireEvent.change(screen.getByLabelText('첨부할 파일 선택'), {target:{files:[new File(['doc'], 'snapshot.pdf')]}})
+  await waitFor(() => expect(transfers).toHaveLength(1))
+  transfers[0].resolve(Response.json(metadata(0)))
+  await waitFor(() => expect(resumeMath).toBeTypeOf('function'), {timeout:2000})
+  fireEvent.change(screen.getByLabelText('노트 제목'), {target:{value:'준비 중 수정'}})
+  resumeMath([])
+  await waitFor(() => expect(writes).toHaveLength(1))
+  resolveSave(Response.json({...markdownNote, version:'v2', markdown:writes[0].markdown,
+    attachment_bindings:{[metadata(0).upload_id]:'file1'}}))
+  await waitFor(() => expect(writes).toHaveLength(2), {timeout:2000})
+  expect(writes[1]).toMatchObject({version:'v2', title:'준비 중 수정'})
+  expect(writes[1]).not.toHaveProperty('draft_id')
+  expect(writes[1]).not.toHaveProperty('uploads')
 })

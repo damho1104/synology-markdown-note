@@ -34,4 +34,4 @@ Starting with 0.2.1 build 8, synchronization generates offline PNGs of equations
 
 If web edits to the body cause the source attachment to no longer match, the note opens as a rich-text HTML document to preserve those edits. Content in original HTML documents and preservation blocks is not automatically reinterpreted as math. Validation on 2026-10-16 covered actual WebKit image generation and synthetic NAS round trips; it did not recheck display in a real NAS web interface.
 
-To update bundled resources, extract the official npm distribution and run `rtk proxy python3 script/bundle_katex.py /path/to/package`. This script embeds WOFF2 fonts in the CSS; nothing is downloaded while building or running the app. The license is included in `Resources/KATEX-LICENSE.txt`.
+To update bundled resources, extract the official npm distribution and run `python3 script/bundle_katex.py /path/to/package`. This script embeds WOFF2 fonts in the CSS; nothing is downloaded while building or running the app. The license is included in `Resources/KATEX-LICENSE.txt`.

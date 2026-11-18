@@ -89,6 +89,8 @@ The displayed version of official release apps and CLIs is a version without a c
 
 ## Login and automatic login
 
+NAS addresses, usernames, stack and notebook names, file paths, and IDs in the commands below are examples. Replace them with values from your own environment, including a current code for the OTP example. Product defaults and required names are identified separately.
+
 ```shell
 synonote login --server https://nas.example:5001 --username alice --remember
 synonote login --server https://nas.example:5001 --username alice --otp 123456 --remember
@@ -122,9 +124,11 @@ A stack is Note Station's `stack` attribute. Use `--notebook-id` if multiple not
 
 ## Daily summary knowledge index
 
-Builds an index by reading only monthly notebooks in `YYYY-MM` format in the `LLM-Daily-Summary` stack. Original notes are not modified, and no classification by LLM provider is created. Index notebooks have the following separate roles.
+Builds an index from monthly notebooks named `YYYY-MM` in the stack specified by `--stack`. You can choose any stack name. Original notes are not modified. This feature currently targets daily summary notes organized into monthly notebooks; notebooks with other names are not read. Project classification uses `by_project` metadata, while topic classification uses technical terms and regular expressions in the body. It does not call an LLM or classify notes by LLM provider.
 
-- `llm-index`: Stores only the four hub notes below
+`--index-notebook` names the notebook for hub notes. Create it in the selected stack before running the command. If omitted, the option defaults to `llm-index`. The examples below use a stack named `Work` and a notebook named `Knowledge Index`. Replace both names with your own.
+
+- The notebook specified by `--index-notebook`: Stores only the four hub notes below
 - `by-project`: Stores detailed project indexes
 - `by-topic`: Stores detailed topic indexes
 
@@ -135,13 +139,13 @@ Builds an index by reading only monthly notebooks in `YYYY-MM` format in the `LL
 
 ```shell
 # First review the full result. --dry-run is the default.
-synonote index build --stack 'LLM-Daily-Summary' --index-notebook 'llm-index' --dry-run --json
+synonote index build --stack 'Work' --index-notebook 'Knowledge Index' --dry-run --json
 # After review, create missing detail notebooks and move/publish existing managed notes
-synonote index build --stack 'LLM-Daily-Summary' --index-notebook 'llm-index' --apply --json
+synonote index build --stack 'Work' --index-notebook 'Knowledge Index' --apply --json
 # On subsequent runs, the same command updates only changed managed items.
 ```
 
-Use `--project-min-days 3` to adjust the threshold for creating detailed project notes (minimum 2). Prepare `llm-index` first. If the detail notebooks `by-project` and `by-topic` do not exist, `--apply` creates them and places them in the same stack. Detailed project and topic notes already published in `llm-index` are **moved directly on the remote server while verifying note IDs, HTML, and attachments**. `--dry-run` shows `placement`, `move`, `move_update`, and `notebooks_to_create` without modifying anything.
+Use `--project-min-days 3` to adjust the threshold for creating detailed project notes (minimum 2). Prepare the hub notebook specified by `--index-notebook` first. If the detail notebooks `by-project` and `by-topic` do not exist, `--apply` creates them and places them in the same stack. Detailed project and topic notes already published in the hub notebook are **moved directly on the remote server while verifying note IDs, HTML, and attachments**. `--dry-run` shows `placement`, `move`, `move_update`, and `notebooks_to_create` without modifying anything.
 
 The CLI checks title collisions across the entire NAS, resolution of original-note links, and existing management markers (`<!-- synonote-index:v1 -->`). User-written notes are not overwritten even when their titles match. Unnecessary writes are skipped when existing index contents are unchanged. Each index link uses the `note title.md` format and assumes internal link support in the macOS app.
 

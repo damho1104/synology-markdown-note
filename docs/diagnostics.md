@@ -39,7 +39,7 @@ Main events:
 Events are also recorded in the system log under subsystem `com.damho.SynologyMarkdown`, category `Diagnostics`. Additional metadata in the system log is marked private. For the stack at app termination, check the `.ips` reports macOS writes to `~/Library/Logs/DiagnosticReports/`. If the app crashes, events immediately before termination may remain; `app.terminating` records a normal termination request.
 
 ```sh
-rtk proxy /usr/bin/log show --last 10m --style compact --predicate 'subsystem == "com.damho.SynologyMarkdown" AND category == "Diagnostics"'
+/usr/bin/log show --last 10m --style compact --predicate 'subsystem == "com.damho.SynologyMarkdown" AND category == "Diagnostics"'
 ```
 
 Since build 5, save verification errors are distinguished as `error_kind=readback_verification`, an unknown write outcome as `write_uncertain`, and actual version conflicts as `remote_changed` or `version_conflict`. Allowed differences in the HTML representation of code blocks are verified by recording a fingerprint of the actual HTML read from the server, while integrity checks for the Markdown source and preserved blocks remain in place.

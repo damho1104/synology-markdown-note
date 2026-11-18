@@ -62,7 +62,9 @@ Existing Markdown notes are read by checking source fingerprints in the Mac app/
 The following limitations apply to avoid data loss when handling unsupported changes:
 
 - Body editing for encrypted notes and notes in the trash. Existing attachments and complex HTML support text editing that preserves original bytes and attributes, while editing that freely restructures the original formatting is restricted.
-- Adding or deleting general attachments, and arbitrary changes to source-preservation blocks.
+- Deleting general attachments already stored on the NAS, and arbitrary changes to source-preservation blocks.
+
+In editable Markdown notes, paste an image, drop a file, or choose files from the editor. Each file can be up to 50 MB (50,000,000 bytes). Larger files are rejected. The web server encrypts staged uploads and transfers them to the NAS when the note autosaves.
 - Version history management and offline synchronization do not yet have feature parity with macOS. Permanent deletion is not provided in this scope.
 
 Your edits and their base version are temporarily stored in the current tab's sessionStorage, separated by user and NAS, and restored after a refresh. They may disappear when the tab closes. Successful logout clears that account's drafts; failed logout retains them. NAS passwords, SIDs, and authentication tokens are not kept in browser storage.

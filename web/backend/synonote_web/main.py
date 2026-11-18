@@ -16,13 +16,17 @@ import uuid
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
+from anyio import CancelScope, fail_after
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
+from starlette.requests import ClientDisconnect
 
+from .attachment_uploads import MAX_UPLOAD_SIZE, UploadError, Uploads
 from .nas import NasClient, NasError, NasLogin, validate_url
 from .observability import request_id
 from .settings import Settings
@@ -54,6 +58,15 @@ class MathImageInput(BaseModel):
     png: str = Field(max_length=6_000_000)
 
 
+UUID_PATTERN = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+UPLOAD_ROUTE = re.compile(r"/api/drafts/[^/]+/uploads/[^/]+/?")
+
+
+class UploadInput(BaseModel):
+    upload_id: str = Field(pattern=UUID_PATTERN)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class WriteInput(BaseModel):
     title: str = Field(min_length=1, max_length=256)
     html: str = Field(default="", max_length=2_000_000)
@@ -64,6 +77,8 @@ class WriteInput(BaseModel):
     client_request_id: str | None = Field(default=None, pattern=r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
     notebook_id: str = Field(min_length=1, max_length=256)
     version: str | None = Field(default=None, max_length=128)
+    draft_id: str | None = Field(default=None, pattern=UUID_PATTERN)
+    uploads: list[UploadInput] = Field(default_factory=list, max_length=50)
 
 
 @dataclass
@@ -101,6 +116,7 @@ class Attempts:
 def create_app(settings: Settings | None = None, nas_client: NasClient | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
     store = Store(settings.data_dir)
+    uploads = Uploads(store)
     nas = nas_client or NasClient(allow_private=settings.allow_private_nas,
                                   ca_file=settings.nas_ca_file)
     app = FastAPI(title="Synology Markdown Note Web", docs_url=None, redoc_url=None,
@@ -227,6 +243,10 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
         log_event(request, "store_error", logging.ERROR, exception_type=type(exc).__name__)
         return JSONResponse({"error": "LOCAL_STORE_ERROR"}, status_code=503)
 
+    @app.exception_handler(UploadError)
+    async def upload_error(request: Request, exc: UploadError):
+        return JSONResponse({"error": exc.code}, status_code=exc.status)
+
     def origin_guard(request: Request) -> None:
         # No CORS: browser mutations require an explicit same-origin Origin header.
         origin = request.headers.get("origin")
@@ -243,7 +263,11 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
             and parsed.path == "" and parsed.netloc.lower() == request.headers.get("host", "").lower())
         if not valid:
             raise HTTPException(403, detail="ORIGIN_REQUIRED")
-        if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
+        raw_upload = request.method == "PUT" and UPLOAD_ROUTE.fullmatch(request.url.path)
+        media_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        if raw_upload and media_type != "application/octet-stream":
+            raise HTTPException(415, detail="UPLOAD_BODY_REQUIRED")
+        if not raw_upload and media_type != "application/json":
             raise HTTPException(415, detail="JSON_REQUIRED")
 
     def rate_limit(request: Request, action: str) -> str:
@@ -491,6 +515,27 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
         remember_graph_entry(detail, owner)
         return detail
 
+    def stream_file(stream, media_type: str, headers: dict) -> StreamingResponse:
+        # Read the first chunk before sending headers so access, expiry, and
+        # immediate upstream failures can still produce a normal error response.
+        try:
+            first = next(stream, None)
+        except BaseException:
+            stream.close()
+            raise
+
+        async def content():
+            try:
+                chunk = first
+                while chunk is not None:
+                    yield chunk
+                    chunk = await run_in_threadpool(next, stream, None)
+            finally:
+                with CancelScope(shield=True):
+                    await run_in_threadpool(stream.close)
+
+        return StreamingResponse(content(), media_type=media_type, headers=headers)
+
     @app.get("/api/notes/{note_id}/attachments/{file_id}")
     def attachment(note_id: str, file_id: str, request: Request, response: Response):
         checked_id(note_id)
@@ -503,12 +548,16 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
             match = next((f for f in detail["attachments"] if f["id"] == file_id), None)
             if match is None:
                 raise HTTPException(404, detail="ATTACHMENT_NOT_FOUND")
-            data = nas.download(base, active, note_id, file_id)
             safe_name = match["name"].replace("\r", "").replace("\n", "")[:256]
-            return Response(content=data, media_type="application/octet-stream", headers={
+            headers = {
                 "Content-Disposition": f"attachment; filename=attachment; filename*=UTF-8''{quote(safe_name)}",
                 "X-Content-Type-Options": "nosniff",
-            })
+            }
+            if not isinstance(nas, NasClient):
+                return Response(content=nas.download(base, active, note_id, file_id),
+                                media_type="application/octet-stream", headers=headers)
+            stream = nas.iter_download(base, active, note_id, file_id, max_size=MAX_UPLOAD_SIZE)
+            return stream_file(stream, "application/octet-stream", headers)
 
         result = read_nas(request, response, get_file)
         # Explicit download responses otherwise bypass FastAPI's injected headers.
@@ -523,6 +572,116 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
         from .compat.markdown import math_plan
         masked, formulas = math_plan(body.markdown or "")
         return {"markdown": masked, "formulas": formulas}
+
+    upload_path = "/api/drafts/{draft_id}/uploads/{upload_id}"
+
+    def upload_ids(draft_id: str, upload_id: str) -> None:
+        if not re.fullmatch(UUID_PATTERN, draft_id) or not re.fullmatch(UUID_PATTERN, upload_id):
+            raise HTTPException(422, detail="INVALID_UPLOAD")
+
+    @app.put(upload_path)
+    async def put_upload(draft_id: str, upload_id: str, request: Request, response: Response,
+                         notebook_id: str, note_id: str | None = None,
+                         client_request_id: str | None = None):
+        base, active, owner, csrf, _, _ = await run_in_threadpool(nas_access, request, response)
+        csrf_guard(request, csrf)
+        upload_ids(draft_id, upload_id)
+        checked_id(notebook_id)
+        if (note_id is None) == (client_request_id is None):
+            raise HTTPException(422, detail="INVALID_UPLOAD")
+        if note_id is not None:
+            checked_id(note_id)
+        if client_request_id is not None and not re.fullmatch(UUID_PATTERN, client_request_id):
+            raise HTTPException(422, detail="INVALID_UPLOAD")
+        raw_size = request.headers.get("x-upload-size", "")
+        raw_filename = request.headers.get("x-upload-name", "")
+        if not re.fullmatch(r"[0-9]{1,12}", raw_size) or not 1 <= len(raw_filename) <= 4096:
+            raise HTTPException(422, detail="INVALID_UPLOAD")
+        size = int(raw_size)
+        content_length = request.headers.get("content-length")
+        if size > MAX_UPLOAD_SIZE:
+            raise HTTPException(413, detail="ATTACHMENT_TOO_LARGE")
+        if content_length is not None:
+            if not re.fullmatch(r"[0-9]{1,12}", content_length):
+                raise HTTPException(422, detail="INVALID_UPLOAD")
+            if int(content_length) > MAX_UPLOAD_SIZE:
+                raise HTTPException(413, detail="ATTACHMENT_TOO_LARGE")
+            if int(content_length) != size:
+                raise HTTPException(422, detail="UPLOAD_SIZE_MISMATCH")
+        if not size:
+            raise HTTPException(422, detail="INVALID_UPLOAD")
+        try:
+            name = unquote(raw_filename, errors="strict")
+        except UnicodeError as exc:
+            raise HTTPException(422, detail="INVALID_UPLOAD") from exc
+        if note_id is not None:
+            detail = await run_in_threadpool(nas.fetch, base, active, note_id)
+            if not detail.get("editable") or "markdown" not in detail or detail["notebook_id"] != notebook_id:
+                raise HTTPException(403, detail="DOCUMENT_READ_ONLY")
+        target = note_id if note_id is not None else "draft-create:" + client_request_id
+        receipt = await run_in_threadpool(uploads.reserve, owner, draft_id, upload_id, target, notebook_id, name, size)
+        published = False
+        size_received = 0
+        pending = bytearray()
+        chunk_size = 256 * 1024
+        try:
+            with fail_after(600):
+                async for raw in request.stream():
+                    size_received += len(raw)
+                    if size_received > MAX_UPLOAD_SIZE:
+                        raise HTTPException(413, detail="ATTACHMENT_TOO_LARGE")
+                    if size_received > size:
+                        raise HTTPException(422, detail="UPLOAD_SIZE_MISMATCH")
+                    remaining = memoryview(raw)
+                    while remaining:
+                        take = min(chunk_size - len(pending), len(remaining))
+                        pending.extend(remaining[:take])
+                        remaining = remaining[take:]
+                        if len(pending) == chunk_size:
+                            await run_in_threadpool(uploads.append, receipt, bytes(pending))
+                            pending.clear()
+                if size_received != size:
+                    raise HTTPException(422, detail="UPLOAD_SIZE_MISMATCH")
+                if pending:
+                    await run_in_threadpool(uploads.append, receipt, bytes(pending))
+                result = await run_in_threadpool(uploads.publish, receipt)
+                published = True
+                return result
+        except (TimeoutError, ClientDisconnect) as exc:
+            raise HTTPException(408, detail="UPLOAD_INCOMPLETE") from exc
+        finally:
+            if not published:
+                with CancelScope(shield=True):
+                    await run_in_threadpool(uploads.abort, receipt)
+
+    @app.get(upload_path)
+    def get_upload(draft_id: str, upload_id: str, request: Request, response: Response):
+        upload_ids(draft_id, upload_id)
+        owner = nas_access(request, response)[2]
+        return uploads.get(owner, draft_id, upload_id)
+
+    @app.delete(upload_path)
+    def delete_upload(draft_id: str, upload_id: str, request: Request, response: Response):
+        upload_ids(draft_id, upload_id)
+        _, _, owner, csrf, _, _ = nas_access(request, response)
+        csrf_guard(request, csrf)
+        uploads.delete(owner, draft_id, upload_id)
+        return {"deleted": True}
+
+    @app.get(upload_path + "/content")
+    def upload_content(draft_id: str, upload_id: str, request: Request, response: Response):
+        upload_ids(draft_id, upload_id)
+        owner = nas_access(request, response)[2]
+        meta = uploads.get(owner, draft_id, upload_id)
+        if meta["status"] not in {"ready", "pinned"}:
+            raise HTTPException(404, detail="UPLOAD_NOT_FOUND")
+        result = stream_file(uploads.iter_content(owner, draft_id, upload_id),
+                             meta["mime"] if meta["image"] else "application/octet-stream",
+                             {"Content-Length": str(meta["size"]),
+                              "Content-Disposition": f"attachment; filename=attachment; filename*=UTF-8''{quote(meta['name'], safe='')}"})
+        result.raw_headers.extend((key, value) for key, value in response.raw_headers
+                                  if key.lower() == b"set-cookie")
+        return result
 
     @app.get("/api/writes")
     def writes(request: Request, response: Response):
@@ -553,7 +712,11 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
         csrf_guard(request, csrf)
         if note_id is None and body.client_request_id is None:
             raise HTTPException(422, detail='CLIENT_REQUEST_ID_REQUIRED')
-        intent = body.model_dump()
+        if body.uploads and (not body.draft_id or body.markdown is None or body.text_changes is not None):
+            raise HTTPException(422, detail="INVALID_UPLOAD")
+        intent = body.model_dump(exclude={"draft_id", "uploads"})
+        if body.uploads:
+            intent.update(draft_id=body.draft_id, uploads=[item.model_dump() for item in body.uploads])
         request_hash = hashlib.sha256(json.dumps(intent, sort_keys=True, ensure_ascii=False,
                                                  separators=(',', ':')).encode()).hexdigest()
         def previous_create():
@@ -566,11 +729,26 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
         if note_id is None:
             previous = previous_create()
             if previous is not None: return previous
+        upload_keys = []
+        attachments = []
+        seen = set()
+        for item in body.uploads:
+            upload_target = note_id or "draft-create:" + body.client_request_id
+            if item.upload_id in seen:
+                raise HTTPException(422, detail="INVALID_UPLOAD")
+            seen.add(item.upload_id)
+            meta = uploads.get(owner, body.draft_id, item.upload_id)
+            if (meta["target"] != upload_target or meta["notebook_id"] != body.notebook_id
+                    or meta["sha256"] != item.sha256 or meta["status"] != "ready"):
+                raise HTTPException(409, detail="UPLOAD_NOT_READY")
+            upload_keys.append((body.draft_id, item.upload_id, upload_target, body.notebook_id, item.sha256))
+            attachments.append(dict(meta, chunks=lambda upload_id=item.upload_id:
+                                    uploads.iter_content(owner, body.draft_id, upload_id)))
         operation_id = str(uuid.uuid4())
         target = note_id or "new:" + body.notebook_id + ":" + hashlib.sha256(body.title.encode()).hexdigest()
         if not store.start_write(operation_id, owner, target, note_id, body.title,
                                  intent, client_request_id=body.client_request_id if note_id is None else None,
-                                 request_hash=request_hash):
+                                 request_hash=request_hash, **({"upload_keys": upload_keys} if upload_keys else {})):
             if note_id is None:
                 previous = previous_create()
                 if previous is not None: return previous
@@ -585,7 +763,9 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
             elif body.markdown is not None:
                 result = nas.write_markdown(base, active, note_id=note_id, notebook_id=body.notebook_id,
                                            title=body.title, markdown=body.markdown, version=body.version,
-                                           operation_id=operation_id, **({"math_images": [v.model_dump() for v in body.math_images]} if body.math_images else {}))
+                                           operation_id=operation_id,
+                                           **({"math_images": [v.model_dump() for v in body.math_images]} if body.math_images else {}),
+                                           **({"uploads": attachments} if attachments else {}))
             else:
                 result = nas.write(base, active, note_id=note_id, notebook_id=body.notebook_id,
                                    title=body.title, html=body.html, version=body.version)

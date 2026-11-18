@@ -1178,3 +1178,10 @@ input {
 .global-search-result small, .global-search-result > span { font-size:12px; color:var(--muted); max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .global-search-result strong { overflow-wrap:anywhere; }
 .global-search-empty { text-align:center; padding:24px; color:var(--muted); }
+
+.attachment-picker { margin-inline-start: auto; display: inline-flex; align-items: center; gap: 0.35rem; }
+.attachment-queue { flex: none; max-height: 9rem; overflow: auto; padding: 0.4rem 0.8rem; margin: 0; list-style: none; border-top: 1px solid var(--line); }
+.attachment-queue li { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.75rem; padding-block: 0.2rem; font-size: 0.8rem; }
+.attachment-queue-name { font-weight: 600; overflow-wrap: anywhere; }
+.attachment-queue a { text-decoration: underline; }
+.attachment-error { margin: 0; padding: 0.4rem 0.8rem; font-size: 0.85rem; }

@@ -97,7 +97,10 @@ Nginx HTTPS 서버 블록 안의 예시:
 ```nginx
 client_max_body_size 20m;
 location / {
+    client_max_body_size 50m;
     proxy_pass http://127.0.0.1:8787;
+    proxy_http_version 1.1;
+    proxy_request_buffering off;
     proxy_set_header Host $http_host;
 }
 ```

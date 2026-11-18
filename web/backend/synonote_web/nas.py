@@ -9,15 +9,18 @@ from __future__ import annotations
 
 import ipaddress
 import base64
+import hashlib
 import struct
 import json
 import logging
 from datetime import datetime, timezone
+from functools import cache
 import re
 import socket
 import ssl
 import time
 import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from urllib.parse import urlsplit, urlunsplit, urlencode
@@ -36,6 +39,10 @@ from .observability import request_id
 AUTH = "SYNO.API.Auth"
 NOTE = "SYNO.NoteStation.Note"
 NOTEBOOK = "SYNO.NoteStation.Notebook"
+SOURCE_DOWNLOAD_LIMIT = 32 * 1024 * 1024
+ATTACHMENT_PREFIX = "synology-note-attachment-"
+DOWNLOAD_ONLY_PREFIX = ATTACHMENT_PREFIX + "file-"
+IMAGE_MIMES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
 PATH = re.compile(r"^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$")
 HOST = re.compile(r"^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$", re.I)
 BASE_PATH = re.compile(r"^/(?:[A-Za-z0-9._~-]+(?:/[A-Za-z0-9._~-]+)*)?$|^$")
@@ -55,6 +62,81 @@ class NasError(Exception):
             elif key in {"api", "method", "reason", "transport"} and isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.]{1,100}", value):
                 self.diagnostic[key] = value
         super().__init__(code)
+
+
+class _AttachmentReferences(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.tags: dict[str, set[str]] = {}
+
+    def handle_starttag(self, tag, attrs):
+        for name, value in attrs:
+            if not value or name not in {"href", "src", "data", "poster", "action", "formaction",
+                                         "xlink:href", "srcset", "imagesrcset"}:
+                continue
+            url = value.strip().lower()
+            if not url.startswith("attachment:") and not (
+                    name in {"srcset", "imagesrcset"} and "attachment:" in url):
+                continue
+            if (tag, name) not in {("a", "href"), ("img", "src")} or not value.lower().startswith("attachment://"):
+                raise ValueError("Unsupported attachment reference")
+            if sum(key == name for key, _ in attrs) != 1:
+                raise ValueError("Ambiguous attachment reference")
+            uid = str(uuid.UUID(value[len("attachment://"):]))
+            self.tags.setdefault(uid, set()).add(tag)
+
+    handle_startendtag = handle_starttag
+
+
+def _verified_upload_chunks(upload: dict) -> Iterator[bytes]:
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        for chunk in upload["chunks"]():
+            if not isinstance(chunk, bytes):
+                raise ValueError("Invalid upload chunk")
+            size += len(chunk)
+            if size > upload["size"]:
+                raise ValueError("Upload exceeds declared size")
+            digest.update(chunk)
+            if chunk:
+                yield chunk
+        if size != upload["size"] or digest.hexdigest() != upload["sha256"]:
+            raise ValueError("Upload differs from manifest")
+    except Exception as exc:
+        # The chunks callback belongs to the staging store and may raise its own errors.
+        raise NasError("MARKDOWN_UNSUPPORTED", diagnostic={"reason": "UPLOAD_CONTENT_INVALID"}) from exc
+
+
+def _attachment_filename(operation_id: str, uid: str, name: str, image: bool) -> str:
+    prefix = ATTACHMENT_PREFIX + "image-" if image else DOWNLOAD_ONLY_PREFIX
+    prefix += f"{uuid.UUID(operation_id).hex}-{uuid.UUID(uid).hex}-"
+    name = name.replace('"', "%22")
+    stem, dot, extension = name.rpartition(".")
+    suffix = (dot + extension).encode() if stem else b""
+    if not 1 < len(suffix) <= 24:
+        stem, suffix = name, b""
+    budget = 255 - len(prefix) - len(suffix)
+    return prefix + (stem.encode()[:budget].decode("utf-8", errors="ignore") + suffix.decode())
+
+
+def _multipart_upload(fields: dict, part: str, upload: dict) -> tuple[dict, Iterator[bytes]]:
+    boundary = uuid.uuid4().hex
+    prefix = b"".join(
+        f'--{boundary}\r\nContent-Disposition: form-data; name="{key}"\r\n\r\n{value}\r\n'.encode()
+        for key, value in fields.items()
+    )
+    prefix += (f'--{boundary}\r\nContent-Disposition: form-data; name="{part}"; filename="{upload["filename"]}"\r\n'
+               f'Content-Type: {upload["mime"]}\r\n\r\n').encode()
+    suffix = f"\r\n--{boundary}--\r\n".encode()
+
+    def body():
+        yield prefix
+        yield from _verified_upload_chunks(upload)
+        yield suffix
+
+    return {"Content-Type": f"multipart/form-data; boundary={boundary}",
+            "Content-Length": str(len(prefix) + upload["size"] + len(suffix))}, body()
 
 
 class _SimpleHtmlParser(HTMLParser):
@@ -494,7 +576,7 @@ class NasClient(LibraryNasOperations):
         candidates = []
         staged_source = False
         for file in detail["attachments"]:
-            if not file["name"].endswith(".md"):
+            if not file["name"].endswith(".md") or file["name"].startswith(ATTACHMENT_PREFIX):
                 continue
             try:
                 source = SourceEnvelope.decode(self.download(base, login, note_id, file["id"]))
@@ -520,32 +602,54 @@ class NasClient(LibraryNasOperations):
             detail.update(editable=False, read_only_reason="WRITE_IN_PROGRESS", write_in_progress=True)
         return detail
 
-    def download(self, base: str, login: NasLogin, note_id: str, file_id: str) -> bytes:
+    def iter_download(self, base: str, login: NasLogin, note_id: str, file_id: str,
+                      *, max_size: int = 50_000_000) -> Iterator[bytes]:
+        """Yield NAS attachment bytes and close the connection on completion or close()."""
         base = validate_url(base)
         with self._client() as client:
             path, _, as_json = self._info(client, base, NOTE, 1, 1, login)
             fields = self._fields(NOTE, "download", 1, login.sid,
                 {"file_id": file_id, "object_id": note_id, "format": "raw", "mode": "download"}, as_json)
             try:
-                with client.stream("POST", f"{base}/webapi/{path}", data=fields) as response:
+                with client.stream("POST", f"{base}/webapi/{path}", data=fields,
+                                   headers={"Accept-Encoding": "identity"}) as response:
                     if response.status_code != 200 or response.is_redirect:
                         raise NasError("NAS_UNAVAILABLE")
-                    raw = bytearray()
-                    for chunk in response.iter_bytes():
-                        if len(raw) + len(chunk) > 32 * 1024 * 1024:
+                    if response.headers.get("content-encoding", "identity").lower() != "identity":
+                        raise NasError("NAS_API_ERROR")
+                    declared = response.headers.get("content-length")
+                    if declared and declared.isascii() and declared.isdecimal() and int(declared) > max_size:
+                        raise NasError("ATTACHMENT_TOO_LARGE")
+                    # Known NAS error envelopes are small, even with a misleading Content-Type.
+                    probe = bytearray() if "content-disposition" not in response.headers else None
+                    total = 0
+                    for chunk in response.iter_bytes(chunk_size=64 * 1024):
+                        total += len(chunk)
+                        if total > max_size:
                             raise NasError("ATTACHMENT_TOO_LARGE")
-                        raw.extend(chunk)
+                        if probe is not None:
+                            if len(probe) + len(chunk) <= 4096:
+                                probe.extend(chunk)
+                                continue
+                            if probe:
+                                yield bytes(probe)
+                            probe = None
+                        yield chunk
+                    if probe:
+                        try:
+                            envelope = json.loads(probe)
+                        except (ValueError, UnicodeError, RecursionError):
+                            envelope = None
+                        if (isinstance(envelope, dict) and envelope.get("success") is False
+                                and isinstance(envelope.get("error"), dict)):
+                            code = envelope["error"].get("code")
+                            raise NasError("NAS_SESSION_EXPIRED" if code in (106, 107, 119) else "NAS_API_ERROR")
+                        yield bytes(probe)
             except (httpx.HTTPError, OSError) as exc:
                 raise NasError("NAS_UNAVAILABLE") from exc
-        # Synology can return an error envelope with a misleading Content-Type.
-        try:
-            envelope = json.loads(raw)
-        except (ValueError, UnicodeError):
-            envelope = None
-        if isinstance(envelope, dict) and envelope.get("success") is False:
-            code = (envelope.get("error") or {}).get("code")
-            raise NasError("NAS_SESSION_EXPIRED" if code in {106, 107, 119} else "NAS_API_ERROR")
-        return bytes(raw)
+
+    def download(self, base: str, login: NasLogin, note_id: str, file_id: str) -> bytes:
+        return b"".join(self.iter_download(base, login, note_id, file_id, max_size=SOURCE_DOWNLOAD_LIMIT))
 
     def write(self, base: str, login: NasLogin, *, note_id: str | None,
               notebook_id: str | None, title: str, html: str, version: str | None) -> dict:
@@ -609,6 +713,7 @@ class NasClient(LibraryNasOperations):
     def _mutate_markdown(self, base: str, login: NasLogin, *, note_id: str | None,
                          version: str | None, notebook_id: str, title: str | None = None,
                          html: str | None = None, upload: tuple[str, bytes] | None = None,
+                         streamed_upload: dict | None = None,
                          deleting: list[str] | None = None) -> tuple[str, str]:
         params = {"mtime": int(time.time()), "commit_msg": {"device": "web", "listable": False}}
         if note_id:
@@ -621,19 +726,25 @@ class NasClient(LibraryNasOperations):
             params.update(content=html, brief=html[:180])
         entries = [{"action": "delete", "file_id": v} for v in deleting or []]
         part = "upload-" + str(uuid.uuid4())
-        if upload:
+        if upload or streamed_upload is not None:
             entries.append({"action": "create", "format": "raw", "name": part, "rotate": False, "convert": False})
+            if streamed_upload is not None and streamed_upload["image"]:
+                entries[-1]["ref"] = streamed_upload["upload_id"]
         if entries:
             params["attachment"] = entries
         method = "set" if note_id else "create"
         with self._client() as client:
             path, api_version, as_json = self._info(client, base, NOTE, 3, 2, login)
             fields = self._fields(NOTE, method, api_version, login.sid, params, as_json)
-            if upload:
+            if upload or streamed_upload is not None:
                 routing = {key: fields.pop(key) for key in ("api", "method", "version", "_sid")}
                 try:
-                    response = client.post(f"{base}/webapi/{path}", params=routing, data=fields,
-                                           files={part: (upload[0], upload[1], "image/png" if upload[0].endswith(".png") else "text/markdown")})
+                    if streamed_upload is not None:
+                        headers, body = _multipart_upload(fields, part, streamed_upload)
+                        response = client.post(f"{base}/webapi/{path}", params=routing, headers=headers, content=body)
+                    else:
+                        response = client.post(f"{base}/webapi/{path}", params=routing, data=fields,
+                                               files={part: (upload[0], upload[1], "image/png" if upload[0].endswith(".png") else "text/markdown")})
                     receipt = self._data(response)
                 except (httpx.HTTPError, OSError) as exc:
                     raise NasError("WRITE_UNCERTAIN") from exc
@@ -648,9 +759,30 @@ class NasClient(LibraryNasOperations):
             raise NasError("WRITE_UNCERTAIN")
         return returned_id, row["ver"]
 
+    @staticmethod
+    def _new_attachment(before: set[str], detail: dict, name: str) -> dict:
+        after = {file["id"]: file for file in detail["attachments"]}
+        added = after.keys() - before
+        if not before.issubset(after) or len(added) != 1:
+            raise NasError("WRITE_UNCERTAIN")
+        file = after[added.pop()]
+        if not file["id"] or file["name"] != name:
+            raise NasError("WRITE_UNCERTAIN")
+        return file
+
+    def _verify_upload(self, base: str, login: NasLogin, note_id: str, file_id: str, upload: dict) -> None:
+        size = 0
+        digest = hashlib.sha256()
+        for chunk in self.iter_download(base, login, note_id, file_id, max_size=upload["size"]):
+            size += len(chunk)
+            digest.update(chunk)
+        if size != upload["size"] or digest.hexdigest() != upload["sha256"]:
+            raise NasError("WRITE_UNCERTAIN", diagnostic={"reason": "ATTACHMENT_CONTENT_MISMATCH"})
+
     def write_markdown(self, base: str, login: NasLogin, *, note_id: str | None,
                        notebook_id: str, title: str, markdown: str, version: str | None,
-                       operation_id: str | None = None, math_images: list[dict] | None = None) -> dict:
+                       operation_id: str | None = None, math_images: list[dict] | None = None,
+                       uploads: list[dict] | None = None) -> dict:
         """Use the same staged source/body/publication contract as the CLI/macOS app."""
         base = validate_url(base)
         old = self.fetch(base, login, note_id) if note_id else None
@@ -663,10 +795,7 @@ class NasClient(LibraryNasOperations):
         if previous and (not previous.matches(old["html"]) or previous.markdown != old["markdown"]):
             raise NasError("REMOTE_CHANGED")
         blocks = previous.blocks if previous else []
-        references = set(re.findall(r"attachment://([0-9a-fA-F-]{36})", markdown))
-        original_references = set(re.findall(r"attachment://([0-9a-fA-F-]{36})", previous.markdown if previous else ""))
-        if not references.issubset(original_references):
-            raise NasError("MARKDOWN_UNSUPPORTED")
+        old_files = {file["id"]: file for file in old["attachments"]} if old else {}
         try:
             _, formulas = math_plan(markdown)
             assets = {}
@@ -679,37 +808,99 @@ class NasClient(LibraryNasOperations):
                         or data[12:16] != b'IHDR' or struct.unpack('>II', data[16:24]) != (image['width'] * 2, image['height'] * 2)):
                     raise CLIError("INVALID_SOURCE", "잘못된 PNG입니다.")
                 assets[key] = dict(image, data=data, ref=str(uuid.uuid4()).upper())
-            html = render_markdown(markdown, blocks, assets)
+            rendered = render_markdown(markdown, blocks, assets)
             document_id = previous.document_id if previous else str(uuid.uuid4()).upper()
             operation_id = operation_id or str(uuid.uuid4())
-            bindings = previous.attachment_bindings if previous else {}
-            def download_url(file_id):
+            bindings = dict(previous.attachment_bindings) if previous else {}
+            normalized = {str(uuid.UUID(uid)): fid for uid, fid in bindings.items()}
+            references = _AttachmentReferences()
+            references.feed(rendered)
+            references.close()
+            pending = {}
+            for upload in uploads or []:
+                uid, name, mime, image, size, sha256, chunks = (
+                    upload[field] for field in ("upload_id", "name", "mime", "image", "size", "sha256", "chunks")
+                )
+                if (not isinstance(uid, str) or str(uuid.UUID(uid)) != uid or uid in pending or uid in normalized
+                        or not isinstance(name, str) or not name or re.search(r'[\x00-\x1f\x7f/\\]', name)
+                        or not isinstance(mime, str) or not re.fullmatch(r"[\w!#$&^.+-]+/[\w!#$&^.+-]+", mime, re.ASCII)
+                        or type(image) is not bool or image and mime not in IMAGE_MIMES
+                        or type(size) is not int or size < 0
+                        or not isinstance(sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", sha256)
+                        or not callable(chunks)):
+                    raise ValueError("Invalid attachment manifest")
+                filename = _attachment_filename(operation_id, uid, name, image)
+                pending[uid] = {**upload, "filename": filename}
+            if set(references.tags) - normalized.keys() != pending.keys():
+                raise ValueError("Attachment manifest does not match the referenced uploads")
+            for uid, tags in references.tags.items():
+                if old and uid in normalized and normalized[uid] == old["source_file_id"]:
+                    raise ValueError("Source envelope cannot be referenced as an attachment")
+                if "img" in tags and (
+                        uid in pending and not pending[uid]["image"]
+                        or uid in normalized and old_files.get(normalized[uid], {}).get("name", "").startswith(DOWNLOAD_ONLY_PREFIX)):
+                    raise ValueError("Attachment is download only")
+
+            @cache
+            def download_api():
                 with self._client() as client:
-                    path, api_version, as_json = self._info(client, base, NOTE, 1, 1, login)
+                    return self._info(client, base, NOTE, 1, 1, login)
+
+            def download_url(target, file_id):
+                path, api_version, as_json = download_api()
                 fields = self._fields(NOTE, 'download', api_version, '',
-                    dict(file_id=file_id, object_id=note_id, format='raw', mode='download'), as_json)
+                    dict(file_id=file_id, object_id=target, format='raw', mode='download'), as_json)
                 fields.pop('_sid')
                 return f'{base}/webapi/{path}?' + urlencode(fields)
-            html = bind_html(html, bindings, old['attachments'] if old else [], download_url)
+
+            fake_bindings = {uid: f"preflight-{uuid.uuid4().hex}" for uid in pending}
+            bind_html(rendered, bindings | fake_bindings,
+                      list(old_files.values()) + [{"id": fid} for fid in fake_bindings.values()],
+                      lambda fid: download_url(note_id or "preflight", fid))
+            for upload in pending.values():
+                for _ in _verified_upload_chunks(upload):
+                    pass
             original = old["html"] if old else "<p>문서를 전송하고 있습니다.</p>"
             stage = SourceEnvelope.make(markdown, original, document_id=document_id,
                 operation_id=operation_id, is_staging=True, blocks=blocks, attachment_bindings=bindings).encode()
-        except (CLIError, ValueError, KeyError) as exc:
+        except (CLIError, ValueError, KeyError, TypeError) as exc:
             raise NasError("MARKDOWN_UNSUPPORTED") from exc
         stage_name = f"synology-note-upload-{document_id}-{operation_id}.md"
-        protected = {f["id"] for f in old["attachments"] if f["id"] != old["source_file_id"]} if old else set()
         try:
             target, stage_version = self._mutate_markdown(base, login, note_id=note_id, version=version,
                 notebook_id=notebook_id, title=None if old else title, html=None if old else original,
                 upload=(stage_name, stage))
             current = self.fetch(base, login, target)
-            if (current["version"] != stage_version or current["html"] != original
-                    or current["notebook_id"] != notebook_id or current["title"] != (old["title"] if old else title)):
+            stage_title = old["title"] if old else title
+
+            def check_state(detail, expected_version, expected_title, expected_html):
+                if (detail["version"] != expected_version or detail["html"] != expected_html
+                        or detail["notebook_id"] != notebook_id or detail["title"] != expected_title
+                        or detail.get("locked") or detail.get("trashed")):
+                    raise NasError("WRITE_UNCERTAIN")
+
+            check_state(current, stage_version, stage_title, original)
+            ids = set(old_files)
+            staged = self._new_attachment(ids, current, stage_name)
+            if self.download(base, login, target, staged["id"]) != stage:
                 raise NasError("WRITE_UNCERTAIN")
-            staged = [f for f in current["attachments"] if f["name"] == stage_name
-                      and self.download(base, login, target, f["id"]) == stage]
-            if len(staged) != 1:
-                raise NasError("WRITE_UNCERTAIN")
+            ids.add(staged["id"])
+            uploaded = {}
+            for uid, upload in pending.items():
+                _, stage_version = self._mutate_markdown(base, login, note_id=target, version=stage_version,
+                    notebook_id=notebook_id, streamed_upload=upload)
+                current = self.fetch(base, login, target)
+                check_state(current, stage_version, stage_title, original)
+                file = self._new_attachment(ids, current, upload["filename"])
+                if upload["image"] and ((file.get("ref") or "").lower() != uid or sum(
+                        (row.get("ref") or row["id"]).lower() == uid for row in current["attachments"]) != 1):
+                    raise NasError("WRITE_UNCERTAIN", diagnostic={"reason": "ATTACHMENT_REFERENCE_MISMATCH"})
+                self._verify_upload(base, login, target, file["id"], upload)
+                uploaded[uid] = file
+                bindings[uid] = file["id"]
+                ids.add(file["id"])
+
+            html = bind_html(rendered, bindings, current["attachments"], lambda fid: download_url(target, fid))
             math_metadata = {}
             for key, asset in assets.items():
                 reusable = [(uid, meta) for uid, meta in (previous.math_attachments if previous else {}).items() if meta['key'] == key and uid in bindings]
@@ -726,46 +917,56 @@ class NasClient(LibraryNasOperations):
                 _, stage_version = self._mutate_markdown(base, login, note_id=target, version=stage_version,
                     notebook_id=notebook_id, upload=(name, asset['data']))
                 current = self.fetch(base, login, target)
-                matches = [f for f in current['attachments'] if f['name'] == name]
-                if current['version'] != stage_version or len(matches) != 1 or self.download(base, login, target, matches[0]['id']) != asset['data']:
+                check_state(current, stage_version, stage_title, original)
+                file = self._new_attachment(ids, current, name)
+                if self.download(base, login, target, file['id']) != asset['data']:
                     raise NasError("WRITE_UNCERTAIN")
-                bindings = dict(bindings)
-                bindings[asset['ref']] = matches[0]['id']
+                ids.add(file["id"])
+                bindings[asset['ref']] = file['id']
                 math_metadata[asset['ref']] = {k: asset[k] for k in ('key', 'width', 'height')}
-                html = html.replace(f'ref="{asset["ref"]}"', f'ref="{matches[0].get("ref") or matches[0]["id"]}"')
+                html = html.replace(f'ref="{asset["ref"]}"', f'ref="{file.get("ref") or file["id"]}"')
             _, body_version = self._mutate_markdown(base, login, note_id=target, version=stage_version,
                 notebook_id=notebook_id, title=title, html=html)
             current = self.fetch(base, login, target)
-            if (current["version"] != body_version or current["html"] != html
-                    or current["title"] != title or current["notebook_id"] != notebook_id):
+            check_state(current, body_version, title, html)
+            current_files = {file["id"]: file for file in current["attachments"]}
+            if current_files.keys() != ids or any(current_files[file["id"]] != file for file in uploaded.values()):
                 raise NasError("WRITE_UNCERTAIN")
-            deleting = [staged[0]["id"]] + ([old["source_file_id"]] if old else [])
+            deleting = [staged["id"]] + ([old["source_file_id"]] if old else [])
             # Delete only explicitly owned images no longer referenced by source/opaque blocks.
+            literals = markdown + ''.join(b['html'] for b in blocks)
             for uid in previous.math_attachments if previous else []:
                 fid = bindings.get(uid)
-                file = next((f for f in current['attachments'] if f['id'] == fid), None)
-                literals = markdown + ''.join(b['html'] for b in blocks)
-                if uid not in math_metadata and file and not any(v in literals for v in (uid, fid, file.get('ref') or fid)):
+                file = current_files.get(fid)
+                if (uid not in math_metadata and file and not file["name"].startswith(ATTACHMENT_PREFIX)
+                        and not any(bound == fid and key != uid for key, bound in bindings.items())
+                        and not any(v in literals for v in (uid, fid, file.get('ref') or fid))):
                     deleting.append(fid)
-                    protected.discard(fid)
                     bindings = {k: v for k, v in bindings.items() if v != fid}
             final = SourceEnvelope.make(markdown, current['html'], document_id=document_id,
                 operation_id=operation_id, blocks=blocks, attachment_bindings=bindings, math_attachments=math_metadata).encode()
+            final_name = f"synology-note-source-{document_id}.md"
             _, final_version = self._mutate_markdown(base, login, note_id=target, version=body_version,
-                notebook_id=notebook_id, upload=(f"synology-note-source-{document_id}.md", final), deleting=deleting)
+                notebook_id=notebook_id, upload=(final_name, final), deleting=deleting)
             verified = self.fetch(base, login, target)
-            ids = {f["id"] for f in verified["attachments"]}
-            if (verified["version"] != final_version or verified.get("markdown") != markdown
-                    or verified["html"] != html or verified["title"] != title
-                    or verified["notebook_id"] != notebook_id or verified.get("blocks") != blocks
+            check_state(verified, final_version, title, html)
+            published = self._new_attachment(ids - set(deleting), verified, final_name)
+            if (published["id"] in ids or verified.get("source_file_id") != published["id"]
+                    or verified.get("markdown") != markdown or verified.get("blocks") != blocks
                     or verified.get("math_attachments", {}) != math_metadata
                     or verified.get("attachment_bindings") != bindings
-                    or not protected.issubset(ids) or any(v in ids for v in deleting)):
+                    or verified.get("write_in_progress")
+                    or self.download(base, login, target, published["id"]) != final):
                 raise NasError("WRITE_UNCERTAIN")
+            verified_files = {file["id"]: file for file in verified["attachments"]}
+            for uid, file in uploaded.items():
+                if verified_files[file["id"]] != file:
+                    raise NasError("WRITE_UNCERTAIN")
+                self._verify_upload(base, login, target, file["id"], pending[uid])
             return verified
         except (NasError, CLIError) as exc:
             # Every failure after staging starts may already have changed the NAS.
-            raise NasError("WRITE_UNCERTAIN") from exc
+            raise NasError("WRITE_UNCERTAIN", diagnostic=getattr(exc, "diagnostic", None)) from exc
 
 
     def write_html_text(self, base: str, login: NasLogin, *, note_id: str, notebook_id: str,

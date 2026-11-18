@@ -67,11 +67,18 @@ import { NoteLinkPicker } from "./NoteLinkPicker";
 import { SettingsDialog } from "./SettingsDialog";
 import { loadPreferences, savePreferences } from "./preferences";
 import CodeMirror, { EditorView, type ReactCodeMirrorRef } from "@uiw/react-codemirror";
+import { Transaction } from "@codemirror/state";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { tags as syntaxTags } from "@lezer/highlight";
 import { markdown as markdownLanguage } from "@codemirror/lang-markdown";
 import { exportMath } from "./mathExport";
 import { NotePreview } from "./NotePreview";
+import { AttachmentQueue } from "./AttachmentQueue";
+import {
+  MAX_ATTACHMENT_BYTES, MAX_QUEUED_ATTACHMENTS, restoreUploads, uploadManifest,
+  uploadInsertion, uploadMarkdown, uploadPath, uploadReferences, type DraftUploads, type UploadTarget,
+} from "./attachmentUploads";
+import { useUploadQueue, type UploadPatch } from "./useUploadQueue";
 import {
   remoteNoteLink,
   sortNotes,
@@ -109,6 +116,7 @@ type NoteDetail = NoteSummary & {
   attachments: Attachment[];
   editable: boolean;
   read_only_reason: string | null;
+  write_in_progress?: boolean;
 };
 type WriteOperation = {
   operation_id: string;
@@ -123,6 +131,8 @@ type Draft = {
   text_layout?: string;
   text_blocks?: NoteDetail["html_text_blocks"];
   client_request_id?: string;
+  attachments?: DraftUploads;
+  pending_upload_ids?: string[];
   create_sent?: {title:string;html:string;markdown?:string};
   review_required?: boolean;
   recovery_acknowledged?: boolean;
@@ -230,6 +240,22 @@ function draftStore(key: string, draft: Draft): void {
   }
 }
 
+function writeInProgress(note: NoteDetail | null): boolean {
+  return !!(note?.write_in_progress || note?.read_only_reason === "WRITE_IN_PROGRESS");
+}
+
+function savedAttachments(uploads: DraftUploads | undefined, saved: string[], created?: NoteDetail): DraftUploads | undefined {
+  if (!uploads) return undefined;
+  const committed = new Set(saved);
+  return {...uploads, items: uploads.items.map(item => {
+    if (committed.has(item.id)) return {...item, phase: "committed",
+      metadata: item.metadata && {...item.metadata, status: "committed"}};
+    if (created && item.phase === "queued")
+      return {...item, target: {notebook_id: created.notebook_id, note_id: created.id}};
+    return item;
+  })};
+}
+
 function draftDelete(key: string): void {
   try {
     sessionStorage.removeItem(key);
@@ -320,6 +346,9 @@ export function Workspace({
     ...EDITOR_EXTENSIONS,
     ...(preferences.lineWrapping ? [EditorView.lineWrapping] : []),
   ], [preferences.lineWrapping]);
+  const attachmentInput = useRef<HTMLInputElement>(null);
+  const [attachmentError, setAttachmentError] = useState("");
+  const composingNow = useRef(false);
   const mermaidPreferences = { mermaidStyle: preferences.mermaidStyle, mermaidTheme: preferences.mermaidTheme };
   useEffect(() => { savePreferences(preferences); }, [preferences]);
   useEffect(() => {
@@ -344,6 +373,7 @@ export function Workspace({
     draftKey: null as string | null,
     dirty: false,
     saving: false,
+    attachmentsBlocked: false,
   });
 
   // No NAS credential, cookie token or SID is stored in browser storage.
@@ -370,6 +400,25 @@ export function Workspace({
           original.markdown !== draft.markdown ||
           !!draft.text_changes?.length))
   );
+  const readOnlyRecovery = !!(draft?.review_required && activeKey === draft.key && !editing);
+  const uploads = activeKey === draft?.key ? draft?.attachments : undefined;
+  const referencedUploads = useMemo(() => uploads ? uploadReferences(draft?.markdown) : new Set<string>(),
+    [uploads, draft?.markdown]);
+  const unreferencedComposeUploads = !!(route.compose && uploads?.items.some(item =>
+    item.phase === "ready" && item.inserted && !referencedUploads.has(item.id)));
+  const hasStagedUploads = !!uploads?.items.some(item => item.phase !== "committed");
+  const attachmentsBlocked = unreferencedComposeUploads || !!uploads?.items.some(item =>
+    item.phase !== "committed" && (item.phase !== "ready" || !item.inserted));
+  const pendingUploadIds = useMemo(() => new Set(draft?.pending_upload_ids), [draft?.pending_upload_ids]);
+  const stagedImages = useMemo(() => {
+    if (!uploads) return undefined;
+    return Object.fromEntries(uploads.items.flatMap(item =>
+      (item.phase === "ready" || item.metadata?.status === "pinned") && item.metadata?.image
+        ? [[item.id, uploadPath(uploads.id, item.id, item.target, true)]] : []));
+  }, [uploads]);
+  const stagedDownloads = useMemo(() => uploads && Object.fromEntries(uploads.items.flatMap(item =>
+    item.phase === "ready" || item.metadata?.status === "pinned"
+      ? [[item.id, uploadPath(uploads.id, item.id, item.target, true)]] : [])), [uploads]);
   navigating.current = {
     route,
     draft,
@@ -377,7 +426,147 @@ export function Workspace({
     draftKey: activeDraftKey,
     dirty,
     saving,
+    attachmentsBlocked,
   };
+
+  const changeActiveDraft = useCallback((change: (current: Draft) => Draft) => {
+    const current = navigating.current;
+    if (!current.draft || current.draft.key !== current.activeKey || !current.draftKey) return;
+    const next = change(current.draft);
+    if (next === current.draft) return;
+    current.draft = next;
+    const composeReferences = current.route.compose && next.attachments ? uploadReferences(next.markdown) : undefined;
+    current.attachmentsBlocked = !!next.attachments?.items.some(item =>
+      item.phase !== "committed" && (item.phase !== "ready" || !item.inserted ||
+        composeReferences?.has(item.id) === false));
+    // Persist queue IDs/bookmarks before network work can run, even on a blank note.
+    if (next.attachments) draftStore(current.draftKey, next);
+    setDraft(next);
+  }, []);
+
+  const patchUpload = useCallback<UploadPatch>((id, uploadId, update) => {
+    changeActiveDraft(current => {
+      const attachments = current.attachments;
+      if (!attachments || attachments.id !== id || !attachments.items.some(item => item.id === uploadId))
+        return current;
+      const items = attachments.items.flatMap(item => item.id === uploadId ? update(item) ?? [] : item);
+      return {...current, attachments: {...attachments, items}};
+    });
+  }, [changeActiveDraft]);
+
+  const queue = useUploadQueue(uploads, session.csrf_token, !!(route.compose && saving), patchUpload);
+  const canAttach = !!(editing && draft?.key === activeKey &&
+    draft.markdown !== undefined && (route.compose || (detail?.editable && !detail.locked && !detail.trashed)));
+  const acceptFiles = useRef<(files: File[], position: number) => void>(() => {});
+  acceptFiles.current = (files, position) => {
+    if (!canAttach) return;
+    const errors: string[] = [];
+    changeActiveDraft(current => {
+      if (current.markdown === undefined) return current;
+      const target: UploadTarget = route.compose
+        ? {notebook_id: current.notebook_id, client_request_id: current.client_request_id!}
+        : {notebook_id: current.notebook_id, note_id: route.note!};
+      const attachments = current.attachments ?? {id: requestId(), items: []};
+      const items = [...attachments.items];
+      let count = items.filter(item => item.phase !== "committed").length;
+      for (const file of files) {
+        if (!file.size || file.size > MAX_ATTACHMENT_BYTES) {
+          errors.push(`${file.name}: ${file.size ? "50 MB를 초과했습니다." : "빈 파일입니다."}`);
+          continue;
+        }
+        if (count >= MAX_QUEUED_ATTACHMENTS) {
+          errors.push(`임시 첨부파일은 최대 ${MAX_QUEUED_ATTACHMENTS}개까지 추가할 수 있습니다.`);
+          break;
+        }
+        const id = requestId();
+        count++;
+        queue.files.set(`${attachments.id}/${id}`, file);
+        items.push({id, target, name: file.name, phase: "queued", position, inserted: false});
+      }
+      return items.length === attachments.items.length ? current : {...current, attachments: {...attachments, items}};
+    });
+    setAttachmentError(errors.join(" "));
+  };
+  const attachmentEvents = useMemo(() => EditorView.domEventHandlers({
+    paste(event, view) {
+      const files = Array.from(event.clipboardData?.files ?? []);
+      if (!files.length || !view.state.facet(EditorView.editable)) return false;
+      event.preventDefault();
+      acceptFiles.current(files, view.state.selection.main.head);
+      return true;
+    },
+    dragover(event, view) {
+      if (!event.dataTransfer?.types.includes("Files") || !view.state.facet(EditorView.editable)) return false;
+      event.preventDefault();
+      return true;
+    },
+    drop(event, view) {
+      const files = Array.from(event.dataTransfer?.files ?? []);
+      if (!files.length || !view.state.facet(EditorView.editable)) return false;
+      event.preventDefault();
+      acceptFiles.current(files, view.posAtCoords({x: event.clientX, y: event.clientY}) ?? view.state.selection.main.head);
+      return true;
+    },
+  }), []);
+  const markdownExtensions = useMemo(() => [...editorExtensions, attachmentEvents], [editorExtensions, attachmentEvents]);
+
+  // Put the next ready file at its live bookmark only after earlier files and
+  // the current IME composition have finished.
+  useEffect(() => {
+    if (!uploads || !canAttach || composing || composingNow.current) return;
+    const item = uploads.items.find(row => !row.inserted && row.phase !== "committed");
+    if (!item || item.phase !== "ready" || !item.metadata || draft?.markdown === undefined) return;
+    const view = editorRef.current?.view;
+    const {position, text} = uploadInsertion(draft.markdown, item.position, item.metadata);
+    const useEditor = view && view.state.doc.toString() === draft.markdown;
+    changeActiveDraft(current => {
+      if (current.markdown === undefined || current.attachments?.id !== uploads.id) return current;
+      const items = current.attachments.items.map(row => {
+        if (row.id === item.id) return {...row, inserted: true, insertedText: text};
+        if (row.inserted) return row;
+        // If insertion moved past leading front matter, move the other
+        // bookmarks inside it so their order survives the same adjustment.
+        const bookmark = item.position < position ? Math.max(row.position, position) : row.position;
+        return {...row, position: useEditor || bookmark < position ? bookmark : bookmark + text.length};
+      });
+      return {...current,
+        markdown: useEditor ? current.markdown : current.markdown.slice(0, position) + text + current.markdown.slice(position),
+        attachments: {...current.attachments, items}};
+    });
+    if (useEditor) view.dispatch({changes: {from: position, insert: text}, userEvent: "input.attach"});
+  }, [uploads, canAttach, composing, draft?.markdown, changeActiveDraft]);
+
+  function cancelUpload(id: string) {
+    const current = navigating.current.draft;
+    const attachments = current?.attachments;
+    const item = attachments?.items.find(row => row.id === id);
+    if (!current || !attachments || !item || readOnlyRecovery || composingNow.current ||
+        writeInFlight.current || pendingUploadIds.has(id)) return;
+    const markdown = current.markdown;
+    if (markdown !== undefined && item.metadata && uploadReferences(markdown).has(id)) {
+      const text = item.insertedText && markdown.includes(item.insertedText)
+        ? item.insertedText : uploadMarkdown(item.metadata);
+      const position = markdown.indexOf(text);
+      if (position < 0 || uploadReferences(markdown.slice(0, position) + markdown.slice(position + text.length)).has(id)) {
+        setAttachmentError("본문에서 이 첨부파일을 가리키는 링크를 지운 뒤 취소하세요.");
+        return;
+      }
+      const view = editorRef.current?.view;
+      if (view && view.state.doc.toString() === markdown) {
+        view.dispatch({changes: {from: position, to: position + text.length},
+          annotations: Transaction.addToHistory.of(false)});
+      } else {
+        changeActiveDraft(latest => ({
+          ...latest, markdown: markdown.slice(0, position) + markdown.slice(position + text.length),
+          attachments: {...attachments, items: attachments.items.map(row => row.inserted || row.position <= position
+            ? row : {...row, position: Math.max(position, row.position - text.length)})},
+        }));
+      }
+    }
+    patchUpload(attachments.id, id, row => ({...row, phase: "canceling", error: undefined}));
+    queue.abort(id);
+    setAttachmentError("");
+  }
 
   function recordLocation(next: Location, replace = false) {
     if (sameLocation(historyLocation.current, next)) return;
@@ -480,7 +669,8 @@ export function Workspace({
           writeRoute(current.route, historyIndex.current, true, historyLocation.current, historyScope.current);
         }
       };
-      if (current.saving) {
+      if (current.saving || (current.activeKey !== destination && current.attachmentsBlocked)) {
+        if (current.attachmentsBlocked) setAttachmentError("이동하려면 진행 중인 첨부파일을 완료하거나 취소하세요.");
         restore();
         return;
       }
@@ -513,14 +703,14 @@ export function Workspace({
     return () => window.removeEventListener("popstate", pop);
   }, []);
   useEffect(() => {
-    if (!dirty && !saving) return;
+    if (!dirty && !saving && !hasStagedUploads) return;
     const beforeUnload = (event: BeforeUnloadEvent) => {
       event.preventDefault();
       event.returnValue = "";
     };
     window.addEventListener("beforeunload", beforeUnload);
     return () => window.removeEventListener("beforeunload", beforeUnload);
-  }, [dirty, saving]);
+  }, [dirty, saving, hasStagedUploads]);
 
   useEffect(() => {
     let active = true;
@@ -529,6 +719,7 @@ export function Workspace({
     setCreateReceipt(null);
     setSaveFailure(null);
     setNoteError("");
+    setAttachmentError("");
     setCompare(null);
     if (!activeKey || !activeDraftKey) {
       setNoteLoading(false);
@@ -539,7 +730,7 @@ export function Workspace({
     if (route.compose) {
       setNoteLoading(false);
       const restored = draftRead(activeDraftKey);
-      const initial: Draft = restored ?? {
+      const initial: Draft = restored ? {...restored, attachments: restoreUploads(restored.attachments)} : {
         key:activeKey, title:"", html:BLANK_HTML, markdown:"", notebook_id:route.notebook!,
         client_request_id:requestId(),
       };
@@ -571,14 +762,20 @@ export function Workspace({
           saved &&
           saved.key === activeKey &&
           saved.notebook_id === note.notebook_id &&
-          (note.editable || !!note.html_text_preview)
+          (note.editable || !!note.html_text_preview || writeInProgress(note) || saved.review_required)
         ) {
-          setDraft(saved);
-          if (saved.review_required) {
+          const staged = writeInProgress(note);
+          const restored = {...saved, review_required: staged || saved.review_required,
+            attachments: restoreUploads(saved.attachments)};
+          // Persist the recovery latch immediately, including older drafts that
+          // predate the preflight review marker.
+          if (staged) draftStore(activeDraftKey, restored);
+          setDraft(restored);
+          if (restored.review_required) {
             setSaveFailure("uncertain");
             if (saved.recovery_acknowledged) { setRecoveredDetail(note); setCompare(note); }
           }
-          setEditing(true);
+          setEditing(!staged && (note.editable || !!note.html_text_preview));
           setViewMode("split");
           setMessage("이 탭에 남아 있던 편집 내용을 복원했습니다.");
         } else {
@@ -619,15 +816,15 @@ export function Workspace({
       draft &&
       activeDraftKey &&
       draft.key === activeKey &&
-      editing &&
-      (dirty || draft.review_required)
+      (editing || draft.review_required) &&
+      (dirty || draft.review_required || hasStagedUploads)
     ) {
       draftStore(activeDraftKey, draft);
     } else if (draft && activeDraftKey && draft.key === activeKey &&
-      !dirty && !saving && !draft.review_required && (route.compose || detail)) {
+      !dirty && !saving && !draft.review_required && !hasStagedUploads && (route.compose || detail)) {
       draftDelete(activeDraftKey);
     }
-  }, [activeKey, activeDraftKey, draft, dirty, editing, saving, detail, route.compose]);
+  }, [activeKey, activeDraftKey, draft, dirty, editing, saving, detail, route.compose, hasStagedUploads]);
 
   const shelves = useMemo(
     () =>
@@ -728,6 +925,10 @@ export function Workspace({
 
   async function traverseHistory(direction: -1 | 1) {
     if (saving || writeInFlight.current) return;
+    if (navigating.current.attachmentsBlocked && !canLeaveReview) {
+      setAttachmentError("이동하려면 진행 중인 첨부파일을 완료하거나 취소하세요.");
+      return;
+    }
     if (direction === -1 ? historyIndex.current <= 0 : historyIndex.current >= historyLast.current) return;
     if (dirty && !canLeaveReview && (!await saveLatest.current() || saveHasMore.current)) return;
     window.history.go(direction);
@@ -735,6 +936,10 @@ export function Workspace({
 
   async function navigate(next: Route, replace = false, search?:string): Promise<boolean> {
     if (saving || writeInFlight.current) return false;
+    if (navigating.current.attachmentsBlocked && !canLeaveReview) {
+      setAttachmentError("이동하려면 진행 중인 첨부파일을 완료하거나 취소하세요.");
+      return false;
+    }
     if (dirty && !canLeaveReview) {
       if (!await saveLatest.current() || saveHasMore.current) return false;
     }
@@ -744,13 +949,16 @@ export function Workspace({
   }
 
   async function save(): Promise<boolean> {
-    if (!draft || !activeDraftKey || writeInFlight.current || saving || saveFailure || composing) return false;
+    if (!draft || !activeDraftKey || writeInFlight.current || saving || saveFailure || composingNow.current ||
+        navigating.current.attachmentsBlocked) return false;
     if (
       !route.compose &&
-      ((!detail?.editable && !detail?.html_text_preview) || !dirty)
+      (writeInProgress(detail) || (!detail?.editable && !detail?.html_text_preview) || !dirty)
     )
       return false;
     const isNew = route.compose;
+    const manifest = uploadManifest(draft.attachments, draft.markdown, detail?.attachment_bindings);
+    const sentUploads = manifest.map(entry => entry.upload_id);
     let sent = draft;
     const sentKey = activeKey!;
     const sentStorageKey = activeDraftKey;
@@ -767,18 +975,18 @@ export function Workspace({
       const mathImages = draft.markdown === undefined ? [] : await exportMath(draft.markdown, session.csrf_token);
       // Persist the unresolved state before the network call, including edits
       // made while the request is pending. Reload must never blindly replay it.
-      sent = {...draft, review_required:true, recovery_acknowledged:false,
+      sent = {...draft, review_required:true, recovery_acknowledged:false, pending_upload_ids: sentUploads,
         ...(isNew ? {client_request_id:draft.client_request_id ?? requestId(),
           create_sent:{title:draft.title,html:draft.html,markdown:draft.markdown}} : {})};
       const held = navigating.current.draft === draft ? sent : {
         ...navigating.current.draft!, review_required:true, recovery_acknowledged:false,
-        client_request_id:sent.client_request_id, create_sent:sent.create_sent,
+        client_request_id:sent.client_request_id, create_sent:sent.create_sent, pending_upload_ids: sentUploads,
       };
       draftStore(sentStorageKey, held);
       const persisted = draftRead(sentStorageKey);
       if (!persisted?.review_required || (isNew && persisted.client_request_id !== sent.client_request_id))
         throw new Error("편집본을 이 탭에 보관할 수 없어 저장을 중단했습니다. 브라우저 저장소 설정을 확인하세요.");
-      setDraft(held);
+      changeActiveDraft(() => held);
       mutationStarted = true;
       const next = await request<NoteDetail>(
         url,
@@ -792,6 +1000,7 @@ export function Workspace({
                 ? { markdown: draft.markdown, ...(mathImages.length ? { math_images: mathImages } : {}) }
                 : { html: draft.html }),
             notebook_id: draft.notebook_id,
+            ...(manifest.length ? {draft_id: draft.attachments!.id, uploads: manifest} : {}),
             ...(!isNew
               ? { version: draft.version ?? "unknown-draft-base" }
               : {}),
@@ -802,23 +1011,27 @@ export function Workspace({
       );
       const latest = navigating.current.draft;
       if (navigating.current.activeKey !== sentKey || !latest) return true;
+      // held can include edits made while preparing math images for sent.
       const unchanged = latest === sent;
+      const attachments = savedAttachments(latest.attachments, sentUploads, isNew ? next : undefined);
       const key = isNew ? `note:${next.id}` : sentKey;
       const rebased: Draft = unchanged ? {
         key, title: next.title, html: next.html, notebook_id: next.notebook_id,
         version: next.version, markdown: next.markdown,
         text_changes: next.html_text_preview ? [] : undefined,
-        text_layout:next.html_text_layout, text_blocks:next.html_text_blocks,
+        text_layout:next.html_text_layout, text_blocks:next.html_text_blocks, attachments,
       } : {
         ...latest, key, version: next.version, review_required:false, recovery_acknowledged:false,
+        attachments, pending_upload_ids: undefined,
         text_layout:next.html_text_layout, text_blocks:next.html_text_blocks,
         html: latest.markdown !== undefined || latest.text_changes !== undefined || latest.html === sent.html ? next.html : latest.html,
         text_changes: latest.text_changes?.filter(change =>
           next.html_text_blocks?.find(block => block.index === change.index)?.text !== change.text),
       };
-      saveHasMore.current = rebased.title !== next.title || rebased.html !== next.html || rebased.markdown !== next.markdown || !!rebased.text_changes?.length;
+      saveHasMore.current = rebased.title !== next.title || rebased.html !== next.html || rebased.markdown !== next.markdown || !!rebased.text_changes?.length ||
+        !!attachments?.items.some(item => item.phase !== "committed" && (item.phase !== "ready" || !item.inserted));
       draftDelete(sentStorageKey);
-      if (!unchanged) draftStore(draftPrefix + key, rebased);
+      if (!unchanged || attachments?.items.some(item => item.phase !== "committed")) draftStore(draftPrefix + key, rebased);
       setSaveFailure(null);
       setDetail(next); setDraft(rebased);
       setNotes(notes => notes.some(note => note.id === next.id)
@@ -830,12 +1043,18 @@ export function Workspace({
       return true;
     } catch (error) {
       const conflict = error instanceof ApiFailure && error.code === "REMOTE_CHANGED";
-      const rejected = error instanceof ApiFailure && ["MARKDOWN_UNSUPPORTED", "HTML_PATCH_INVALID", "DOCUMENT_READ_ONLY", "INVALID_NOTE", "NAS_SESSION_EXPIRED"].includes(error.code);
+      const uploadRejected = error instanceof ApiFailure && ["UPLOAD_NOT_READY", "UPLOAD_NOT_FOUND", "INVALID_UPLOAD"].includes(error.code);
+      const rejected = uploadRejected || error instanceof ApiFailure &&
+        ["MARKDOWN_UNSUPPORTED", "HTML_PATCH_INVALID", "DOCUMENT_READ_ONLY", "INVALID_NOTE", "NAS_SESSION_EXPIRED"].includes(error.code);
       setSaveFailure(conflict ? "conflict" : !mutationStarted || rejected ? "safe" : "uncertain");
       if (mutationStarted && (conflict || rejected)) {
         const latest = navigating.current.draft;
         if (latest && navigating.current.activeKey === sentKey) {
-          const held = {...latest, review_required:false, recovery_acknowledged:false};
+          const attachments = uploadRejected && latest.attachments ? {...latest.attachments,
+            items: latest.attachments.items.map(item => sentUploads.includes(item.id)
+              ? {...item, phase: "checking" as const} : item),
+          } : latest.attachments;
+          const held = {...latest, attachments, review_required:false, recovery_acknowledged:false, pending_upload_ids: undefined};
           draftStore(sentStorageKey, held); setDraft(held);
         }
       }
@@ -876,10 +1095,10 @@ export function Workspace({
   }
   saveLatest.current = save;
   useEffect(() => {
-    if (!editing || !dirty || saving || composing || saveFailure || !draft) return;
+    if (!editing || !dirty || saving || composing || saveFailure || !draft || attachmentsBlocked) return;
     const timer = window.setTimeout(() => { void saveLatest.current(); }, 800);
     return () => window.clearTimeout(timer);
-  }, [draft, dirty, editing, saving, composing, saveFailure]);
+  }, [draft, dirty, editing, saving, composing, saveFailure, attachmentsBlocked]);
 
   async function recoverCreate(saved: Draft, storageKey: string, active = () => true) {
     if (!saved.client_request_id) return;
@@ -896,11 +1115,12 @@ export function Workspace({
       const note = receipt.note, latest = navigating.current.draft ?? saved;
       const original = saved.create_sent;
       const unchanged = original && latest.title === original.title && latest.html === original.html && latest.markdown === original.markdown;
+      const attachments = savedAttachments(latest.attachments, saved.pending_upload_ids ?? [], note);
       const next: Draft = unchanged ? {
         key:`note:${note.id}`, title:note.title, html:note.html, markdown:note.markdown,
-        notebook_id:note.notebook_id, version:note.version,
+        notebook_id:note.notebook_id, version:note.version, attachments,
       } : {...latest, key:`note:${note.id}`, html:note.html, version:note.version,
-        notebook_id:note.notebook_id, review_required:false,recovery_acknowledged:false};
+        notebook_id:note.notebook_id, review_required:false,recovery_acknowledged:false, attachments, pending_upload_ids: undefined};
       draftDelete(storageKey);
       draftStore(draftPrefix + next.key, next);
       createdDraft.current = {note, draft:next};
@@ -913,6 +1133,10 @@ export function Workspace({
   function restartReviewedCreate() {
     if (!draft || !activeDraftKey || !["reviewed", "absent"].includes(createReceipt?.status ?? "") ||
         !window.confirm("기존 생성 요청을 다시 보내지 않습니다. 초안을 남기고 별도의 새 노트를 생성할까요?")) return;
+    if (draft.attachments?.items.some(item => item.phase !== "committed")) {
+      setNoteError("보관된 첨부가 있는 생성 요청은 NAS에서 결과를 먼저 확인하세요.");
+      return;
+    }
     // Keep the unresolved original and its tombstoned UUID available in this tab.
     draftStore(`${activeDraftKey}:held:${draft.client_request_id}`, draft);
     const next: Draft = {...draft, client_request_id:requestId(), create_sent:undefined,
@@ -963,6 +1187,11 @@ export function Workspace({
 
   async function logout() {
     if (saving || writeInFlight.current) return;
+    if (!canLeaveReview && (navigating.current.attachmentsBlocked || uploads?.items.some(item =>
+      item.phase !== "committed" && !referencedUploads.has(item.id)))) {
+      setAttachmentError("로그아웃하려면 진행 중인 첨부파일을 완료하거나 취소하세요.");
+      return;
+    }
     if (dirty && !canLeaveReview && (!await saveLatest.current() || saveHasMore.current)) return;
     void onLogout()
       .then(() => {
@@ -1063,10 +1292,10 @@ export function Workspace({
           detail.html_text_token!,
           draft.text_changes,
         )
-      : editing && draft
+      : (editing || readOnlyRecovery) && draft
         ? draft.html
         : (detail?.html ?? "");
-  const previewMarkdown = editing && draft ? draft.markdown : detail?.markdown;
+  const previewMarkdown = (editing || readOnlyRecovery) && draft ? draft.markdown : detail?.markdown;
   const renderNotebook = (book: Notebook) => (
     <button
       key={book.id}
@@ -1097,8 +1326,8 @@ export function Workspace({
     <GraphIndexProvider key={JSON.stringify([status.nas_url, session.username])} enabled={libraryReady} revision={graphRevision}>
     <GraphNavigationProvider state={graphState} onChange={changeGraphState}>
     <div className={`native-app ${dark ? "native-dark" : ""} ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${listCollapsed ? "list-collapsed" : ""}`}
-      onCompositionStart={() => setComposing(true)}
-      onCompositionEnd={() => setComposing(false)}
+      onCompositionStart={() => { composingNow.current = true; setComposing(true); }}
+      onCompositionEnd={() => { composingNow.current = false; setComposing(false); }}
       style={{ "--editor-font-size": `${preferences.editorFontSize}px` } as CSSProperties}>
       <header className="native-toolbar">
         <div className="panel-controls" role="group" aria-label="패널 표시">
@@ -1555,16 +1784,17 @@ export function Workspace({
             <>
               <div className="editor-heading">
                 <div className="editor-title-row">
-                  {editing && draft ? (
+                  {(editing || readOnlyRecovery) && draft ? (
                     <input
                       id="note-title"
+                      readOnly={!editing}
                       aria-label="노트 제목"
                       required
                       maxLength={256}
                       value={draft.title}
                       placeholder="제목"
                       onChange={(e) =>
-                        setDraft({ ...draft, title: e.target.value })
+                        changeActiveDraft(current => ({ ...current, title: e.target.value }))
                       }
                     />
                   ) : (
@@ -1748,7 +1978,7 @@ export function Workspace({
                       <pre>{recoveredDetail.markdown ?? recoveredDetail.html}</pre>
                       <pre>{draft.title}{"\n"}{reviewDraftBody}</pre>
                     </div>
-                    <button className="native-button" onClick={() => {
+                    <button className="native-button" disabled={writeInProgress(recoveredDetail)} onClick={() => {
                       if (!window.confirm("보관한 편집본을 버리고 확인한 NAS 내용을 사용할까요?")) return;
                       if (activeDraftKey) draftDelete(activeDraftKey);
                       setDraft(null); setEditing(false); setRecoveredDetail(null); setCompare(null);
@@ -1802,6 +2032,16 @@ export function Workspace({
                         {previewMarkdown !== undefined
                           ? "MARKDOWN"
                           : "HTML 원문"}
+                        {canAttach && <>
+                          <button type="button" className="native-button attachment-picker"
+                            onClick={() => attachmentInput.current?.click()}><Paperclip size={13} /> 파일 추가…</button>
+                          <input hidden ref={attachmentInput} type="file" multiple aria-label="첨부할 파일 선택"
+                            onChange={event => {
+                              const view = editorRef.current?.view;
+                              acceptFiles.current(Array.from(event.currentTarget.files ?? []), view?.state.selection.main.head ?? 0);
+                              event.currentTarget.value = "";
+                            }} />
+                        </>}
                       </div>
                       {detail?.html_text_preview &&
                       draft?.text_changes !== undefined ? (
@@ -1834,16 +2074,22 @@ export function Workspace({
                           ref={editorRef}
                           aria-label="Markdown 본문"
                           value={previewMarkdown}
-                          extensions={editorExtensions}
+                          extensions={markdownExtensions}
                           theme={dark ? "dark" : "light"}
                           editable={editing}
                           onUpdate={(update) => {
                             if (editing && update.view.hasFocus && (update.selectionSet || update.docChanged))
                               setPreviewLine(update.state.doc.lineAt(update.state.selection.main.head).number);
-                          }}
-                          onChange={(value) => {
-                            if (draft && editing)
-                              setDraft({ ...draft, markdown: value });
+                            if (editing && update.docChanged) changeActiveDraft(current => {
+                              const markdown = update.state.doc.toString();
+                              if (current.markdown === markdown) return current;
+                              const uploads = current.attachments;
+                              const attachments = uploads?.items.some(row => !row.inserted) ? {...uploads,
+                                items: uploads.items.map(row => row.inserted ? row
+                                  : {...row, position: update.changes.mapPos(Math.min(row.position, update.startState.doc.length), 1)}),
+                              } : uploads;
+                              return {...current, markdown, attachments};
+                            });
                           }}
                           basicSetup={{
                             lineNumbers: preferences.lineNumbers,
@@ -1885,6 +2131,8 @@ export function Workspace({
                         version={detail?.version}
                         attachments={detail?.attachments}
                         bindings={detail?.attachment_bindings}
+                        stagedImages={stagedImages}
+                        stagedDownloads={stagedDownloads}
                         onOpenLink={(destination) =>
                           void openInternalLink(destination)
                         }
@@ -1893,10 +2141,14 @@ export function Workspace({
                   )}
                 </div>
               )}
+              {attachmentError && <p role="alert" className="attachment-error">{attachmentError}</p>}
+              {uploads?.items.length ? <AttachmentQueue uploads={uploads} savingIds={pendingUploadIds}
+                busy={saving} readOnly={readOnlyRecovery} composing={composing} references={referencedUploads} cancel={cancelUpload} retry={id =>
+                  patchUpload(uploads.id, id, row => ({...row, phase: "checking", error: undefined}))} /> : null}
               <footer className="native-status editor-status">
                 <span>
                   {saveFailure ? "자동 저장 중단 · 편집본 보관됨" : saving ? "NAS에 자동 저장 중…"
-                    : dirty ? "자동 저장 대기 중…" : route.compose ? "새 노트 작성 중" : "✓ NAS에 자동 저장됨"}
+                    : attachmentsBlocked ? "첨부파일 처리 대기 중…" : dirty ? "자동 저장 대기 중…" : route.compose ? "새 노트 작성 중" : "✓ NAS에 자동 저장됨"}
                 </span>
                 <span>
                   {

@@ -39,8 +39,7 @@ DOMPurify.addHook("uponSanitizeAttribute", (node, data) => {
     }
   }
   if (
-    tag === "img" &&
-    data.attrName === "src" &&
+    ((tag === "img" && data.attrName === "src") || (tag === "a" && data.attrName === "href")) &&
     data.attrValue.startsWith("attachment://")
   )
     node.setAttribute("data-attachment-ref", data.attrValue.slice(13));
@@ -75,6 +74,8 @@ export function NotePreview({
   version,
   attachments,
   bindings,
+  stagedImages,
+  stagedDownloads,
   onOpenLink,
   sourceLine,
 }: {
@@ -90,6 +91,8 @@ export function NotePreview({
   version?: string;
   attachments?: { id: string; ref: string | null; name: string }[];
   bindings?: Record<string, string>;
+  stagedImages?: Record<string, string>;
+  stagedDownloads?: Record<string, string>;
 }) {
   const [page, setPage] = useState("");
   const serial = useRef(0);
@@ -142,7 +145,10 @@ export function NotePreview({
           const link = event.target.closest?.('a');
           if (!link) return;
           const href = link.getAttribute('href') || '';
-          if (link.hasAttribute('data-note-link')) {
+          if (link.hasAttribute('data-attachment-download')) {
+            event.preventDefault();
+            parent.postMessage({kind:'synonote:attachment', nonce, href}, '*');
+          } else if (link.hasAttribute('data-note-link')) {
             event.preventDefault();
             parent.postMessage({kind:'synonote:link', nonce, href}, '*');
           } else if (!href || href.startsWith('#')) {
@@ -166,19 +172,28 @@ export function NotePreview({
     frame.current?.contentWindow?.postMessage({ kind: "synonote:render", nonce: linkNonce.current, page, line: latestLine.current }, "*");
   }, [page]);
   useEffect(() => {
+    const downloads = new Set(Object.values(stagedDownloads ?? {}));
+    if (noteId) for (const file of attachments ?? []) {
+      downloads.add(`/api/notes/${encodeURIComponent(noteId)}/attachments/${encodeURIComponent(file.id)}`);
+    }
     const receive = (event: MessageEvent) => {
-      if (
-        event.source === frame.current?.contentWindow &&
-        event.data?.kind === "synonote:link" &&
-        event.data.nonce === linkNonce.current &&
-        typeof event.data.href === "string" &&
-        canonicalNoteLink(event.data.href)
-      )
-        onOpenLink?.(canonicalNoteLink(event.data.href)!);
+      if (event.source !== frame.current?.contentWindow || event.data?.nonce !== linkNonce.current ||
+          typeof event.data.href !== "string") return;
+      const {kind, href} = event.data;
+      if (kind === "synonote:link") {
+        const destination = canonicalNoteLink(href);
+        if (destination) onOpenLink?.(destination);
+      }
+      if (kind === "synonote:attachment" && downloads.has(href)) {
+        const link = document.createElement("a");
+        link.href = href;
+        link.download = "";
+        link.click();
+      }
     };
     window.addEventListener("message", receive);
     return () => window.removeEventListener("message", receive);
-  }, [onOpenLink]);
+  }, [onOpenLink, noteId, attachments, stagedDownloads]);
   const images = useRef(new Map<string, string>());
   useEffect(() => {
     let active = true;
@@ -227,63 +242,66 @@ export function NotePreview({
         FORBID_ATTR: ["style", "srcset"],
         ADD_ATTR: ["ref"],
       });
-      if (noteId && attachments)
-        for (const img of body.querySelectorAll("img")) {
-          const reference =
-            img.getAttribute("ref") ?? img.getAttribute("data-attachment-ref");
-          if (!reference) continue;
-          const key = reference.toLowerCase();
-          const bound = Object.entries(bindings ?? {}).find(
-            ([id]) => id.toLowerCase() === key,
-          )?.[1];
-          const matches = attachments.filter((f) =>
-            bound
-              ? f.id === bound
-              : f.id.toLowerCase() === key || f.ref?.toLowerCase() === key,
-          );
-          if (matches.length !== 1) continue;
+      const attachmentPath = (reference: string, staged: Record<string, string> | undefined, image = false) => {
+        const key = reference.toLowerCase();
+        const bound = Object.entries(bindings ?? {}).find(([id]) => id.toLowerCase() === key)?.[1];
+        const matches = attachments?.filter(file => bound ? file.id === bound :
+          file.id.toLowerCase() === key || file.ref?.toLowerCase() === key);
+        if (noteId && matches?.length === 1) {
           const file = matches[0];
-          const cacheKey = `${noteId}:${version}:${file.id}`;
-          try {
-            let dataUrl = images.current.get(cacheKey);
-            if (!dataUrl) {
-              const response = await fetch(
-                `/api/notes/${encodeURIComponent(noteId)}/attachments/${encodeURIComponent(file.id)}`,
-                { credentials: "same-origin", cache: "no-store" },
-              );
-              if (response.status === 401) notifySessionExpired();
-              if (!response.ok) continue;
-              const bytes = await response.arrayBuffer();
-              const head = new Uint8Array(
-                bytes,
-                0,
-                Math.min(bytes.byteLength, 12),
-              );
-              const header = String.fromCharCode(...head);
-              const mime =
-                head[0] === 137 && header.slice(1, 4) === "PNG"
-                  ? "image/png"
-                  : head[0] === 255 && head[1] === 216
-                    ? "image/jpeg"
-                    : header.startsWith("GIF8")
-                      ? "image/gif"
-                      : header.startsWith("RIFF") && header.slice(8) === "WEBP"
-                        ? "image/webp"
-                        : null;
-              if (!mime) continue;
-              dataUrl = await new Promise<string>((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onload = () => resolve(reader.result as string);
-                reader.onerror = reject;
-                reader.readAsDataURL(new Blob([bytes], { type: mime }));
-              });
-              images.current.set(cacheKey, dataUrl);
-            }
-            img.setAttribute("src", dataUrl);
-          } catch {
-            /* Keep alternate text when an attachment cannot be read. */
-          }
+          if (image && file.name.startsWith("synology-note-attachment-file-")) return undefined;
+          return `/api/notes/${encodeURIComponent(noteId)}/attachments/${encodeURIComponent(file.id)}`;
         }
+        return staged && Object.hasOwn(staged, key) ? staged[key] : undefined;
+      };
+      const stagedPaths = new Set(Object.values(stagedImages ?? {}));
+      for (const key of images.current.keys()) {
+        if (key.startsWith("/api/drafts/") && !stagedPaths.has(key)) images.current.delete(key);
+      }
+      for (const img of body.querySelectorAll("img")) {
+        const reference = img.getAttribute("ref") ?? img.getAttribute("data-attachment-ref");
+        const path = reference && attachmentPath(reference, stagedImages, true);
+        if (!path) continue;
+        const cacheKey = stagedPaths.has(path) ? path : `${path}:${version}`;
+        try {
+          let dataUrl = images.current.get(cacheKey);
+          if (!dataUrl) {
+            const response = await fetch(path, { credentials: "same-origin", cache: "no-store" });
+            if (!active) return;
+            if (response.status === 401) notifySessionExpired();
+            if (!response.ok) continue;
+            const bytes = await response.arrayBuffer();
+            const head = new Uint8Array(
+              bytes,
+              0,
+              Math.min(bytes.byteLength, 12),
+            );
+            const header = String.fromCharCode(...head);
+            const mime =
+              head[0] === 137 && header.slice(1, 4) === "PNG"
+                ? "image/png"
+                : head[0] === 255 && head[1] === 216
+                  ? "image/jpeg"
+                  : header.startsWith("GIF8")
+                    ? "image/gif"
+                    : header.startsWith("RIFF") && header.slice(8) === "WEBP"
+                      ? "image/webp"
+                      : null;
+            if (!mime) continue;
+            dataUrl = await new Promise<string>((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () => resolve(reader.result as string);
+              reader.onerror = reject;
+              reader.readAsDataURL(new Blob([bytes], { type: mime }));
+            });
+            if (!active) return;
+            images.current.set(cacheKey, dataUrl);
+          }
+          img.setAttribute("src", dataUrl);
+        } catch {
+          /* Keep alternate text when an attachment cannot be read. */
+        }
+      }
       // Render diagrams outside the iframe, then keep only safe SVG presentation.
       const diagrams = Array.from(
         body.querySelectorAll("pre > code.language-mermaid"),
@@ -368,11 +386,19 @@ export function NotePreview({
         }
       }
       for (const a of body.querySelectorAll("a")) {
+        const reference = a.getAttribute("data-attachment-ref");
+        const path = reference && attachmentPath(reference, stagedDownloads);
+        if (path) {
+          a.setAttribute("href", path);
+          a.setAttribute("data-attachment-download", "");
+        } else {
+          a.removeAttribute("data-attachment-download");
+        }
         const href = a.getAttribute("href") ?? "";
         const internal = canonicalNoteLink(href);
         if (internal) a.setAttribute("data-note-link", "true");
         else a.removeAttribute("data-note-link");
-        if (internal || !href || href.startsWith('#')) a.removeAttribute("target");
+        if (path || internal || !href || href.startsWith('#')) a.removeAttribute("target");
         else a.setAttribute("target", "_blank");
         a.setAttribute("rel", "noreferrer noopener");
       }
@@ -400,6 +426,8 @@ export function NotePreview({
     version,
     attachments,
     bindings,
+    stagedImages,
+    stagedDownloads,
     linkEnabled,
   ]);
   return (

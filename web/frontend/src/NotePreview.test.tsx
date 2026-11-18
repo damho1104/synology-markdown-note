@@ -216,3 +216,51 @@ it('opens external links outside the preview and keeps internal/fragment links i
   expect(doc.querySelector('[data-note-link]')?.hasAttribute('target')).toBe(false)
   expect(frame.getAttribute('sandbox')).toContain('allow-popups-to-escape-sandbox')
 })
+
+it("renders staged images and resolves staged and saved download links from verified attachments", async () => {
+  const stage = "/api/drafts/d/uploads/i/content";
+  const download = "/api/drafts/d/uploads/p/content";
+  const fetcher = vi.fn(async () => new Response(new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])));
+  vi.stubGlobal("fetch", fetcher);
+  vi.stubGlobal("crypto", {getRandomValues: (bytes: Uint8Array) => bytes.fill(1)});
+  const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+  try {
+    render(<NotePreview html="" markdown={
+      "![image](attachment://image) [staged](attachment://pdf) [saved](attachment://saved) [unbound](attachment://unknown)"
+    } noteId="note1" stagedImages={{image:stage}} stagedDownloads={{pdf:download}}
+      attachments={[{id:"file1", name:"saved.pdf", ref:null}]} bindings={{saved:"file1"}} />);
+    const frame = screen.getByTitle("노트 HTML 미리보기") as HTMLIFrameElement;
+    const source = await renderedPage(frame);
+    expect(source).toContain("data:image/png;base64,");
+    expect(fetcher).toHaveBeenCalledWith(stage, {credentials:"same-origin", cache:"no-store"});
+    const links = [...new DOMParser().parseFromString(source, "text/html").querySelectorAll("a")];
+    expect(links.map(link => link.getAttribute("href"))).toEqual([download, "/api/notes/note1/attachments/file1", null]);
+    const send = (href: string) => window.dispatchEvent(new MessageEvent("message", {
+      source: frame.contentWindow,
+      data: {kind:"synonote:attachment", nonce:"01".repeat(16), href},
+    }));
+    send("/api/notes/other/attachments/file1");
+    expect(click).not.toHaveBeenCalled();
+    send(download);
+    expect(click).toHaveBeenCalledOnce();
+    expect((click.mock.contexts[0] as HTMLAnchorElement).getAttribute("href")).toBe(download);
+  } finally {
+    click.mockRestore();
+    vi.unstubAllGlobals();
+  }
+});
+
+it("keeps a saved download-only attachment out of inline image recognition", async () => {
+  const fetcher = vi.fn(async () => new Response(new Uint8Array([137, 80, 78, 71])));
+  vi.stubGlobal("fetch", fetcher);
+  try {
+    render(<NotePreview html="" markdown="![forced image](attachment://file) [download](attachment://file)"
+      noteId="note1" attachments={[{id:"file1", name:"synology-note-attachment-file-fixture.png", ref:"file"}]} />);
+    const source = await renderedPage(screen.getByTitle("노트 HTML 미리보기") as HTMLIFrameElement);
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(source).not.toContain("data:image/png");
+    expect(source).toContain('href="/api/notes/note1/attachments/file1"');
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});

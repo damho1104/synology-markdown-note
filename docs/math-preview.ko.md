@@ -34,4 +34,4 @@ $$\begin{pmatrix}a & b \\ c & d\end{pmatrix}$$
 
 웹에서 본문을 수정해 원문 첨부가 더 이상 일치하지 않으면 HTML 서식 문서로 열어 웹 수정 내용을 유지한다. 원본 HTML 문서와 보존 블록 속 내용을 자동으로 수식으로 재해석하지 않는다. 2026-10-16 검증은 실제 WebKit 이미지 생성과 합성 NAS 왕복이며 실제 NAS 웹 표시를 다시 확인한 결과는 아니다.
 
-포함 리소스를 갱신할 때는 공식 npm 배포본을 압축 해제한 뒤 `rtk proxy python3 script/bundle_katex.py /path/to/package`를 실행한다. 이 스크립트는 WOFF2 글꼴을 CSS에 포함하며 앱 빌드·실행 중 다운로드하지 않는다. 라이선스는 `Resources/KATEX-LICENSE.txt`에 포함한다.
+포함 리소스를 갱신할 때는 공식 npm 배포본을 압축 해제한 뒤 `python3 script/bundle_katex.py /path/to/package`를 실행한다. 이 스크립트는 WOFF2 글꼴을 CSS에 포함하며 앱 빌드·실행 중 다운로드하지 않는다. 라이선스는 `Resources/KATEX-LICENSE.txt`에 포함한다.

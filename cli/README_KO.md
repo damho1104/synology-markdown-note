@@ -89,6 +89,8 @@ synonote version
 
 ## 로그인과 자동 로그인
 
+아래 명령의 NAS 주소, 사용자 이름, 책장·메모장 이름, 파일 경로와 ID는 예시입니다. 자신의 환경에 맞게 바꾸세요. OTP 예시도 로그인 시 발급된 현재 코드로 바꿉니다. 제품의 기본값과 필수 이름은 별도로 설명합니다.
+
 ```shell
 synonote login --server https://nas.example:5001 --username alice --remember
 synonote login --server https://nas.example:5001 --username alice --otp 123456 --remember
@@ -122,9 +124,11 @@ synonote note info --id NOTE_ID --json
 
 ## 일일 요약 지식 인덱스
 
-`LLM-Daily-Summary` 책장의 `YYYY-MM` 형식 월별 노트북만 읽어 인덱스를 만듭니다. 원본 노트는 수정하지 않으며 LLM 공급자별 분류도 만들지 않습니다. 인덱스 노트북의 역할을 다음과 같이 분리합니다.
+`--stack`으로 지정한 책장에서 `YYYY-MM` 형식의 월별 메모장만 읽어 인덱스를 만듭니다. 책장 이름은 자유롭게 선택할 수 있습니다. 원본 노트는 수정하지 않습니다. 현재는 월별 메모장에 모은 일일 요약 노트용 기능이며, 다른 이름의 메모장은 읽지 않습니다. 프로젝트 분류는 `by_project` 메타데이터, 주제 분류는 본문의 기술 용어와 정규식을 사용합니다. LLM 호출이나 공급자별 분류는 수행하지 않습니다.
 
-- `llm-index`: 아래의 네 허브 노트만 보관
+`--index-notebook`은 허브 노트를 저장할 메모장 이름입니다. 이 메모장은 지정한 책장에 미리 만들어야 하며, 옵션을 생략하면 기본값 `llm-index`를 사용합니다. 아래 예시는 `업무` 책장과 `지식 인덱스` 메모장을 사용합니다. 두 이름을 자신의 환경에 맞게 바꾸세요.
+
+- `--index-notebook`으로 지정한 메모장: 아래의 네 허브 노트만 보관
 - `by-project`: 프로젝트 상세 인덱스 보관
 - `by-topic`: 주제 상세 인덱스 보관
 
@@ -135,13 +139,13 @@ synonote note info --id NOTE_ID --json
 
 ```shell
 # 먼저 전체 결과를 확인합니다. --dry-run이 기본값입니다.
-synonote index build --stack 'LLM-Daily-Summary' --index-notebook 'llm-index' --dry-run --json
+synonote index build --stack '업무' --index-notebook '지식 인덱스' --dry-run --json
 # 검토 후 누락된 상세 노트북 생성 및 기존 관리 노트 이동·게시
-synonote index build --stack 'LLM-Daily-Summary' --index-notebook 'llm-index' --apply --json
+synonote index build --stack '업무' --index-notebook '지식 인덱스' --apply --json
 # 이후에는 같은 명령을 재실행하면 변경된 관리 대상만 갱신합니다.
 ```
 
-`--project-min-days 3`으로 프로젝트 상세 노트 생성 기준을 조정할 수 있습니다(최소 2). 먼저 `llm-index`를 준비해야 합니다. 상세 노트북 `by-project`, `by-topic`이 없으면 `--apply`에서 생성하여 같은 책장에 넣습니다. 기존 `llm-index`에 게시된 프로젝트·주제 상세 노트는 **노트 ID, HTML, 첨부파일을 검증하며 원격에서 직접 이동**합니다. `--dry-run`은 `placement`, `move`, `move_update`, `notebooks_to_create`를 보여 주며 아무것도 수정하지 않습니다.
+`--project-min-days 3`으로 프로젝트 상세 노트 생성 기준을 조정할 수 있습니다(최소 2). `--index-notebook`으로 지정한 허브 메모장을 먼저 준비하세요. 상세 노트북 `by-project`, `by-topic`이 없으면 `--apply`에서 생성하여 같은 책장에 넣습니다. 기존 허브 메모장에 게시된 프로젝트·주제 상세 노트는 **노트 ID, HTML, 첨부파일을 검증하며 원격에서 직접 이동**합니다. `--dry-run`은 `placement`, `move`, `move_update`, `notebooks_to_create`를 보여 주며 아무것도 수정하지 않습니다.
 
 전체 NAS의 제목 충돌, 원본 링크 해석, 기존 관리 마커(`<!-- synonote-index:v1 -->`)를 확인합니다. 사용자가 작성한 노트는 같은 제목이어도 덮어쓰지 않습니다. 기존 인덱스 내용이 같으면 불필요한 쓰기를 생략합니다. 각 인덱스 링크는 `노트 제목.md` 형식이며 macOS 앱의 내부 링크 지원을 전제로 합니다.
 

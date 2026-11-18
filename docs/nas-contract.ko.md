@@ -10,7 +10,7 @@
 
 - 구현: `NoteStationClient`, `NoteStationSyncTransport`, `SyncCoordinator`, `NoteRepository`, `SourceEnvelope`와 앱의 `Services/`.
 - API 조사: 공식 클라이언트 3.0.0-883의 호출 구조를 참고했습니다. 공식 앱 코드 전체는 복제하지 않았습니다.
-- 2026-10-16: `rtk proxy ./script/test.sh`, 175개 테스트 / 20개 스위트 통과. API는 합성 응답으로 검사하며 미리보기는 실제 WebKit에서도 검사합니다.
+- 2026-10-16: `./script/test.sh`, 175개 테스트 / 20개 스위트 통과. API는 합성 응답으로 검사하며 미리보기는 실제 WebKit에서도 검사합니다.
 - 과거 NAS 진단 기록: 전용 노트의 수정·버전 충돌 거절, 이미지·Markdown 원문 바이트 왕복, 기기 토큰 저장·재사용과 재실행 자동 로그인이 확인되었습니다. 이번 정리에서는 실제 NAS 접속·쓰기를 재실행하지 않았습니다.
 - 공식 앱 편집 후 전체 왕복, 여러 Mac 동시 편집, 다른 Mac 설치, 모든 DSM 버전의 호환성을 검증한 것은 아닙니다.
 - 2026-10-17: 책장(Stack) 기능을 공식 클라이언트 3.0.0-883 코드와 합성 NAS 요청/응답으로 검사했습니다. 실제 NAS에서 책장 생성·변경·삭제와 공식 앱 간 왕복은 아직 재검증하지 않았습니다.
@@ -110,4 +110,4 @@ object_id/title/parent_id/ver/mtime/tag/recycle/encrypt를 노트 요약으로 �
 
 과거 첨부 검사 오류 101은 multipart 라우팅 인자를 쿼리로 옮긴 뒤 전용 노트 재검사에서 해소되었고 이미지·원문 바이트 일치와 Markdown 복원이 기록되었습니다. Auth v6 선택 후 기기 토큰 저장·동일 서명 번들의 재실행 자동 연결도 기록되었습니다. 모든 NAS·모든 서명 번들의 보장은 아닙니다.
 
-전체 회귀 검사는 `rtk proxy ./script/test.sh`로 실행합니다. 남은 검증은 공식 앱 편집 후 왕복, 여러 Mac 동시 저장, 다단계 쓰기 도중 실제 네트워크 단절, 대규모 성능, 다른 Mac 설치·Keychain 접근입니다. Intel/universal·Developer ID·Apple 공증은 [배포 안내](distribution.ko.md)를 참고하세요.
+전체 회귀 검사는 `./script/test.sh`로 실행합니다. 남은 검증은 공식 앱 편집 후 왕복, 여러 Mac 동시 저장, 다단계 쓰기 도중 실제 네트워크 단절, 대규모 성능, 다른 Mac 설치·Keychain 접근입니다. Intel/universal·Developer ID·Apple 공증은 [배포 안내](distribution.ko.md)를 참고하세요.

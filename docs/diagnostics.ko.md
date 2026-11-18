@@ -39,7 +39,7 @@ DB 열기·무결성 검사·인덱스 재구성·공간 회수·백업·복구�
 시스템 로그에도 subsystem `com.damho.SynologyMarkdown`, category `Diagnostics`로 이벤트를 기록한다. 시스템 로그의 부가 메타데이터는 비공개로 표시한다. 앱 종료 시의 스택은 macOS가 `~/Library/Logs/DiagnosticReports/`에 작성하는 `.ips` 보고서로 확인한다. 앱이 비정상 종료되면 종료 직전 이벤트까지 남을 수 있으며, `app.terminating`은 정상 종료 요청에 대한 기록이다.
 
 ```sh
-rtk proxy /usr/bin/log show --last 10m --style compact --predicate 'subsystem == "com.damho.SynologyMarkdown" AND category == "Diagnostics"'
+/usr/bin/log show --last 10m --style compact --predicate 'subsystem == "com.damho.SynologyMarkdown" AND category == "Diagnostics"'
 ```
 
 빌드 5부터 저장 검증 오류는 `error_kind=readback_verification`, 반영 여부 불명은 `write_uncertain`, 실제 버전 충돌은 `remote_changed` 또는 `version_conflict`로 구분한다. 코드 블록의 허용된 HTML 표현 차이는 서버에서 읽은 실제 HTML을 지문으로 기록해 확인하며, Markdown 원문과 보존 블록의 무결성 검사는 유지한다.

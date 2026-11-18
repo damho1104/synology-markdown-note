@@ -30,6 +30,8 @@ On the same PC, open `http://localhost:8787`; on another PC, open `http://<serve
 
 ## Common configuration examples
 
+The IP addresses, domains, and ports below are examples. Replace them with the actual addresses and settings of your NAS and web server.
+
 If your NAS is at `192.168.1.20` on a private network and you also want to access the web app from another PC, configure `.env` as follows.
 
 ```dotenv
@@ -73,6 +75,8 @@ docker compose up -d
 ## Optional: Store data in a Synology folder
 
 This step is unnecessary when using the default named volume. To mount a NAS folder directly, prepare a **new dedicated folder**.
+
+The path `/volume1/docker/synology-md-note-web/data` below is an example. Adjust all commands and `WEB_DATA_PATH` together to match your volume and dedicated folder.
 
 ```sh
 sudo mkdir -p /volume1/docker/synology-md-note-web/data

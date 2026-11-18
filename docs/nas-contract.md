@@ -10,7 +10,7 @@ The initial HTTP adapter enabled reads only, but the current app supports automa
 
 - Implementation: `NoteStationClient`, `NoteStationSyncTransport`, `SyncCoordinator`, `NoteRepository`, `SourceEnvelope`, and the app's `Services/`.
 - API investigation: the call structure of the official client 3.0.0-883 was used as a reference. The official app's entire code was not replicated.
-- 2026-10-16: `rtk proxy ./script/test.sh`, 175 tests / 20 suites passed. APIs are tested with synthetic responses, and previews are also tested in actual WebKit.
+- 2026-10-16: `./script/test.sh`, 175 tests / 20 suites passed. APIs are tested with synthetic responses, and previews are also tested in actual WebKit.
 - Historical NAS diagnostics confirmed editing dedicated notes, rejecting version conflicts, byte-for-byte round trips of images and Markdown source, storing and reusing device tokens, and automatic login after relaunch. Actual NAS connections and writes were not rerun for this update.
 - Full round trips after editing in the official app, simultaneous editing on multiple Macs, installation on another Mac, and compatibility with every DSM version have not been validated.
 - 2026-10-17: Stack functionality was tested against official client 3.0.0-883 code and synthetic NAS requests/responses. Creating, modifying, and deleting stacks on a real NAS and round trips with the official app have not yet been revalidated.
@@ -110,4 +110,4 @@ The creation, update/conflict, image/source, and automatic upload checks in Sett
 
 Historical attachment check error 101 was resolved in a dedicated-note retest after moving multipart routing arguments to the query; matching image and source bytes and Markdown restoration were recorded. Device token storage and automatic connection after relaunching a bundle with the same signature were also recorded after selecting Auth v6. These results do not guarantee behavior on every NAS or with every signed bundle.
 
-Run the full regression checks with `rtk proxy ./script/test.sh`. Remaining validation includes round trips after editing in the official app, simultaneous saves on multiple Macs, actual network disconnection during multistep writes, large-scale performance, and installation and Keychain access on another Mac. For Intel/universal, Developer ID, and Apple notarization, see the [distribution guide](distribution.md).
+Run the full regression checks with `./script/test.sh`. Remaining validation includes round trips after editing in the official app, simultaneous saves on multiple Macs, actual network disconnection during multistep writes, large-scale performance, and installation and Keychain access on another Mac. For Intel/universal, Developer ID, and Apple notarization, see the [distribution guide](distribution.md).

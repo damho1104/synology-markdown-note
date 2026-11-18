@@ -18,9 +18,9 @@ UI를 다시 빌드한 뒤 키체인 확인을 반복하던 원인은 임시 서
 ## 검증
 
 ```sh
-rtk proxy python3 script/test_signing.py
-rtk proxy ./script/test.sh
-rtk proxy ./script/build_and_run.sh
+python3 script/test_signing.py
+./script/test.sh
+./script/build_and_run.sh
 ```
 
 서명 검사는 서로 다른 두 앱 바이너리가 같은 보조 프로그램으로 합성 계정의 비밀번호·기기 토큰을 저장하고 다시 읽는지 확인한다. 관련 없는 부모 프로세스와 다른 식별자로 서명된 앱의 요청이 거부되는지도 검사한다. 실제 NAS 계정은 이 검사에서 사용하지 않는다.

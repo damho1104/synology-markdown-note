@@ -30,6 +30,8 @@ docker compose exec web cat /data/setup-code
 
 ## 자주 쓰는 설정 예시
 
+아래 IP·도메인·포트는 예시입니다. NAS와 웹 서버의 실제 주소 및 설정에 맞게 바꾸세요.
+
 내부망 NAS가 `192.168.1.20`이고 다른 PC에서도 웹에 접속할 경우 `.env`를 다음처럼 설정합니다.
 
 ```dotenv
@@ -73,6 +75,8 @@ docker compose up -d
 ## 선택: Synology 폴더에 데이터 보관
 
 기본 named volume을 사용하면 이 과정은 필요 없습니다. NAS 폴더를 직접 연결하려면 **새 전용 폴더**를 준비합니다.
+
+아래 `/volume1/docker/synology-md-note-web/data`는 예시 경로입니다. 사용하는 볼륨과 전용 폴더에 맞게 모든 명령 및 `WEB_DATA_PATH`를 함께 바꾸세요.
 
 ```sh
 sudo mkdir -p /volume1/docker/synology-md-note-web/data

@@ -18,9 +18,9 @@ The development certificate's public fingerprint is saved in `~/Library/Applicat
 ## Verification
 
 ```sh
-rtk proxy python3 script/test_signing.py
-rtk proxy ./script/test.sh
-rtk proxy ./script/build_and_run.sh
+python3 script/test_signing.py
+./script/test.sh
+./script/build_and_run.sh
 ```
 
 The signing check verifies that two different app binaries can save and read a synthetic account's password and device token through the same helper. It also checks that requests from an unrelated parent process and from an app signed with a different identifier are rejected. No actual NAS account is used in this check.

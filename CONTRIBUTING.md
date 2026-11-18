@@ -7,7 +7,7 @@ Thank you for your interest in Synology Markdown Note. Before making changes, ch
 ## Branch workflow
 
 - `develop`: The development and integration branch. Target this branch for feature and bug-fix pull requests by default.
-- `main`: The default branch and the basis for stable releases. Merge verified changes from `develop` through a pull request.
+- `main`: The default branch and the basis for stable releases. Maintainers merge verified changes from `develop` with `git merge --no-ff`.
 - Create stable version tags on `main` and do not move published tags. The release workflow stops if the tagged commit is not included in `origin/main`.
 - Releases run only when a version tag is pushed. Branch pushes and manual runs cannot start a release.
 
@@ -40,3 +40,7 @@ This project is not an official product made or supported by Synology.
 ## External pull request checks
 
 Pull request code runs on GitHub-hosted Ubuntu and macOS runners, not the repository's self-hosted Linux or Mac runners. Pull request workflows do not use the uv cache or retain the checkout token in Git configuration. When making the repository public, configure Actions to require approval for all runs from external contributors and review workflow changes especially carefully. YAML alone does not enforce isolation of access to repository-level runners.
+
+## Public documentation
+
+All public documentation must be understandable and usable without a particular user’s environment. Do not present personal stack or notebook names, server addresses, accounts, absolute local paths, or personal tools as requirements. Use fictional values or placeholders in examples and state what readers must replace. Distinguish examples from actual option defaults, fixed identifiers, and product constraints. Keep official download and image addresses usable. Update the corresponding English and Korean documents together.

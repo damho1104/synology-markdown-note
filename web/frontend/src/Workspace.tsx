@@ -309,7 +309,8 @@ export function Workspace({
   const [noteLoading, setNoteLoading] = useState(false);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [editing, setEditing] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [savingAction, setSavingAction] = useState<"note" | "library" | null>(null);
+  const saving = savingAction !== null;
   const [composing, setComposing] = useState(false);
   const [saveFailure, setSaveFailure] = useState<"safe" | "conflict" | "uncertain" | null>(null);
   const writeInFlight = useRef(false);
@@ -1037,7 +1038,7 @@ export function Workspace({
     const sentStorageKey = activeDraftKey;
     let mutationStarted = false;
     writeInFlight.current = true;
-    setSaving(true);
+    setSavingAction("note");
     setNoteError("");
     setCompare(null);
     if (dirty) draftStore(activeDraftKey, draft);
@@ -1164,7 +1165,7 @@ export function Workspace({
       return false;
     } finally {
       writeInFlight.current = false;
-      setSaving(false);
+      setSavingAction(null);
     }
   }
   saveLatest.current = save;
@@ -1399,7 +1400,7 @@ export function Workspace({
     if (saving) return;
     if (dirty)
       throw new Error("편집 내용을 저장하거나 취소한 다음 실행하세요.");
-    setSaving(true);
+    setSavingAction("library");
     setPendingError("");
     try {
       await request(
@@ -1426,7 +1427,7 @@ export function Workspace({
       void loadPending();
       throw error;
     } finally {
-      setSaving(false);
+      setSavingAction(null);
     }
   }
   function exportNote() {
@@ -2116,7 +2117,7 @@ export function Workspace({
                       "이 문서는 읽기 전용입니다."}
                   </div>
                 )}
-              {route.compose && draft?.review_required && (
+              {savingAction !== "note" && route.compose && draft?.review_required && (
                 <div className="workspace-alert warning">
                   <div>
                     <b>새 노트 저장 결과 확인 필요</b>
@@ -2126,7 +2127,7 @@ export function Workspace({
                   </div>
                 </div>
               )}
-              {!route.compose && draft?.review_required && !recoveredDetail && (
+              {savingAction !== "note" && !route.compose && draft?.review_required && !recoveredDetail && (
                 <div className="workspace-alert warning">
                   NAS 확인본을 읽기 전까지 자동 저장을 중단합니다.
                   <button className="native-button" onClick={() => void reviewAcknowledged()}>NAS 확인본 다시 불러오기</button>

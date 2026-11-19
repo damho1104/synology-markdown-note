@@ -31,7 +31,7 @@ CLI는 [uv](https://docs.astral.sh/uv/getting-started/installation/)를 설치�
 
 ```sh
 cd cli
-uv python install 3.13
+uv python install
 uv sync --locked
 uv run --locked pytest -q tests
 uv run --locked python build_onefile.py

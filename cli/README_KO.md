@@ -63,10 +63,10 @@ install -m 755 './synonote-cli-<VERSION_TAG>-linux-glibc2.28-amd64' "$HOME/.loca
 
 ### 소스에서 onefile 빌드 (선택)
 
-빌드할 때는 [uv](https://docs.astral.sh/uv/getting-started/installation/)로 Python 3.13과 잠금 파일의 의존성을 준비합니다. 사용할 OS·아키텍처에서 저장소의 `cli/` 폴더로 이동해 실행하세요.
+빌드할 때는 [uv](https://docs.astral.sh/uv/getting-started/installation/)로 `.python-version`에 지정한 Python과 잠금 파일의 의존성을 준비합니다. 사용할 OS·아키텍처에서 저장소의 `cli/` 폴더로 이동해 실행하세요.
 
 ```shell
-uv python install 3.13
+uv python install
 uv sync --locked
 uv run --locked python build_onefile.py
 ```

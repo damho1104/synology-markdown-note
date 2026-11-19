@@ -65,6 +65,7 @@ jobs:
       SYNOLOGY_NOTE_RELEASE_TAG: ${{ needs.version.outputs.tag }}
       PLATFORM: ubuntu-${{ matrix.ubuntu }}-amd64
       UBUNTU_VERSION: ${{ matrix.ubuntu }}
+      UV_PYTHON_PREFERENCE: only-managed
     steps:
       - name: Install build tools in the target Ubuntu environment
         run: |
@@ -81,7 +82,7 @@ jobs:
       - name: Test and build CLI
         working-directory: cli
         run: |
-          uv python install 3.13
+          uv python install
           uv lock --check
           uv run --locked pytest -q tests
           uv run --locked python build_onefile.py
@@ -163,6 +164,7 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64]
     env:
       SYNOLOGY_NOTE_RELEASE_TAG: ${{ needs.version.outputs.tag }}
+      UV_PYTHON_PREFERENCE: only-managed
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -170,9 +172,10 @@ jobs:
           enable-cache: true
           cache-dependency-glob: cli/uv.lock
       - name: Select managed Python for build scripts
+        working-directory: cli
         run: |
-          uv python install 3.13
-          echo "$(dirname "$(uv python find 3.13)")" >> "$GITHUB_PATH"
+          uv python install
+          echo "$(dirname "$(uv python find)")" >> "$GITHUB_PATH"
       - name: Verify arm64 runner and test Swift
         run: |
           test "$(uname -m)" = arm64
@@ -180,7 +183,6 @@ jobs:
       - name: Test and build CLI
         working-directory: cli
         run: |
-          uv python install 3.13
           uv lock --check
           uv run --locked pytest -q tests
           uv run --locked python build_onefile.py

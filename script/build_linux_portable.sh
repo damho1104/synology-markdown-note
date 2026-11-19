@@ -16,8 +16,8 @@ cd "$root/cli"
 uv lock --check
 # manylinux's bundled CPython is static; PyInstaller requires libpython.so.
 # Install the shared-library build and verify it on the glibc 2.28 host.
-uv python install 3.13
-uv sync --locked --python 3.13
+uv python install
+uv sync --locked
 uv run --locked pytest -q tests
 uv run --locked python build_onefile.py --out-dir "$build_dir/bin"
 cd "$root"

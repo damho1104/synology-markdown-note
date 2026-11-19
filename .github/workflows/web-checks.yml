@@ -14,7 +14,7 @@ jobs:
   web:
     # Publishing always uses our self-hosted runner; untrusted PR tests are isolated.
     runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || fromJSON('["self-hosted", "Linux", "X64", "docker-compose"]') }}
-    container: ubuntu:24.04
+    container: buildpack-deps:noble-curl
     outputs:
       version: ${{ steps.version.outputs.version }}
     defaults:
@@ -23,11 +23,13 @@ jobs:
     steps:
       - name: Install test tools
         run: |
+          apt_host='\1'
           if [ "${{ runner.environment }}" = self-hosted ]; then
-            find /etc/apt -maxdepth 2 -type f \( -name '*.list' -o -name '*.sources' \) \
-              -exec sed -Ei 's#http://(archive\.ubuntu\.com|security\.ubuntu\.com)/ubuntu#http://mirror.kakao.com/ubuntu#g' {} +
+            apt_host=mirror.kakao.com
           fi
-          apt-get update
+          find /etc/apt -maxdepth 2 -type f \( -name '*.list' -o -name '*.sources' \) \
+            -exec sed -Ei "s#https?://((archive|security)\.ubuntu\.com)/ubuntu#https://${apt_host}/ubuntu#g" {} +
+          apt-get update --error-on=any
           apt-get install -y --no-install-recommends ca-certificates curl git build-essential
       - uses: actions/checkout@v4
         with:

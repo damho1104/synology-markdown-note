@@ -20,7 +20,7 @@ concurrency:
 jobs:
   version:
     runs-on: [self-hosted, Linux, X64, docker-compose]
-    container: ubuntu:24.04
+    container: buildpack-deps:noble-curl
     outputs:
       tag: ${{ steps.version.outputs.tag }}
       version: ${{ steps.version.outputs.version }}
@@ -28,8 +28,8 @@ jobs:
       - name: Install version validation tools
         run: |
           find /etc/apt -maxdepth 2 -type f \( -name '*.list' -o -name '*.sources' \) \
-            -exec sed -Ei 's#http://(archive\.ubuntu\.com|security\.ubuntu\.com)/ubuntu#http://mirror.kakao.com/ubuntu#g' {} +
-          apt-get update
+            -exec sed -Ei 's#https?://(archive|security)\.ubuntu\.com/ubuntu#https://mirror.kakao.com/ubuntu#g' {} +
+          apt-get update --error-on=any
           apt-get install -y --no-install-recommends ca-certificates git python3
       - uses: actions/checkout@v4
       - name: Verify release source branch
@@ -59,7 +59,7 @@ jobs:
       matrix:
         ubuntu: ['22.04', '24.04']
     # The container selects the build's libc/userland, independently of the host.
-    container: ubuntu:${{ matrix.ubuntu }}
+    container: buildpack-deps:${{ matrix.ubuntu }}-curl
     defaults:
       run:
         shell: bash
@@ -72,8 +72,8 @@ jobs:
       - name: Install build tools in the target Ubuntu environment
         run: |
           find /etc/apt -maxdepth 2 -type f \( -name '*.list' -o -name '*.sources' \) \
-            -exec sed -Ei 's#http://(archive\.ubuntu\.com|security\.ubuntu\.com)/ubuntu#http://mirror.kakao.com/ubuntu#g' {} +
-          apt-get update
+            -exec sed -Ei 's#https?://(archive|security)\.ubuntu\.com/ubuntu#https://mirror.kakao.com/ubuntu#g' {} +
+          apt-get update --error-on=any
           apt-get install -y --no-install-recommends ca-certificates curl git build-essential binutils
           source /etc/os-release
           test "$VERSION_ID" = "$UBUNTU_VERSION"
@@ -277,7 +277,7 @@ jobs:
     if: github.event_name == 'push' && github.ref_type == 'tag'
     needs: [version, linux, linux-compatibility, macos, web-image]
     runs-on: [self-hosted, Linux, X64, docker-compose]
-    container: ubuntu:24.04
+    container: buildpack-deps:noble-curl
     permissions:
       contents: write
     env:
@@ -288,8 +288,8 @@ jobs:
       - name: Install publishing tools
         run: |
           find /etc/apt -maxdepth 2 -type f \( -name '*.list' -o -name '*.sources' \) \
-            -exec sed -Ei 's#http://(archive\.ubuntu\.com|security\.ubuntu\.com)/ubuntu#http://mirror.kakao.com/ubuntu#g' {} +
-          apt-get update
+            -exec sed -Ei 's#https?://(archive|security)\.ubuntu\.com/ubuntu#https://mirror.kakao.com/ubuntu#g' {} +
+          apt-get update --error-on=any
           apt-get install -y --no-install-recommends ca-certificates gh jq
       - uses: actions/download-artifact@v4
         with:

@@ -31,6 +31,8 @@ it('autosaves without a Save button and keeps typing enabled while a request is 
   mount(); await edit()
   expect(screen.queryByRole('button', {name: 'NAS에 저장'})).toBeNull()
   await waitFor(() => expect(writes).toHaveLength(1), {timeout: 2000})
+  expect(screen.getByText('NAS에 자동 저장 중…')).toBeTruthy()
+  expect(screen.queryByRole('button', {name: 'NAS 확인본 다시 불러오기'})).toBeNull()
   expect((screen.getByLabelText('노트 제목') as HTMLInputElement).disabled).toBe(false)
   expect((screen.getByLabelText('HTML 본문') as HTMLTextAreaElement).disabled).toBe(false)
   const event = new Event('beforeunload', {cancelable: true}); window.dispatchEvent(event); expect(event.defaultPrevented).toBe(true)
@@ -48,6 +50,7 @@ it('reports uncertain writes and preserves drafts without automatic retransmissi
   await waitFor(() => expect(writes).toHaveLength(1), {timeout: 2000})
   resolveSave(new Response(JSON.stringify({error: 'WRITE_UNCERTAIN'}), {status: 409}))
   await screen.findByText('자동 저장 중단 · 편집본 보관됨')
+  await screen.findByRole('button', {name: 'NAS 확인본 다시 불러오기'})
   expect(sessionStorage.length).toBe(1)
   fireEvent.change(screen.getByLabelText('노트 제목'), {target: {value: '더 편집'}})
   await new Promise(resolve => setTimeout(resolve, 950))
@@ -201,6 +204,8 @@ it('creates a new note once and saves edits made during creation with the return
   }))
   mount(); fireEvent.change(await screen.findByLabelText('노트 제목'), {target: {value: '새 제목'}})
   await waitFor(() => expect(create).toHaveBeenCalledOnce(), {timeout: 2000})
+  expect(screen.getByText('NAS에 자동 저장 중…')).toBeTruthy()
+  expect(screen.queryByRole('button', {name: '생성 결과 다시 조회'})).toBeNull()
   fireEvent.change(screen.getByLabelText('노트 제목'), {target: {value: '입력 계속'}})
   const created = {...note, id: 'new1', title: '새 제목', markdown: '', version: 'created-v1'}
   resolveSave(new Response(JSON.stringify(created)))
@@ -550,6 +555,31 @@ it('does not retransmit an existing note when reloaded while its write response 
   expect(writes).toHaveLength(1)
   expect(screen.getByText('자동 저장 중단 · 편집본 보관됨')).toBeTruthy()
 })
+
+it('keeps the unresolved save warning visible during a favorite request', async () => {
+  sessionStorage.setItem(draftKey, JSON.stringify({
+    key: 'note:note1', title: note.title, html: note.html, notebook_id: note.notebook_id,
+    version: note.version, review_required: true,
+  }))
+  const base = vi.mocked(fetch).getMockImplementation()!
+  let resolveFavorite!: (response: Response) => void
+  const favoriteResponse = new Promise<Response>(resolve => { resolveFavorite = resolve })
+  const favoriteRequest = vi.fn(() => favoriteResponse)
+  vi.stubGlobal('fetch', vi.fn((path: string, init?: RequestInit) =>
+    path === '/api/library/action' ? favoriteRequest() : base(path, init)))
+
+  mount()
+  const review = await screen.findByRole('button', {name: 'NAS 확인본 다시 불러오기'})
+  const favorite = screen.getByLabelText<HTMLButtonElement>('즐겨찾기', {selector: 'button'})
+  expect(favorite.disabled).toBe(false)
+  fireEvent.click(favorite)
+  await waitFor(() => expect(favoriteRequest).toHaveBeenCalledOnce())
+  expect(favorite.disabled).toBe(true)
+  expect(screen.getByRole('button', {name: 'NAS 확인본 다시 불러오기'})).toBe(review)
+  resolveFavorite(Response.json({}))
+  await waitFor(() => expect(screen.getByLabelText<HTMLButtonElement>('즐겨찾기', {selector: 'button'}).disabled).toBe(false))
+})
+
 it('keeps an acknowledged draft stopped when detail reload fails and only discards on explicit review',async()=>{
   let pending=false,acked=false,failRead=true
   const base=vi.mocked(fetch).getMockImplementation()!

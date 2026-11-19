@@ -164,6 +164,18 @@ synonote download --id NOTE_ID --output ./downloaded-report.md
 
 See the [CLI guide](cli/README.md) for detailed commands and index examples.
 
+### Build the CLI from source (optional)
+
+With `uv` installed, run these commands from the repository root on macOS or Linux.
+
+```sh
+cd cli
+uv python install 3.13
+uv run --locked python build_onefile.py
+```
+
+PyInstaller builds a standalone executable at `cli/dist/synonote`. See the [CLI build guide](cli/README.md#building-a-onefile-executable-from-source-optional) for installation steps.
+
 ## Before you start
 
 - **NAS connection:** The app and CLI use HTTPS NAS addresses. The web client also supports private-network and HTTP NAS addresses when `NAS_ALLOW_PRIVATE=true`. HTTP connections do not encrypt credentials or notes in transit. Connecting with only a QuickConnect ID or bypassing certificate verification is not supported.

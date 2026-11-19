@@ -170,7 +170,7 @@ With `uv` installed, run these commands from the repository root on macOS or Lin
 
 ```sh
 cd cli
-uv python install 3.13
+uv python install
 uv run --locked python build_onefile.py
 ```
 

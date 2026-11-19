@@ -24,6 +24,10 @@ jobs:
     steps:
       - name: Install container build tools
         run: |
+          if [ "${{ runner.environment }}" = self-hosted ]; then
+            find /etc/apt -maxdepth 2 -type f \( -name '*.list' -o -name '*.sources' \) \
+              -exec sed -Ei 's#http://(archive\.ubuntu\.com|security\.ubuntu\.com)/ubuntu#http://mirror.kakao.com/ubuntu#g' {} +
+          fi
           apt-get update
           apt-get install -y --no-install-recommends ca-certificates curl git build-essential binutils
       - uses: actions/checkout@v4

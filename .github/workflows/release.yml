@@ -27,6 +27,8 @@ jobs:
     steps:
       - name: Install version validation tools
         run: |
+          find /etc/apt -maxdepth 2 -type f \( -name '*.list' -o -name '*.sources' \) \
+            -exec sed -Ei 's#http://(archive\.ubuntu\.com|security\.ubuntu\.com)/ubuntu#http://mirror.kakao.com/ubuntu#g' {} +
           apt-get update
           apt-get install -y --no-install-recommends ca-certificates git python3
       - uses: actions/checkout@v4
@@ -69,6 +71,8 @@ jobs:
     steps:
       - name: Install build tools in the target Ubuntu environment
         run: |
+          find /etc/apt -maxdepth 2 -type f \( -name '*.list' -o -name '*.sources' \) \
+            -exec sed -Ei 's#http://(archive\.ubuntu\.com|security\.ubuntu\.com)/ubuntu#http://mirror.kakao.com/ubuntu#g' {} +
           apt-get update
           apt-get install -y --no-install-recommends ca-certificates curl git build-essential binutils
           source /etc/os-release
@@ -283,6 +287,8 @@ jobs:
     steps:
       - name: Install publishing tools
         run: |
+          find /etc/apt -maxdepth 2 -type f \( -name '*.list' -o -name '*.sources' \) \
+            -exec sed -Ei 's#http://(archive\.ubuntu\.com|security\.ubuntu\.com)/ubuntu#http://mirror.kakao.com/ubuntu#g' {} +
           apt-get update
           apt-get install -y --no-install-recommends ca-certificates gh jq
       - uses: actions/download-artifact@v4

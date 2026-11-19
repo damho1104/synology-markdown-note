@@ -63,10 +63,10 @@ install -m 755 './synonote-cli-<VERSION_TAG>-linux-glibc2.28-amd64' "$HOME/.loca
 
 ### Building a onefile executable from source (optional)
 
-For builds, use [uv](https://docs.astral.sh/uv/getting-started/installation/) to prepare Python 3.13 and the dependencies in the lockfile. On the OS and architecture you intend to use, open the repository's `cli/` folder and run:
+For builds, use [uv](https://docs.astral.sh/uv/getting-started/installation/) to install the Python version pinned in `.python-version` and the dependencies in the lockfile. On the OS and architecture you intend to use, open the repository's `cli/` folder and run:
 
 ```shell
-uv python install 3.13
+uv python install
 uv sync --locked
 uv run --locked python build_onefile.py
 ```

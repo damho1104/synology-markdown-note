@@ -35,9 +35,11 @@ jobs:
           cache-dependency-glob: cli/uv.lock
       - name: Test and build CLI
         working-directory: cli
+        env:
+          UV_PYTHON_PREFERENCE: only-managed
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          uv python install 3.13
+          uv python install
           uv lock --check
           uv run --locked pytest -q tests
           uv run --locked python build_onefile.py

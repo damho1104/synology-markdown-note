@@ -92,6 +92,10 @@ class Store:
                     owner TEXT NOT NULL, note_id TEXT NOT NULL, version TEXT NOT NULL,
                     entry BLOB NOT NULL, PRIMARY KEY(owner, note_id)
                 );
+                CREATE TABLE IF NOT EXISTS note_formats (
+                    owner TEXT NOT NULL, note_id TEXT NOT NULL, version TEXT NOT NULL,
+                    is_markdown INTEGER NOT NULL, PRIMARY KEY(owner, note_id)
+                );
                 CREATE TABLE IF NOT EXISTS config (
                     name TEXT PRIMARY KEY, value TEXT NOT NULL
                 );
@@ -439,6 +443,21 @@ class Store:
             self._release_target_if_clear(db, owner, row["target"])
             return True
 
+
+    def load_note_formats(self, owner: str, note_ids: tuple[str, ...] = ()) -> dict[str, tuple[str, bool]]:
+        query = "SELECT note_id, version, is_markdown FROM note_formats WHERE owner=?"
+        if note_ids:
+            query += " AND note_id IN (" + ",".join("?" for _ in note_ids) + ")"
+        with self.connect() as db:
+            return {row["note_id"]: (row["version"], bool(row["is_markdown"]))
+                    for row in db.execute(query, (owner, *note_ids))}
+
+    def save_note_formats(self, owner: str, formats: list[tuple[str, str, bool]]) -> None:
+        if formats:
+            with self.connect() as db:
+                db.executemany("""INSERT OR REPLACE INTO note_formats(owner, note_id, version, is_markdown)
+                               VALUES (?, ?, ?, ?)""",
+                               [(owner, note_id, version, is_markdown) for note_id, version, is_markdown in formats])
 
     def load_graph_index(self, owner: str, versions: dict[str, str]) -> list[dict]:
         result = []

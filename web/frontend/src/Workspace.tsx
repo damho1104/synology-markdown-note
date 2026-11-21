@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useEffectEvent,
   useMemo,
   useRef,
   useState,
@@ -42,6 +43,7 @@ import { AppIcon } from "./AppIcon";
 import {
   ApiFailure,
   jsonRequest,
+  readInSession,
   request,
   type Session,
   type Status,
@@ -102,7 +104,9 @@ type NoteSummary = {
   tags?: string[];
   excerpt?: string;
   favorite?: boolean;
+  is_markdown?: boolean;
 };
+type NoteFormat = Required<Pick<NoteSummary, "id" | "version" | "is_markdown">>;
 type Attachment = { id: string; name: string; ref: string | null };
 type NoteDetail = NoteSummary & {
   html_text_layout?: string;
@@ -306,6 +310,7 @@ export function Workspace({
   const [listError, setListError] = useState("");
   const [noteError, setNoteError] = useState("");
   const [detail, setDetail] = useState<NoteDetail | null>(null);
+  const [noteFormats, setNoteFormats] = useState<Map<string, NoteFormat>>(() => new Map());
   const [noteLoading, setNoteLoading] = useState(false);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [editing, setEditing] = useState(false);
@@ -956,6 +961,44 @@ export function Workspace({
       sortDirection,
     ],
   );
+  const unclassifiedNotes = useEffectEvent(() =>
+    visibleNotes.filter(note =>
+      !note.locked && note.is_markdown === undefined && noteFormats.get(note.id)?.version !== note.version,
+    ),
+  );
+  useEffect(() => {
+    if (listLoading || route.filter === "graph") return;
+    const pending = unclassifiedNotes();
+    if (!pending.length) return;
+    const controller = new AbortController();
+    const signal = controller.signal;
+    void (async () => {
+      for (let offset = 0; offset < pending.length; offset += 8) {
+        if (signal.aborted) return;
+        const pairs = pending.slice(offset, offset + 8).map(note => [note.id, note.version]);
+        const path = "/api/note-formats?" + new URLSearchParams({notes: JSON.stringify(pairs)});
+        const read = offset === 0 ? request : readInSession;
+        const {formats} = await read<{formats: NoteFormat[]}>(path, {signal});
+        if (signal.aborted || !formats.length) continue;
+        setNoteFormats(current => {
+          const next = new Map(current);
+          for (const format of formats) next.set(format.id, format);
+          return next;
+        });
+      }
+    })().catch(() => {
+      // Keep the list usable. An unconfirmed format is retried when the list is refreshed.
+    });
+    return () => controller.abort();
+  }, [listLoading, route.filter, visibleNotes]);
+
+  function noteHasMarkdown(note: NoteSummary): boolean {
+    if (note.locked) return false;
+    if (detail?.id === note.id && detail.version === note.version)
+      return typeof detail.markdown === "string";
+    const format = noteFormats.get(note.id);
+    return note.is_markdown ?? (format?.version === note.version && format.is_markdown);
+  }
   const listTitle =
     route.filter === "graph"
       ? "전체 그래프"
@@ -1109,8 +1152,9 @@ export function Workspace({
       if (!unchanged || attachments?.items.some(item => item.phase !== "committed")) draftStore(draftPrefix + key, rebased);
       setSaveFailure(null);
       setDetail(next); setDraft(rebased);
-      setNotes(notes => notes.some(note => note.id === next.id)
-        ? notes.map(note => note.id === next.id ? {...note, ...next} : note) : [...notes, next]);
+      const summary = {...next, is_markdown: typeof next.markdown === "string"};
+      setNotes(notes => notes.some(note => note.id === summary.id)
+        ? notes.map(note => note.id === summary.id ? {...note, ...summary} : note) : [...notes, summary]);
       if (isNew) {
         createdDraft.current = {note: next, draft: rebased};
         commitRoute({shelf: route.shelf, notebook: next.notebook_id, note: next.id, compose: false}, true);
@@ -1199,7 +1243,9 @@ export function Workspace({
       draftDelete(storageKey);
       draftStore(draftPrefix + next.key, next);
       createdDraft.current = {note, draft:next};
-      setNotes(notes => notes.some(row => row.id === note.id) ? notes.map(row => row.id === note.id ? {...row,...note} : row) : [...notes,note]);
+      const summary = {...note, is_markdown: typeof note.markdown === "string"};
+      setNotes(notes => notes.some(row => row.id === summary.id)
+        ? notes.map(row => row.id === summary.id ? {...row, ...summary} : row) : [...notes, summary]);
       setSaveFailure(null);
       commitRoute({shelf:route.shelf,notebook:note.notebook_id,note:note.id,compose:false}, true);
     } catch (error) { if (active()) handleError(error, setNoteError); }
@@ -1897,9 +1943,7 @@ export function Workspace({
                   <div className="note-row-title">
                     {note.favorite && <Star size={12} />}
                     <b>{note.title || "제목 없음"}</b>
-                    {(note.excerpt?.includes("```") ||
-                      (note.id === detail?.id &&
-                        detail?.markdown !== undefined)) && (
+                    {noteHasMarkdown(note) && (
                       <span className="md-badge">MD</span>
                     )}
                   </div>

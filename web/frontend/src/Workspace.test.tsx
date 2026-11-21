@@ -27,6 +27,41 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 function mount(onLogout = async () => {}, workspaceStatus: Status = status) { return render(<Workspace session={session} status={workspaceStatus} onLogout={onLogout} onSessionExpired={() => {}} />) }
 async function edit() { await screen.findByLabelText('노트 제목'); fireEvent.click(screen.getByRole('button', {name: '분할'})); fireEvent.change(screen.getByLabelText('노트 제목'), {target: {value: '수정 제목'}}) }
+
+it('shows Markdown badges before opening notes and ignores code fences in HTML note excerpts', async () => {
+  window.history.replaceState({}, '', '/?n=book1')
+  const cached = {...note, id: 'cached', title: '저장된 마크다운', is_markdown: true}
+  const unknown = {...note, id: 'unknown', title: '미확인 마크다운'}
+  const html = {...note, id: 'html', title: '원본 HTML', excerpt: '```example', is_markdown: false}
+  const locked = {...note, id: 'locked', title: '잠긴 노트', locked: true}
+  let refreshed = false
+  const fetchMock = vi.mocked(fetch)
+  const original = fetchMock.getMockImplementation()!
+  fetchMock.mockImplementation((path, init) => {
+    if (path === '/api/notes') return Promise.resolve(Response.json({notes: refreshed
+      ? [cached, {...unknown, version: 'v2'}, {...html, version: 'v2', is_markdown: undefined}, locked]
+      : [cached, unknown, html, locked]}))
+    if (String(path).startsWith('/api/note-formats?')) {
+      const pairs = JSON.parse(new URL(String(path), location.origin).searchParams.get('notes')!)
+      expect(pairs).toEqual(refreshed ? [['unknown', 'v2'], ['html', 'v2']] : [['unknown', 'v1']])
+      return Promise.resolve(Response.json({formats: refreshed
+        ? [{id: 'unknown', version: 'v2', is_markdown: false}, {id: 'html', version: 'v2', is_markdown: true}]
+        : [{id: 'unknown', version: 'v1', is_markdown: true}]}))
+    }
+    return original(path, init)
+  })
+  mount()
+  expect(await screen.findByRole('button', {name: /저장된 마크다운 MD/})).toBeTruthy()
+  expect(await screen.findByRole('button', {name: /미확인 마크다운 MD/})).toBeTruthy()
+  expect(within(screen.getByRole('button', {name: /원본 HTML/})).queryByText('MD')).toBeNull()
+  refreshed = true
+  fireEvent.click(screen.getByRole('button', {name: '새로고침'}))
+  expect(await screen.findByRole('button', {name: /원본 HTML MD/})).toBeTruthy()
+  expect(within(screen.getByRole('button', {name: /미확인 마크다운/})).queryByText('MD')).toBeNull()
+  expect(within(screen.getByRole('button', {name: /잠긴 노트/})).queryByText('MD')).toBeNull()
+  expect(fetchMock.mock.calls.some(([path]) => String(path).startsWith('/api/notes/'))).toBe(false)
+})
+
 it('autosaves without a Save button and keeps typing enabled while a request is pending', async () => {
   mount(); await edit()
   expect(screen.queryByRole('button', {name: 'NAS에 저장'})).toBeNull()

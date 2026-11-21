@@ -19,7 +19,7 @@ from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 
 from anyio import CancelScope, fail_after
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -31,6 +31,9 @@ from .nas import NasClient, NasError, NasLogin, validate_url
 from .observability import request_id
 from .settings import Settings
 from .store import Store, StoreError, token_hash
+
+
+_NOTE_FORMAT_READS = threading.BoundedSemaphore(4)
 
 
 class SetupInput(BaseModel):
@@ -497,9 +500,79 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
 
     @app.get("/api/notes")
     def notes(request: Request, response: Response):
-        return {"notes": read_nas(request, response, nas.notes)}
+        owner = nas_access(request, response)[2]
+        rows = read_nas(request, response, nas.notes)
+        cached = load_note_formats(owner)
+        for row in rows:
+            entry = cached.get(row["id"])
+            if entry and entry[0] == row.get("version") and not row.get("locked"):
+                row["is_markdown"] = entry[1]
+        return {"notes": rows}
 
-    def remember_graph_entry(detail: dict, owner: str):
+    def load_note_formats(owner: str, ids: tuple[str, ...] = ()) -> dict[str, tuple[str, bool]]:
+        try:
+            return store.load_note_formats(owner, ids)
+        except StoreError:
+            logging.getLogger(__name__).warning("note_format_cache_unavailable")
+            return {}
+
+    def save_note_formats(owner: str, formats: list[tuple[str, str, bool]]) -> None:
+        try:
+            store.save_note_formats(owner, formats)
+        except StoreError:
+            logging.getLogger(__name__).warning("note_format_cache_unavailable")
+
+    def note_format(detail: dict) -> tuple[str, str, bool] | None:
+        if detail.get("locked") or detail.get("write_in_progress") or not isinstance(detail.get("version"), str):
+            return None
+        return detail["id"], detail["version"], isinstance(detail.get("markdown"), str)
+
+    @app.get("/api/note-formats")
+    def note_formats(request: Request, response: Response, notes: str = Query(max_length=8192)):
+        owner = nas_access(request, response)[2]
+        response.headers["Cache-Control"] = "no-store"
+        try:
+            pairs = json.loads(notes)
+            if (not isinstance(pairs, list) or not 1 <= len(pairs) <= 8
+                    or any(not isinstance(pair, list) or len(pair) != 2
+                           or not all(isinstance(value, str) for value in pair) for pair in pairs)):
+                raise ValueError()
+            versions = {checked_id(note_id): version for note_id, version in pairs}
+            if len(versions) != len(pairs):
+                raise ValueError()
+        except (ValueError, RecursionError) as exc:
+            raise HTTPException(422, detail="INVALID_ID") from exc
+
+        def resolve(base, active):
+            cached = load_note_formats(owner, tuple(versions))
+            confirmed = []
+            discovered = []
+            for note_id, version in versions.items():
+                entry = cached.get(note_id)
+                if entry and entry[0] == version:
+                    confirmed.append((note_id, *entry))
+                    continue
+                try:
+                    with _NOTE_FORMAT_READS:
+                        detail = nas.fetch(base, active, note_id)
+                except NasError as exc:
+                    if exc.code == "NAS_SESSION_EXPIRED":
+                        raise
+                    continue
+                result = note_format(detail)
+                if result and result[:2] == (note_id, version):
+                    confirmed.append(result)
+                    discovered.append(result)
+            save_note_formats(owner, discovered)
+            return {"formats": [dict(id=note_id, version=version, is_markdown=is_markdown)
+                                for note_id, version, is_markdown in confirmed]}
+
+        return read_nas(request, response, resolve)
+
+    def remember_note(detail: dict, owner: str):
+        format_entry = note_format(detail)
+        if format_entry:
+            save_note_formats(owner, [format_entry])
         if not {"id", "title", "notebook_id", "version", "html", "locked", "trashed"}.issubset(detail): return
         from .graph_api import entry_from_detail
         try:
@@ -512,7 +585,7 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
         checked_id(note_id)
         owner = nas_access(request, response)[2]
         detail = read_nas(request, response, lambda base, active: nas.fetch(base, active, note_id))
-        remember_graph_entry(detail, owner)
+        remember_note(detail, owner)
         return detail
 
     def stream_file(stream, media_type: str, headers: dict) -> StreamingResponse:
@@ -778,7 +851,7 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
             store.finish_write(operation_id, uncertain=True)
             raise
         store.finish_write(operation_id, uncertain=False, result=result)
-        remember_graph_entry(result, owner)
+        remember_note(result, owner)
         return result
 
     @app.post("/api/notes")

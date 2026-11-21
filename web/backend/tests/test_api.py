@@ -10,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from synonote_web.main import create_app
-from synonote_web.nas import NasError, NasLogin
+from synonote_web.nas import NasClient, NasError, NasLogin
 from synonote_web.settings import Settings
 from synonote_web.store import token_hash
 
@@ -415,6 +415,66 @@ class NotesNas(FakeNas):
         if self.write_error:
             raise NasError(self.write_error)
         return {**self.fetch(base, login, 'created'), 'title': kwargs['title']}
+
+
+def test_note_formats_are_cached_across_restarts_until_note_version_changes(tmp_path):
+    from synonote_web.compat.source_envelope import SourceEnvelope
+
+    original_html = '<p>body</p>'
+    source = SourceEnvelope.make('', original_html).encode()
+
+    class FormatNas(NotesNas, NasClient):
+        version = 'v1'
+
+        def __init__(self):
+            NotesNas.__init__(self)
+            NasClient.__init__(self)
+
+        def notes(self, base, login):
+            return [dict(id=note_id, version=self.version, locked=note_id == 'locked')
+                    for note_id in ('md', 'html', 'locked')]
+
+        def fetch(self, base, login, note_id):
+            return NasClient.fetch(self, base, login, note_id)
+
+        def _fetch(self, client, base, login, note_id):
+            calls.append(note_id)
+            html = '<p>edited in Note Station</p>' if note_id == 'md' and self.version == 'v2' else original_html
+            return {**super().fetch(base, login, note_id), 'version': self.version,
+                    'html': html, 'attachments': [{'id': 'file1', 'name': 'legacy-name.md', 'ref': None}]}
+
+        def download(self, base, login, note_id, file_id):
+            return b'# ordinary attachment' if note_id == 'html' and self.version == 'v1' else source
+
+    calls = []
+    nas = FormatNas()
+    client = TestClient(app_at(tmp_path, nas, nas_url='https://nas.example'))
+    lookup = '/api/note-formats'
+    params = {'notes': '[["md","v1"],["html","v1"]]'}
+    assert client.get(lookup, params=params).status_code == 401
+    assert post(client, '/api/auth/login', {'username': 'alice', 'password': 'correct'}).status_code == 200
+    assert all('is_markdown' not in note for note in client.get('/api/notes').json()['notes'])
+    assert calls == []
+    result = {'formats': [{'id': 'md', 'version': 'v1', 'is_markdown': True},
+                          {'id': 'html', 'version': 'v1', 'is_markdown': False}]}
+    assert client.get(lookup, params=params).json() == result
+    assert calls == ['md', 'html']
+
+    client = TestClient(app_at(tmp_path, nas, nas_url='https://nas.example'))
+    assert post(client, '/api/auth/login', {'username': 'alice', 'password': 'correct'}).status_code == 200
+    assert [row.get('is_markdown') for row in client.get('/api/notes').json()['notes']] == [True, False, None]
+    assert client.get(lookup, params=params).json() == result
+    assert calls == ['md', 'html']
+    other = TestClient(app_at(tmp_path, nas, nas_url='https://nas.example'))
+    assert post(other, '/api/auth/login', {'username': 'bob', 'password': 'correct'}).status_code == 200
+    assert all('is_markdown' not in note for note in other.get('/api/notes').json()['notes'])
+
+    nas.version = 'v2'
+    assert all('is_markdown' not in note for note in client.get('/api/notes').json()['notes'])
+    updated = client.get(lookup, params={'notes': '[["md","v2"],["html","v2"]]'}).json()
+    assert updated == {'formats': [{'id': 'md', 'version': 'v2', 'is_markdown': False},
+                                   {'id': 'html', 'version': 'v2', 'is_markdown': True}]}
+    assert calls == ['md', 'html', 'md', 'html']
 
 
 def test_notes_require_session_and_writes_require_csrf(tmp_path):

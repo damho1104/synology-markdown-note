@@ -19,7 +19,6 @@ import {
   FileText,
   FolderOpen,
   LogOut,
-  Menu,
   Paperclip,
   RefreshCw,
   Search,
@@ -187,6 +186,21 @@ function exportHtml(note: NoteDetail, draft: Draft): string {
   return source;
 }
 
+function formattedRecoveryChanges(note: NoteDetail, draft: Draft): TextChange[] | undefined {
+  if (draft.text_changes === undefined || note.markdown !== undefined ||
+      !note.html_text_preview || !note.html_text_layout) return undefined;
+  if (!draft.text_changes.length) return [];
+  if (draft.html === note.html && draft.text_layout === note.html_text_layout) return draft.text_changes;
+  try {
+    // A partially confirmed attachment save may already have written the body.
+    // Only recover against a different layout if the whole body matches.
+    if (exportHtml(note, draft) === note.html) return [];
+  } catch {
+    // Leave the draft in review when its source offsets cannot be trusted.
+  }
+  return undefined;
+}
+
 const EDITOR_EXTENSIONS = [
   markdownLanguage(),
   syntaxHighlighting(
@@ -226,7 +240,7 @@ function writeRoute(route: Route, index: number, replace = false, location?: Loc
   const url = new URL(window.location.href);
   for (const key of ["s", "n", "note", "new", "f"])
     url.searchParams.delete(key);
-  if (route.shelf) url.searchParams.set("s", route.shelf);
+  if (route.shelf !== null) url.searchParams.set("s", route.shelf);
   if (route.notebook) url.searchParams.set("n", route.notebook);
   if (route.note) url.searchParams.set("note", route.note);
   if (route.filter) url.searchParams.set("f", route.filter);
@@ -322,6 +336,7 @@ export function Workspace({
   const [listError, setListError] = useState("");
   const [noteError, setNoteError] = useState("");
   const [detail, setDetail] = useState<NoteDetail | null>(null);
+  const [formatHistory, setFormatHistory] = useState<{id:string; version:string; undo:string[]; redo:string[]}>();
   const [noteFormats, setNoteFormats] = useState<Map<string, NoteFormat>>(() => new Map());
   const [noteLoading, setNoteLoading] = useState(false);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -344,7 +359,6 @@ export function Workspace({
   const [recoveredDetail, setRecoveredDetail] = useState<NoteDetail | null>(null);
   const [compare, setCompare] = useState<NoteDetail | null>(null);
   const [message, setMessage] = useState("");
-  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => preference<boolean>("sidebarCollapsed", false) === true);
   const [listCollapsed, setListCollapsed] = useState(() => preference<boolean>("noteListCollapsed", false) === true);
   const [sortField, setSortField] = useState<SortField>(() =>
@@ -398,6 +412,7 @@ export function Workspace({
   const [revision, setRevision] = useState(0);
   const shelfRenames = useRef(new Map<string, string>());
   const historyIndex = useRef(0);
+  const historyRoutes = useRef<Route[]>([route]);
   const historyScope = useRef(requestId());
   const historyLocation = useRef<Location>({route, search:query, graph:graphState});
   const [historyBounds, setHistoryBounds] = useState({index:0, last:0});
@@ -435,7 +450,9 @@ export function Workspace({
         (original.title !== draft.title ||
           original.html !== draft.html ||
           original.markdown !== draft.markdown ||
-          !!draft.text_changes?.length))
+           !!draft.text_changes?.length ||
+           (draft.text_changes !== undefined && !!draft.attachments?.items.some(item =>
+             item.phase !== "committed" && !item.recoveryOnly && item.phase !== "reviewed"))))
   );
   const readOnlyRecovery = !!(draft?.review_required && activeKey === draft.key && !editing);
   const reviewingUploads = !!(draft?.review_required && !saving);
@@ -496,14 +513,16 @@ export function Workspace({
   }, [changeActiveDraft]);
 
   const queue = useUploadQueue(uploads, session.csrf_token, !!(route.compose && saving), reviewingUploads, patchUpload);
-  const canAttach = !!(editing && !reviewingUploads && draft?.key === activeKey &&
-    draft.markdown !== undefined && (route.compose || (detail?.editable && !detail.locked && !detail.trashed)));
+  const canAttachFormatted = !!(editing && !reviewingUploads && !route.compose && detail?.html_text_preview &&
+    !detail.locked && !detail.trashed && draft?.key === activeKey && draft.text_changes !== undefined);
+  const canAttach = canAttachFormatted || !!(editing && !reviewingUploads && draft?.key === activeKey &&
+     draft.markdown !== undefined && (route.compose || (detail?.editable && !detail.locked && !detail.trashed)));
   const acceptFiles = useRef<(files: File[], position: number) => void>(() => {});
   acceptFiles.current = (files, position) => {
     if (!canAttach) return;
     const errors: string[] = [];
     changeActiveDraft(current => {
-      if (current.markdown === undefined) return current;
+      if (current.markdown === undefined && current.text_changes === undefined) return current;
       const target: UploadTarget = route.compose
         ? {notebook_id: current.notebook_id, client_request_id: current.client_request_id!}
         : {notebook_id: current.notebook_id, note_id: route.note!};
@@ -522,7 +541,7 @@ export function Workspace({
         const id = requestId();
         count++;
         queue.files.set(`${attachments.id}/${id}`, file);
-        items.push({id, target, name: file.name, phase: "queued", position, inserted: false});
+        items.push({id, target, name: file.name, phase: "queued", position, inserted: current.markdown === undefined});
       }
       return items.length === attachments.items.length ? current : {...current, attachments: {...attachments, items}};
     });
@@ -662,7 +681,11 @@ export function Workspace({
   function recordLocation(next: Location, replace = false) {
     if (sameLocation(historyLocation.current, next)) return;
     const index = historyIndex.current + (replace ? 0 : 1);
-    if (!replace) historyLast.current = index;
+    if (!replace) {
+      historyLast.current = index;
+      historyRoutes.current.length = index;
+    }
+    historyRoutes.current[index] = next.route;
     writeRoute(next.route, index, replace, next, historyScope.current);
     historyIndex.current = index;
     historyLocation.current = next;
@@ -686,7 +709,6 @@ export function Workspace({
     recordLocation({...historyLocation.current,route:next,search}, replace);
     setQuery(search);
     setRoute(next);
-    setSidebarOpen(false);
     setCompare(null);
   }
 
@@ -783,8 +805,10 @@ export function Workspace({
       else {
         historyIndex.current = 0;
         historyLast.current = 0;
+        historyRoutes.current = [next];
         writeRoute(next,0,true,location,historyScope.current);
       }
+      historyRoutes.current[historyIndex.current] = next;
       if (renamed) writeRoute(next, historyIndex.current, true, location, historyScope.current);
       historyLocation.current = location;
       setHistoryBounds({index:historyIndex.current,last:historyLast.current});
@@ -1030,6 +1054,34 @@ export function Workspace({
               : route.filter?.startsWith("tag:")
                 ? "#" + route.filter.slice(4)
                 : "전체 노트"));
+  const mobilePage = route.note || route.compose ? "editor" : route.filter === "graph" ? "graph"
+    : route.notebook || route.filter ? "notes" : selectedShelf !== null ? "notebooks" : "shelves";
+  const mobileTitle = mobilePage === "shelves" ? "책장"
+    : mobilePage === "editor" && !route.notebook && !route.filter ? "메모" : listTitle;
+  const mobileParentLabel = mobilePage === "editor" ? "메모 목록으로 돌아가기"
+    : mobilePage === "notes" && route.notebook ? "메모장 목록으로 돌아가기" : "책장 목록으로 돌아가기";
+  async function goToMobileParent() {
+    const parent: Route = {shelf:null, notebook:null, note:null, compose:false};
+    if (mobilePage === "editor") {
+      parent.shelf = route.shelf;
+      parent.notebook = route.notebook;
+      parent.filter = route.filter;
+      if (!parent.notebook && !parent.filter) {
+        const id = detail?.id === route.note ? detail.notebook_id : notes.find(note => note.id === route.note)?.notebook_id;
+        parent.notebook = id ?? null;
+        if (!id) parent.filter = "all";
+      }
+    } else if (mobilePage === "notes" && route.notebook) {
+      parent.shelf = selectedShelf ?? selectedNotebook?.stack ?? "";
+    }
+    const previous = historyRoutes.current[historyIndex.current - 1];
+    if (previous && previous.shelf === parent.shelf && previous.notebook === parent.notebook &&
+        previous.note === parent.note && previous.compose === parent.compose && previous.filter === parent.filter) {
+      await traverseHistory(-1);
+    } else {
+      await navigate(parent, true, "");
+    }
+  }
   function toggleStack(name: string) {
     setExpandedStacks((current) => {
       const next = current.includes(name)
@@ -1092,7 +1144,7 @@ export function Workspace({
     )
       return false;
     const isNew = route.compose;
-    const manifest = uploadManifest(draft.attachments, draft.markdown, detail?.attachment_bindings);
+    const manifest = uploadManifest(draft.attachments, draft.markdown, detail?.attachment_bindings, draft.text_changes !== undefined);
     const sentUploads = manifest.map(entry => entry.upload_id);
     let sent = draft;
     const sentKey = activeKey!;
@@ -1169,6 +1221,15 @@ export function Workspace({
       draftDelete(sentStorageKey);
       if (!unchanged || attachments?.items.some(item => item.phase !== "committed")) draftStore(draftPrefix + key, rebased);
       setSaveFailure(null);
+      if (!isNew && sent.text_changes !== undefined && detail && next.version !== detail.version) {
+        setFormatHistory(current => {
+          const previous = current?.id === detail.id && current.version === detail.version ? current : undefined;
+          if (next.html === detail.html && next.title === detail.title)
+            return previous && {...previous,version:next.version};
+          return {id:detail.id,version:next.version,redo:[],
+            undo:[...(previous?.undo ?? []),detail.version].slice(-30)};
+        });
+      }
       setDetail(next); setDraft(rebased);
       const summary = {...next, is_markdown: typeof next.markdown === "string"};
       setNotes(notes => notes.some(note => note.id === summary.id)
@@ -1317,14 +1378,15 @@ export function Workspace({
     }
   }
 
-  function editableRecovery(note: NoteDetail | null, source: Draft): note is NoteDetail {
-    return !!note && note.id === route.note && note.notebook_id === source.notebook_id &&
-      note.editable && !note.locked && !note.trashed && !writeInProgress(note) &&
-      !!note.version && note.markdown !== undefined && source.markdown !== undefined;
+  function editableRecovery(note: NoteDetail, source: Draft): boolean {
+    return note.id === route.note && note.notebook_id === source.notebook_id &&
+      !note.locked && !note.trashed && !writeInProgress(note) && !!note.version &&
+      (source.markdown !== undefined ? note.editable && note.markdown !== undefined
+        : formattedRecoveryChanges(note, source) !== undefined);
   }
 
   async function resumeReviewedNote() {
-    if (!draft?.recovery_acknowledged || !activeDraftKey || !editableRecovery(recoveredDetail, draft) ||
+    if (!draft?.recovery_acknowledged || !activeDraftKey || !recoveredDetail || !editableRecovery(recoveredDetail, draft) ||
         saving || writeInFlight.current || composingNow.current) return;
     try {
       const fresh = await request<NoteDetail>(`/api/notes/${encodeURIComponent(recoveredDetail.id)}`);
@@ -1336,10 +1398,16 @@ export function Workspace({
         setNoteError("NAS 확인본이 바뀌었습니다. 최신 내용을 검토한 뒤 다시 선택해 주세요.");
         return;
       }
-      if (!window.confirm("최신 NAS 확인본을 기준으로 보관한 편집본을 엽니다. NAS에서 확인되지 않은 첨부 링크는 이름만 남길까요?")) return;
+      const formatted = source.markdown === undefined;
+      if (!window.confirm(formatted
+        ? "NAS 확인본을 기준으로 보관한 편집본을 열까요? 이전에 선택한 첨부파일은 다시 전송하지 않습니다."
+        : "최신 NAS 확인본을 기준으로 보관한 편집본을 엽니다. NAS에서 확인되지 않은 첨부 링크는 이름만 남길까요?")) return;
       const next: Draft = {
         ...source, version:fresh.version, html:fresh.html,
-        markdown:recoveryMarkdown(source.markdown!, id => !fresh.attachment_bindings?.[id]),
+        ...(source.markdown === undefined ? {
+          text_changes:formattedRecoveryChanges(fresh, source),
+          text_layout:fresh.html_text_layout, text_blocks:fresh.html_text_blocks,
+        } : {markdown:recoveryMarkdown(source.markdown, id => !fresh.attachment_bindings?.[id])}),
         review_required:false, recovery_acknowledged:false, resume_paused:true, pending_upload_ids:undefined,
         attachments:source.attachments && {...source.attachments,
           items:source.attachments.items.map(item => ({...item, recoveryOnly:true}))},
@@ -1349,7 +1417,8 @@ export function Workspace({
       if (!draftRead(heldKey)) throw new Error("원래 초안을 이 탭에 보관할 수 없습니다.");
       draftStore(activeDraftKey, next);
       if (!draftRead(activeDraftKey)?.resume_paused) throw new Error("복구한 초안을 이 탭에 보관할 수 없습니다.");
-      setDetail(fresh); setDraft(next); setEditing(true); setViewMode("split");
+      setDetail(fresh); setDraft(next); setEditing(true);
+      if (!formatted) setViewMode("split");
       setRecoveredDetail(null); setCompare(null); setSaveFailure(null); setNoteError("");
     } catch (error) { handleError(error, setNoteError); }
   }
@@ -1462,7 +1531,7 @@ export function Workspace({
     }
   }
   async function applyNoteAction(action: {structure_edit: StructureEdit; text_layout: string}
-      | {remove_attachment_id: string} | {restore_version: string}): Promise<string | undefined> {
+      | {remove_attachment_id: string} | {restore_version: string}, historyDirection?: "undo" | "redo"): Promise<string | undefined> {
     if (!detail || !draft || dirty || saving || writeInFlight.current || hasStagedUploads ||
         draft.review_required || draft.resume_paused || composingNow.current)
       return "편집본과 진행 중인 저장을 먼저 확인하세요.";
@@ -1474,6 +1543,19 @@ export function Workspace({
         title: detail.title, notebook_id: detail.notebook_id, version: detail.version,
         ...action,
       }, {"X-CSRF-Token":session.csrf_token}, "PUT"));
+      if (next.version !== detail.version) {
+        if ("structure_edit" in action || historyDirection) {
+          setFormatHistory(current => {
+            const previous = current?.id === detail.id && current.version === detail.version
+              ? current : {undo:[],redo:[]};
+            const undo = historyDirection === "undo" ? previous.undo.slice(0,-1)
+              : [...previous.undo,detail.version].slice(-30);
+            const redo = historyDirection === "undo" ? [...previous.redo,detail.version].slice(-30)
+              : historyDirection === "redo" ? previous.redo.slice(0,-1) : [];
+            return {id:detail.id,version:next.version,undo,redo};
+          });
+        } else setFormatHistory(undefined);
+      }
       setDetail(next);
       setDraft({...draft, title:next.title, html:next.html, markdown:next.markdown, version:next.version, notebook_id:next.notebook_id,
         text_changes:next.html_text_preview ? [] : undefined,
@@ -1664,6 +1746,18 @@ export function Workspace({
         ? draft.html
         : (detail?.html ?? "");
   const previewMarkdown = (editing || readOnlyRecovery) && draft ? draft.markdown : detail?.markdown;
+  const formattedNote = !!detail?.html_text_preview && previewMarkdown === undefined;
+  const displayedMode = formattedNote ? "source" : viewMode;
+  const currentHistory = detail && formatHistory?.id === detail.id && formatHistory.version === detail.version
+    ? formatHistory : undefined;
+  const bodyAttachmentPath = useCallback((reference: string) => {
+    if (!detail) return undefined;
+    const key = reference.toLowerCase();
+    const files = detail.attachments.filter(file => file.id.toLowerCase() === key || file.ref?.toLowerCase() === key);
+    return files.length === 1
+      ? `/api/notes/${encodeURIComponent(detail.id)}/attachments/${encodeURIComponent(files[0].id)}`
+      : undefined;
+  }, [detail]);
   const renderNotebook = (book: Notebook) => (
     <button
       key={book.id}
@@ -1697,7 +1791,7 @@ export function Workspace({
       onCompositionStart={() => { composingNow.current = true; setComposing(true); }}
       onCompositionEnd={() => { composingNow.current = false; setComposing(false); }}
       style={{ "--editor-font-size": `${preferences.editorFontSize}px` } as CSSProperties}>
-      <header className="native-toolbar">
+      <header className="native-toolbar" data-mobile-page={mobilePage}>
         <div className="panel-controls" role="group" aria-label="패널 표시">
             <button className="icon-button panel-toggle panel-toggle-sidebar" aria-label={sidebarCollapsed ? "책장 패널 펼치기" : "책장 패널 접기"}
               aria-expanded={!sidebarCollapsed} aria-controls="workspace-sidebar" title={sidebarCollapsed ? "책장 패널 펼치기" : "책장 패널 접기"}
@@ -1711,13 +1805,12 @@ export function Workspace({
             </button>
         </div>
         <div className="toolbar-sidebar">
-          <button
-            className="icon-button mobile-menu"
-            aria-label="책장 메뉴"
-            onClick={() => setSidebarOpen(!sidebarOpen)}
-          >
-            <Menu size={18} />
-          </button>
+          {mobilePage !== "shelves" && <button className="icon-button mobile-parent"
+            aria-label={mobileParentLabel} title={mobileParentLabel} disabled={saving}
+            onClick={() => void goToMobileParent()}>
+            <ArrowLeft size={18} />
+          </button>}
+          <span className="mobile-page-title">{mobileTitle}</span>
           <span className="workspace-brand" title="Synology Markdown Note">
             <AppIcon size={24} />
             <b>Markdown Note</b>
@@ -1726,13 +1819,8 @@ export function Workspace({
         <div className="toolbar-list">{listTitle}</div>
         <div className="toolbar-actions">
           <div className="toolbar-group">
-            <button className="icon-button mobile-list-toggle" aria-label="노트 목록 표시 전환"
-              aria-expanded={!listCollapsed} aria-controls="workspace-note-list" title={listCollapsed ? "노트 목록 펼치기" : "노트 목록 접기"}
-              onClick={() => {setListCollapsed(!listCollapsed); savePreference("noteListCollapsed", !listCollapsed);}}>
-              {listCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
-            </button>
             <button
-              className="icon-button"
+              className="icon-button desktop-history"
               aria-label="이전 화면"
               disabled={saving || historyBounds.index === 0}
               onClick={() => void traverseHistory(-1)}
@@ -1740,7 +1828,7 @@ export function Workspace({
               <ArrowLeft size={18} />
             </button>
             <button
-              className="icon-button"
+              className="icon-button desktop-history"
               aria-label="다음 화면"
               disabled={saving || historyBounds.index >= historyBounds.last}
               onClick={() => void traverseHistory(1)}
@@ -1748,7 +1836,7 @@ export function Workspace({
               <ArrowRight size={18} />
             </button>
             <button
-              className="icon-button"
+              className="icon-button notebook-action"
               aria-label="새 노트"
               disabled={saving || !selectedNotebook}
               title={selectedNotebook ? "새 노트" : "메모장을 선택하세요"}
@@ -1764,7 +1852,7 @@ export function Workspace({
             >
               <FilePlus2 size={19} />
             </button>
-            <button className="icon-button" aria-label="Markdown 가져오기"
+            <button className="icon-button notebook-action" aria-label="Markdown 가져오기"
               title={selectedNotebook ? "Markdown 가져오기" : "메모장을 선택하세요"}
               disabled={saving || !selectedNotebook || route.compose}
               onClick={() => markdownImportInput.current?.click()}>
@@ -1789,7 +1877,7 @@ export function Workspace({
               <Search size={19} />
             </button>
           </div>
-          <div className="mode-picker" aria-label="보기 모드">
+          {!formattedNote && <div className="mode-picker" aria-label="보기 모드">
             {(["source", "split", "read"] as const).map((m, i) => (
               <button
                 key={m}
@@ -1799,10 +1887,10 @@ export function Workspace({
                 {["원문", "분할", "읽기"][i]}
               </button>
             ))}
-          </div>
+          </div>}
           <div className="toolbar-group">
             <button
-              className="icon-button"
+              className="icon-button note-info-action"
               aria-label="노트 정보"
               aria-pressed={inspector}
               onClick={() => setInspector(!inspector)}
@@ -1871,36 +1959,37 @@ export function Workspace({
           {message}
         </div>
       )}
-      <div className={`native-columns ${inspector ? "with-inspector" : ""}`}>
+      <div className={`native-columns ${inspector ? "with-inspector" : ""}`} data-mobile-page={mobilePage}>
         <aside
           id="workspace-sidebar"
-          className={`native-sidebar ${sidebarOpen ? "open" : ""}`}
+          className="native-sidebar"
+          data-mobile-unfiled={selectedShelf === "" ? "" : undefined}
           aria-label="책장 및 메모장"
         >
           <div className="sidebar-scroll">
             <button
-              className={`native-nav ${!route.filter && selectedShelf === null && !route.notebook ? "selected" : ""}`}
-              onClick={() => selectFilter()}
+              className={`native-nav mobile-shelves-only ${(!route.filter || route.filter === "all") && selectedShelf === null && !route.notebook ? "selected" : ""}`}
+              onClick={() => selectFilter(window.matchMedia?.("(max-width: 800px)").matches ? "all" : undefined)}
             >
               <FileText size={16} />
               <span>전체 노트</span>
             </button>
             <button
-              className={`native-nav ${route.filter === "favorites" ? "selected" : ""}`}
+              className={`native-nav mobile-shelves-only ${route.filter === "favorites" ? "selected" : ""}`}
               onClick={() => selectFilter("favorites")}
             >
               <Star size={16} />
               <span>즐겨찾기</span>
             </button>
             <button
-              className={`native-nav ${route.filter === "graph" ? "selected" : ""}`}
+              className={`native-nav mobile-shelves-only ${route.filter === "graph" ? "selected" : ""}`}
               onClick={() => selectFilter("graph")}
             >
               <Network size={16} />
               <span>전체 그래프</span>
             </button>
-            <div className="sidebar-section">책장 · 메모장</div>
-            <div className="sidebar-create-actions" role="group" aria-label="책장 및 노트북 추가">
+            <div className="sidebar-section mobile-shelves-only">책장 · 메모장</div>
+            <div className="sidebar-create-actions mobile-shelves-only" role="group" aria-label="책장 및 노트북 추가">
             <button
               className="sidebar-create-button"
               disabled={saving}
@@ -1934,6 +2023,7 @@ export function Workspace({
               <div
                 key={stack}
                 className="stack-group"
+                data-selected-shelf={selectedShelf === stack ? "" : undefined}
                 onContextMenu={(e) => {
                   if ((e.target as HTMLElement).closest(".notebook")) return;
                   e.preventDefault();
@@ -1976,8 +2066,8 @@ export function Workspace({
                     <span>{stack}</span>
                   </button>
                 </div>
-                {expandedStacks.includes(stack) && (
-                  <div className="stack-notebooks">
+                {(expandedStacks.includes(stack) || mobilePage === "notebooks" && selectedShelf === stack) && (
+                  <div className={`stack-notebooks ${expandedStacks.includes(stack) ? "" : "mobile-only"}`}>
                     {notebooks
                       .filter((b) => b.stack === stack)
                       .sort((a, b) =>
@@ -1988,24 +2078,29 @@ export function Workspace({
                 )}
               </div>
             ))}
-            <div className="sidebar-subheading">
-              <FolderOpen size={14} />
-              책장 밖 메모장
+            <button className="native-nav mobile-only mobile-shelves-only" onClick={() =>
+              void navigate({shelf:"",notebook:null,note:null,compose:false})}>
+              <FolderOpen size={16} />
+              <span>책장 밖 메모장</span>
+            </button>
+            <div className="unfiled-notebooks">
+              <div className="sidebar-subheading">
+                <FolderOpen size={14} />
+                책장 밖 메모장
+              </div>
+              {notebooks.filter(book => !book.stack).sort((a, b) =>
+                a.name.localeCompare(b.name, "ko", {numeric:true})).map(renderNotebook)}
             </div>
-            {notebooks
-              .filter((b) => !b.stack)
-              .sort((a, b) =>
-                a.name.localeCompare(b.name, "ko", { numeric: true }),
-              )
-              .map(renderNotebook)}
+            {mobilePage === "notebooks" && !listLoading && !notebooks.some(book => (book.stack || "") === selectedShelf) &&
+              <p className="sidebar-status mobile-only">이 책장에 메모장이 없습니다.</p>}
             {listLoading && <p className="sidebar-status">불러오는 중…</p>}
             {!!tags.length && (
               <>
-                <div className="sidebar-section">태그</div>
+                <div className="sidebar-section mobile-shelves-only">태그</div>
                 {tags.map((tag) => (
                   <button
                     key={tag}
-                    className={`native-nav ${route.filter === "tag:" + tag ? "selected" : ""}`}
+                    className={`native-nav mobile-shelves-only ${route.filter === "tag:" + tag ? "selected" : ""}`}
                     onClick={() => selectFilter("tag:" + tag)}
                   >
                     <Tag size={14} />
@@ -2015,7 +2110,7 @@ export function Workspace({
               </>
             )}
             <button
-              className={`native-nav trash-nav ${route.filter === "trash" ? "selected" : ""}`}
+              className={`native-nav trash-nav mobile-shelves-only ${route.filter === "trash" ? "selected" : ""}`}
               onClick={() => selectFilter("trash")}
             >
               <Trash2 size={16} />
@@ -2188,7 +2283,7 @@ export function Workspace({
                       <button
                         className="icon-button"
                         aria-label="노트 연결"
-                        disabled={saving || viewMode === "read"}
+                        disabled={saving || displayedMode === "read"}
                         onClick={() => setShowLinkPicker(true)}
                       >
                         <Link2 size={17} />
@@ -2359,10 +2454,13 @@ export function Workspace({
                       <pre>{recoveredDetail.markdown ?? recoveredDetail.html}</pre>
                       <pre>{draft.title}{"\n"}{reviewDraftBody}</pre>
                     </div>
-                    {draft.recovery_acknowledged && draft.markdown !== undefined && (
+                    {draft.recovery_acknowledged && (
                       editableRecovery(recoveredDetail, draft) ?
                         <button className="native-button" onClick={() => void resumeReviewedNote()}>보관한 편집본으로 계속</button> :
-                        <button className="native-button" onClick={copyReviewedNote}>보관한 본문으로 별도 노트 작성</button>
+                        draft.markdown !== undefined ?
+                          <button className="native-button" onClick={copyReviewedNote}>보관한 본문으로 별도 노트 작성</button> :
+                          draft.text_changes !== undefined && recoveredDetail.html_text_layout &&
+                          <p>NAS 본문이 바뀌어 보관한 편집 위치를 확인할 수 없습니다. 위의 두 본문을 비교해 주세요.</p>
                     )}
                     <button className="native-button" disabled={writeInProgress(recoveredDetail)} onClick={() => {
                       if (!window.confirm("보관한 편집본을 버리고 확인한 NAS 내용을 사용할까요?")) return;
@@ -2424,10 +2522,10 @@ export function Workspace({
                   <p>공식 앱에서 열어 주세요.</p>
                 </div>
               ) : (
-                <div className={`editor-panes mode-${viewMode}`}>
-                  {viewMode !== "read" && (
+                <div className={`editor-panes mode-${displayedMode}`}>
+                  {displayedMode !== "read" && (
                     <section className="source-pane">
-                      <div className="pane-label">
+                      {!formattedNote && <div className="pane-label">
                         <Code size={13} />
                         {previewMarkdown !== undefined
                           ? "MARKDOWN"
@@ -2442,17 +2540,35 @@ export function Workspace({
                               event.currentTarget.value = "";
                             }} />
                         </>}
-                      </div>
+                      </div>}
                       {detail?.html_text_preview &&
                       draft?.text_changes !== undefined ? (
+                        <>
+                        {canAttachFormatted && <input hidden ref={attachmentInput} type="file" multiple
+                          aria-label="첨부할 파일 선택" onChange={event=>{
+                            acceptFiles.current(Array.from(event.currentTarget.files ?? []),0);
+                            event.currentTarget.value="";
+                          }}/>}
                         <OriginalEditor
                           html={detail.html_text_preview}
                           token={detail.html_text_token!}
                           blocks={detail.html_text_blocks ?? []}
-                          changes={draft.text_changes}
-                          editable={editing}
+                          changes={reviewingUploads ? formattedRecoveryChanges(detail, draft) ?? [] : draft.text_changes}
+                          editable={editing && !reviewingUploads}
                           dark={dark}
                           structureDisabled={saving || dirty || composing || draft.review_required || draft.resume_paused}
+                          onAttach={canAttachFormatted ? () => attachmentInput.current?.click() : undefined}
+                          attachmentPath={bodyAttachmentPath}
+                          canUndo={!!currentHistory?.undo.length}
+                          canRedo={!!currentHistory?.redo.length}
+                          onUndo={()=>{
+                            const version = currentHistory?.undo.at(-1);
+                            if (version) void applyNoteAction({restore_version:version},"undo");
+                          }}
+                          onRedo={()=>{
+                            const version = currentHistory?.redo.at(-1);
+                            if (version) void applyNoteAction({restore_version:version},"redo");
+                          }}
                           onStructureEdit={(edit) => {
                             if (detail.html_text_layout)
                               void applyNoteAction({structure_edit:edit, text_layout:detail.html_text_layout});
@@ -2474,6 +2590,7 @@ export function Workspace({
                             });
                           }}
                         />
+                        </>
                       ) : previewMarkdown !== undefined ? (
                         <CodeMirror
                           ref={editorRef}
@@ -2517,7 +2634,7 @@ export function Workspace({
                       )}
                     </section>
                   )}
-                  {viewMode !== "source" && (
+                  {displayedMode !== "source" && (
                     <section className="preview-pane">
                       {viewMode === "split" && (
                         <div className="pane-label">

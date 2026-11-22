@@ -177,9 +177,9 @@ export function detachUploadReferences(markdown: string, detach: (id: string) =>
 }
 
 export function uploadManifest(uploads: DraftUploads | undefined, markdown: string | undefined,
-  bindings: Record<string, string> | undefined) {
+  bindings: Record<string, string> | undefined, standalone = false) {
   const references = uploadReferences(markdown);
-  return uploads?.items.flatMap(item => references.has(item.id) && !bindings?.[item.id] &&
+  return uploads?.items.flatMap(item => (standalone || references.has(item.id)) && !bindings?.[item.id] &&
     item.phase === "ready" && !item.recoveryOnly && item.metadata
     ? [{upload_id: item.id, sha256: item.metadata.sha256}]
     : []) ?? [];

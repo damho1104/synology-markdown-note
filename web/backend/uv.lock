@@ -351,7 +351,7 @@ wheels = [
 
 [[package]]
 name = "synonote-web"
-version = "1.2.26"
+version = "1.2.27"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography" },

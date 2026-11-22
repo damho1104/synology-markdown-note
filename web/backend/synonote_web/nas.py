@@ -1160,7 +1160,8 @@ class NasClient(LibraryNasOperations):
 
     def write_html_text(self, base: str, login: NasLogin, *, note_id: str, notebook_id: str,
                         title: str, version: str, changes: list[dict], text_layout: str | None = None,
-                        structure_edit: dict | None = None) -> dict:
+                        structure_edit: dict | None = None, uploads: list[dict] | None = None,
+                        operation_id: str | None = None) -> dict:
         current = self.fetch(base, login, note_id)
         if current["version"] != version:
             raise NasError("REMOTE_CHANGED")
@@ -1177,9 +1178,26 @@ class NasClient(LibraryNasOperations):
                 raise ValueError()
         except (ValueError, KeyError, TypeError) as exc:
             raise NasError("HTML_PATCH_INVALID") from exc
-        if html == current["html"] and title == current["title"]:
+        if html == current["html"] and title == current["title"] and not uploads:
             return current
         try:
+            if uploads:
+                for upload in uploads:
+                    filename = _attachment_filename(operation_id, upload["upload_id"], upload["name"], False)
+                    _, next_version = self._mutate_markdown(base, login, note_id=note_id, version=version,
+                        notebook_id=notebook_id, title=title, html=html, listable=True,
+                        streamed_upload={**upload, "filename": filename, "image": False})
+                    result = self.fetch(base, login, note_id)
+                    before = {item["id"]: item for item in current["attachments"]}
+                    added = self._new_attachment(set(before), result, filename)
+                    after = {item["id"]: item for item in result["attachments"] if item["id"] != added["id"]}
+                    if (after != before or result["version"] != next_version or result["html"] != html
+                            or result["title"] != title or result["notebook_id"] != notebook_id
+                            or result["locked"] or result["trashed"] or "markdown" in result):
+                        raise NasError("WRITE_UNCERTAIN")
+                    self._verify_upload(base, login, note_id, added["id"], upload)
+                    current, version = result, next_version
+                return current
             _, next_version = self._mutate_markdown(base, login, note_id=note_id, version=version,
                 notebook_id=notebook_id, title=title, html=html, listable=True)
             result = self.fetch(base, login, note_id)

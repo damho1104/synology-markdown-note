@@ -89,6 +89,7 @@ class WriteInput(BaseModel):
     text_changes: list[TextChange] | None = Field(default=None, max_length=10000)
     text_layout: str | None = Field(default=None, max_length=128)
     structure_edit: StructureEdit | None = None
+    remove_attachment_id: str | None = Field(default=None, max_length=256)
     client_request_id: str | None = Field(default=None, pattern=r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
     notebook_id: str = Field(min_length=1, max_length=256)
     version: str | None = Field(default=None, max_length=128)
@@ -241,7 +242,8 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
         status = (422 if code in {"INVALID_NAS_URL", "MARKDOWN_UNSUPPORTED", "HTML_PATCH_INVALID"} else 401 if code in
                   {"AUTH_FAILED", "OTP_REQUIRED", "NAS_SESSION_EXPIRED"} else
                   403 if code in {"NAS_ADDRESS_BLOCKED", "NAS_HTTP_BLOCKED", "DOCUMENT_READ_ONLY"} else
-                  409 if code in {"REMOTE_CHANGED", "WRITE_UNCERTAIN"} else
+                  409 if code in {"REMOTE_CHANGED", "WRITE_UNCERTAIN", "ATTACHMENT_IN_USE", "ATTACHMENT_PROTECTED"} else
+                  404 if code == "ATTACHMENT_NOT_FOUND" else
                   413 if code == "ATTACHMENT_TOO_LARGE" else 503)
         body = {"error": code}
         if exc.diagnostic:
@@ -795,14 +797,19 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
             raise HTTPException(422, detail="VERSION_REQUIRED")
         if body.structure_edit is not None and (not note_id or body.markdown is not None or body.text_changes):
             raise HTTPException(422, detail="HTML_PATCH_INVALID")
+        if body.remove_attachment_id is not None:
+            checked_id(body.remove_attachment_id)
+            if not note_id or body.structure_edit or body.markdown is not None or body.text_changes is not None or body.html or body.uploads:
+                raise HTTPException(422, detail="INVALID_NOTE")
         base, active, owner, csrf, _, _ = nas_access(request, response)
         csrf_guard(request, csrf)
         if note_id is None and body.client_request_id is None:
             raise HTTPException(422, detail='CLIENT_REQUEST_ID_REQUIRED')
         if body.uploads and (not body.draft_id or body.markdown is None or body.text_changes is not None):
             raise HTTPException(422, detail="INVALID_UPLOAD")
-        intent = body.model_dump(exclude={"draft_id", "uploads"} |
-                                 ({"structure_edit"} if body.structure_edit is None else set()))
+        excluded = {"draft_id", "uploads"}
+        excluded.update(field for field in ("structure_edit", "remove_attachment_id") if getattr(body, field) is None)
+        intent = body.model_dump(exclude=excluded)
         if body.uploads:
             intent.update(draft_id=body.draft_id, uploads=[item.model_dump() for item in body.uploads])
         request_hash = hashlib.sha256(json.dumps(intent, sort_keys=True, ensure_ascii=False,
@@ -842,7 +849,10 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
                 if previous is not None: return previous
             raise HTTPException(409, detail="WRITE_REVIEW_REQUIRED")
         try:
-            if body.text_changes is not None or body.structure_edit is not None:
+            if body.remove_attachment_id is not None:
+                result = nas.remove_attachment(base, active, note_id=note_id, notebook_id=body.notebook_id,
+                    version=body.version, file_id=body.remove_attachment_id, operation_id=operation_id)
+            elif body.text_changes is not None or body.structure_edit is not None:
                 if not note_id or not body.version or body.markdown is not None:
                     raise NasError("HTML_PATCH_INVALID")
                 result = nas.write_html_text(base, active, note_id=note_id, notebook_id=body.notebook_id,
@@ -861,7 +871,8 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
         except NasError as exc:
             # A rejected preflight/version conflict is safe to retry after refreshing.
             store.finish_write(operation_id, uncertain=exc.code not in
-                               {"REMOTE_CHANGED", "DOCUMENT_READ_ONLY", "NAS_SESSION_EXPIRED", "MARKDOWN_UNSUPPORTED", "HTML_PATCH_INVALID"})
+                               {"REMOTE_CHANGED", "DOCUMENT_READ_ONLY", "NAS_SESSION_EXPIRED", "MARKDOWN_UNSUPPORTED",
+                                "HTML_PATCH_INVALID", "ATTACHMENT_NOT_FOUND", "ATTACHMENT_IN_USE", "ATTACHMENT_PROTECTED"})
             raise
         except Exception:
             store.finish_write(operation_id, uncertain=True)

@@ -117,6 +117,8 @@ type NoteDetail = NoteSummary & {
   html_text_token?: string;
   html_text_blocks?: (TextChange & { start?: number; end?: number })[];
   attachment_bindings?: Record<string, string>;
+  source_file_id?: string;
+  math_attachments?: Record<string, unknown>;
   markdown?: string;
   blocks?: { id: string; html: string; label: string }[];
   html: string;
@@ -317,7 +319,7 @@ export function Workspace({
   const [noteLoading, setNoteLoading] = useState(false);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [editing, setEditing] = useState(false);
-  const [savingAction, setSavingAction] = useState<"note" | "library" | "import" | "structure" | null>(null);
+  const [savingAction, setSavingAction] = useState<"note" | "library" | "import" | "note-action" | null>(null);
   const markdownImportInput = useRef<HTMLInputElement>(null);
   const saving = savingAction !== null;
   const [composing, setComposing] = useState(false);
@@ -1450,19 +1452,20 @@ export function Workspace({
       handleError(error, setNoteError);
     }
   }
-  async function applyOriginalEdit(edit: StructureEdit) {
-    if (!detail?.html_text_layout || !draft || dirty || saving || writeInFlight.current ||
+  async function applyNoteAction(action: {structure_edit: StructureEdit; text_layout: string} | {remove_attachment_id: string}) {
+    if (!detail || !draft || dirty || saving || writeInFlight.current || hasStagedUploads ||
         draft.review_required || draft.resume_paused || composingNow.current) return;
     writeInFlight.current = true;
-    setSavingAction("structure");
+    setSavingAction("note-action");
     setNoteError("");
     try {
       const next = await request<NoteDetail>(`/api/notes/${encodeURIComponent(detail.id)}`, jsonRequest({
         title: detail.title, notebook_id: detail.notebook_id, version: detail.version,
-        text_layout: detail.html_text_layout, structure_edit: edit,
+        ...action,
       }, {"X-CSRF-Token":session.csrf_token}, "PUT"));
       setDetail(next);
-      setDraft({...draft, title:next.title, html:next.html, version:next.version, text_changes:[],
+      setDraft({...draft, title:next.title, html:next.html, markdown:next.markdown, version:next.version,
+        text_changes:next.html_text_preview ? [] : undefined,
         text_layout:next.html_text_layout, text_blocks:next.html_text_blocks});
       setNotes(current => current.map(note => note.id === next.id ? {...note, ...next} : note));
     } catch (error) {
@@ -2099,7 +2102,7 @@ export function Workspace({
           </footer>
         </section>
         <main className="native-detail" aria-label="노트 본문"
-          inert={savingAction === "import" || savingAction === "structure"}>
+          inert={savingAction === "import" || savingAction === "note-action"}>
           {route.filter === "graph" ? (
             <NoteGraph
               notebooks={notebooks}
@@ -2413,7 +2416,10 @@ export function Workspace({
                           editable={editing}
                           dark={dark}
                           structureDisabled={saving || dirty || composing || draft.review_required || draft.resume_paused}
-                          onStructureEdit={(edit) => void applyOriginalEdit(edit)}
+                          onStructureEdit={(edit) => {
+                            if (detail.html_text_layout)
+                              void applyNoteAction({structure_edit:edit, text_layout:detail.html_text_layout});
+                          }}
                           onChange={(change) => {
                             const original = detail.html_text_blocks?.find(
                               (b) => b.index === change.index,
@@ -2560,16 +2566,23 @@ export function Workspace({
             <h3>첨부파일</h3>
             <div className="inspector-card">
               {detail?.attachments.length
-                ? detail.attachments.map((file) => (
-                    <a
-                      key={file.id}
-                      href={`/api/notes/${encodeURIComponent(detail.id)}/attachments/${encodeURIComponent(file.id)}`}
-                      download={file.name}
-                    >
-                      <Paperclip size={14} />
-                      {file.name}
-                    </a>
-                  ))
+                ? detail.attachments.map((file) => {
+                    const protectedFile = file.id === detail.source_file_id ||
+                      /^synology-note-(source|math-|stage-)/i.test(file.name) ||
+                      Object.keys(detail.math_attachments ?? {}).some(uid => detail.attachment_bindings?.[uid] === file.id);
+                    return <div className="inspector-attachment" key={file.id}>
+                      <a href={`/api/notes/${encodeURIComponent(detail.id)}/attachments/${encodeURIComponent(file.id)}`}
+                        download={file.name}><Paperclip size={14} />{file.name}</a>
+                      {!protectedFile && !detail.locked && !detail.trashed && !writeInProgress(detail) &&
+                        (detail.editable || detail.html_text_preview) && <button className="icon-button"
+                          type="button" aria-label={`${file.name} 제거`} title="첨부파일 제거"
+                          disabled={saving || dirty || hasStagedUploads || draft?.review_required || draft?.resume_paused}
+                          onClick={() => {
+                            if (window.confirm(`‘${file.name}’ 파일을 NAS 노트에서 제거할까요?`))
+                              void applyNoteAction({remove_attachment_id:file.id});
+                          }}><Trash2 size={14}/></button>}
+                    </div>;
+                  })
                 : "첨부파일 없음"}
             </div>
             <h3>로컬 그래프 · 백링크</h3>

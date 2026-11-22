@@ -1,13 +1,43 @@
 """Translate local attachment URLs through verified source bindings for the NAS."""
-from html import escape
+from html import escape, unescape
 from html.parser import HTMLParser
 import re
 import uuid
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from .compat.errors import CLIError
 
 
 _ATTR = re.compile(r'''\s+([\w:-]+)(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?''')
+
+
+def references_file(source: str, identities: set[str], filename: str) -> bool:
+    decoded = unquote(unescape(source)).casefold()
+    if any(value in decoded for value in identities):
+        return True
+
+    class Names(HTMLParser):
+        found = False
+
+        def handle_starttag(self, tag, attrs):
+            for name, raw in attrs:
+                if not raw or name not in {"ref", "content_id", "href", "src", "data", "poster"}:
+                    continue
+                if name in {"ref", "content_id"} and unquote(raw) == filename:
+                    self.found = True
+                    return
+                try:
+                    query = parse_qs(urlsplit(raw).query)
+                except ValueError:
+                    continue
+                if any(filename in query.get(key, []) for key in ("ref", "content_id")):
+                    self.found = True
+                    return
+
+    parser = Names()
+    parser.feed(source)
+    parser.close()
+    return parser.found
 
 
 def bind_html(source: str, bindings: dict, files: list[dict], download_url) -> str:

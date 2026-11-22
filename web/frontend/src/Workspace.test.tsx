@@ -463,6 +463,31 @@ it('exports pending original HTML text changes without changing source markup', 
   expect(exported).toBe(html.replace('old &amp; text','new &lt; &amp; &gt;'))
   expect(writes).toHaveLength(0)
 })
+it('removes a confirmed general attachment from the inspector and protects source data', async () => {
+  const document = {...note, attachments:[{id:'file1',name:'문서.pdf',ref:null},
+    {id:'source',name:'synology-note-source.md',ref:null}], source_file_id:'source'}
+  const original = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (url === '/api/notes/note1' && init?.method === 'PUT') {
+      writes.push(JSON.parse(init.body as string))
+      return Response.json({...document,version:'v2',attachments:[document.attachments[1]]})
+    }
+    if (url === '/api/notes/note1') return Response.json(document)
+    return original(url, init)
+  })
+  mount()
+  await screen.findByLabelText('노트 제목')
+  fireEvent.click(screen.getByRole('button',{name:'노트 정보'}))
+  expect(screen.queryByRole('button',{name:'synology-note-source.md 제거'})).toBeNull()
+  const remove = screen.getByRole('button',{name:'문서.pdf 제거'})
+  vi.mocked(window.confirm).mockReturnValueOnce(false)
+  fireEvent.click(remove)
+  expect(writes).toEqual([])
+  fireEvent.click(remove)
+  await waitFor(() => expect(screen.queryByRole('link',{name:'문서.pdf'})).toBeNull())
+  expect(writes).toEqual([{version:'v1', title:note.title, notebook_id:'book1', remove_attachment_id:'file1'}])
+})
+
 it('imports selected Markdown files through the confirmed NAS create workflow', async () => {
   const requests: Record<string, unknown>[] = []
   const original = vi.mocked(fetch).getMockImplementation()!

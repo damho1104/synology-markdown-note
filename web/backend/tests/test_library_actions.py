@@ -83,6 +83,9 @@ class MockStation:
                 # Official set does not implement trash/restore. Model the live
                 # no-op so a mistaken set/recycle implementation cannot pass.
                 self.note.update({k: deepcopy(v) for k, v in params.items() if k in {"tag", "parent_id"}})
+                for entry in params.get("attachment", []):
+                    assert entry["action"] == "delete"
+                    self.note["attachment"].pop(entry["file_id"])
             self.note["ver"] = "v2"
             data = {"data": [{"object_id": "note1", "ver": "v2"}]}
         elif api == SHORTCUT:
@@ -157,6 +160,62 @@ def harness(tmp_path, monkeypatch):
         return client.post("/api/library/action", json=body,
                            headers={"Origin": "http://testserver", "X-CSRF-Token": csrf, **headers})
     return station, store, post, client
+
+
+@pytest.mark.parametrize("content,status", [
+    ("<p>본문</p>", 200),
+    ('<img ref="ref1">', 409),
+    ('<p>본문</p><a href="/download?content_id=source%2Emd">첨부</a>', 409),
+])
+def test_remove_nas_attachment_preserves_note_and_blocks_body_references(harness, content, status):
+    station, store, _, client = harness
+    station.note["content"] = content
+    login = client.post("/api/auth/login", json={"username":"alice", "password":"password-private"},
+                        headers={"Origin":"http://testserver"})
+    response = client.put("/api/notes/note1", json={"notebook_id":"book1", "version":"v1",
+        "title":"기존 제목", "remove_attachment_id":"file1"},
+        headers={"Origin":"http://testserver", "X-CSRF-Token":login.json()["csrf_token"]})
+    assert response.status_code == status, response.text
+    assert station.note["content"] == content and not store.pending_writes(OWNER)
+    if status == 200:
+        assert response.json()["attachments"] == []
+        assert station.mutations[0][2]["attachment"] == [{"action":"delete", "file_id":"file1"}]
+        assert station.mutations[0][2]["check_conflict"] is True
+    else:
+        assert response.json()["error"] == "ATTACHMENT_IN_USE"
+        assert not station.mutations
+
+
+def test_removing_unused_bound_attachment_keeps_markdown_source(monkeypatch):
+    from synonote_web.compat.source_envelope import SourceEnvelope
+
+    uid = "edcd1d23-4a35-43d9-95ef-6dae81a0eb84"
+    doc = "8027ec03-7300-4288-ab01-afd31cabc98a"
+    before = dict(id="note1", notebook_id="book1", version="v1", title="Title", html="<p>본문</p>",
+                  markdown="본문", locked=False, trashed=False, source_file_id="src",
+                  source_document_id=doc, attachment_bindings={uid:"unused"}, blocks=[], math_attachments={},
+                  attachments=[dict(id="src", ref=None, name=f"synology-note-source-{doc}.md"),
+                               dict(id="unused", ref=None, name="photo.png")])
+    remote = before.copy()
+    writes = []
+
+    def mutate(self, base, login, **kwargs):
+        writes.append(kwargs)
+        filename, data = kwargs["upload"]
+        source = SourceEnvelope.decode(data)
+        assert source.matches(before["html"])
+        assert source.attachment_bindings == {} and source.document_id.lower() == doc
+        remote.update(version="v2", attachment_bindings={}, source_file_id="new-src",
+                      attachments=[dict(id="new-src", ref=None, name=filename)])
+        return "note1", "v2"
+
+    monkeypatch.setattr(NasClient, "fetch", lambda *args: remote.copy())
+    monkeypatch.setattr(NasClient, "_mutate_markdown", mutate)
+    monkeypatch.setattr(NasClient, "download", lambda *args: writes[0]["upload"][1])
+    result = NasClient().remove_attachment(BASE, NasLogin("sid", None), note_id="note1",
+        notebook_id="book1", version="v1", file_id="unused")
+    assert writes[0]["deleting"] == ["unused", "src"]
+    assert result["markdown"] == "본문" and result["html"] == before["html"]
 
 
 @pytest.mark.parametrize("recycle_type", [bool, int])

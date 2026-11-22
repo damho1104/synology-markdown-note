@@ -971,6 +971,16 @@ input {
 .editor-menu button:hover {
   background: var(--selection);
 }
+.inspector-attachment {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+}
+.inspector-attachment > a {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .original-structure-toolbar {
   display: flex;
   flex-wrap: wrap;

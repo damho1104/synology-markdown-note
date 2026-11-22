@@ -32,7 +32,7 @@ from .compat.markdown import render as render_markdown, math_plan
 from .compat.errors import CLIError
 from .html_text import annotate, layout_identity, patch as patch_html_text
 from .html_structure import apply_structure
-from .attachment_html import bind_html
+from .attachment_html import bind_html, references_file
 from .library_nas import LibraryNasOperations
 from .observability import request_id
 
@@ -969,6 +969,73 @@ class NasClient(LibraryNasOperations):
             # Every failure after staging starts may already have changed the NAS.
             raise NasError("WRITE_UNCERTAIN", diagnostic=getattr(exc, "diagnostic", None)) from exc
 
+
+    def remove_attachment(self, base: str, login: NasLogin, *, note_id: str, notebook_id: str,
+                          version: str, file_id: str, operation_id: str | None = None) -> dict:
+        current = self.fetch(base, login, note_id)
+        if current["version"] != version:
+            raise NasError("REMOTE_CHANGED")
+        if (current["locked"] or current["trashed"] or current["notebook_id"] != notebook_id
+                or current.get("write_in_progress") or current.get("read_only_reason") == "AMBIGUOUS_SOURCE"):
+            raise NasError("DOCUMENT_READ_ONLY")
+        files = {file["id"]: file for file in current["attachments"]}
+        file = files.get(file_id)
+        if file is None:
+            raise NasError("ATTACHMENT_NOT_FOUND")
+        filename = file["name"]
+        source_id = current.get("source_file_id")
+        bindings = current.get("attachment_bindings", {})
+        math = current.get("math_attachments", {})
+        keys = {uid for uid, target in bindings.items() if target == file_id}
+        if (file_id == source_id or keys.intersection(math)
+                or filename.lower().startswith(("synology-note-source", "synology-note-math-", "synology-note-stage-"))):
+            raise NasError("ATTACHMENT_PROTECTED")
+        if filename.lower().endswith(".md") and not filename.startswith(ATTACHMENT_PREFIX):
+            try:
+                SourceEnvelope.decode(self.download(base, login, note_id, file_id))
+            except CLIError:
+                pass
+            else:
+                raise NasError("ATTACHMENT_PROTECTED")
+        identities = {value.casefold() for value in {file_id, file.get("ref"), *keys} if value}
+        blocks = current.get("blocks", [])
+        if any(references_file(source, identities, filename)
+               for source in [current["html"], current.get("markdown", ""), *(block["html"] for block in blocks)]):
+            raise NasError("ATTACHMENT_IN_USE")
+        remaining_bindings = {uid: target for uid, target in bindings.items() if target != file_id}
+        upload = None
+        deleting = [file_id]
+        if keys:
+            document_id = current["source_document_id"]
+            upload = (f"synology-note-source-{document_id}.md", SourceEnvelope.make(
+                current["markdown"], current["html"], document_id=document_id,
+                operation_id=operation_id or str(uuid.uuid4()), blocks=blocks,
+                attachment_bindings=remaining_bindings, math_attachments=math).encode())
+            deleting.append(source_id)
+        expected = {key: entry for key, entry in files.items() if key not in deleting}
+        try:
+            _, next_version = self._mutate_markdown(base, login, note_id=note_id, version=version,
+                notebook_id=notebook_id, deleting=deleting, upload=upload)
+            result = self.fetch(base, login, note_id)
+            if (result["version"] != next_version
+                    or any(result.get(key) != current.get(key) for key in
+                           ("title", "html", "markdown", "blocks", "source_document_id",
+                            "notebook_id", "locked", "trashed", "math_attachments"))
+                    or result.get("attachment_bindings", {}) != remaining_bindings
+                    or result.get("write_in_progress")):
+                raise NasError("WRITE_UNCERTAIN")
+            actual = {entry["id"]: entry for entry in result["attachments"]}
+            if upload:
+                added = self._new_attachment(set(expected), result, upload[0])
+                if (added["id"] in files or result.get("source_file_id") != added["id"]
+                        or self.download(base, login, note_id, added["id"]) != upload[1]):
+                    raise NasError("WRITE_UNCERTAIN")
+                del actual[added["id"]]
+            if actual != expected:
+                raise NasError("WRITE_UNCERTAIN")
+            return result
+        except NasError as exc:
+            raise NasError("WRITE_UNCERTAIN") from exc
 
     def write_html_text(self, base: str, login: NasLogin, *, note_id: str, notebook_id: str,
                         title: str, version: str, changes: list[dict], text_layout: str | None = None,

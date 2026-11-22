@@ -137,6 +137,16 @@ type WriteOperation = {
   status: string;
   created: number;
 };
+type ImportProgress = {filename:string; completed:number; total:number};
+type CreateReceipt = {status:string; note?:NoteDetail; operation_id?:string};
+
+function confirmedImport({filename, completed, total}: ImportProgress): string {
+  const remaining = total - completed - 1;
+  return `${filename} · ${completed + 1}/${total}개 가져옴 · ${remaining > 0
+    ? `나머지 ${remaining}개 파일을 선택해 계속할 수 있습니다.`
+    : "가져오기를 확인했습니다."}`;
+}
+
 type Draft = {
   text_changes?: TextChange[];
   text_layout?: string;
@@ -145,6 +155,7 @@ type Draft = {
   attachments?: DraftUploads;
   pending_upload_ids?: string[];
   create_sent?: {title:string;html:string;markdown?:string};
+  importProgress?: ImportProgress;
   review_required?: boolean;
   recovery_acknowledged?: boolean;
   resume_paused?: boolean;
@@ -1230,7 +1241,7 @@ export function Workspace({
   async function recoverCreate(saved: Draft, storageKey: string, active = () => true) {
     if (!saved.client_request_id) return;
     try {
-      const receipt = await request<{status:string;note?:NoteDetail;operation_id?:string}>(
+      const receipt = await request<CreateReceipt>(
         `/api/creates/${encodeURIComponent(saved.client_request_id)}`);
       if (!active() || navigating.current.activeKey !== saved.key ||
           navigating.current.draft?.client_request_id !== saved.client_request_id ||
@@ -1255,6 +1266,7 @@ export function Workspace({
         ? notes.map(row => row.id === summary.id ? {...row, ...summary} : row) : [...notes, summary]);
       setSaveFailure(null);
       commitRoute({shelf:route.shelf,notebook:note.notebook_id,note:note.id,compose:false}, true);
+      if (saved.importProgress) setMessage(confirmedImport(saved.importProgress));
     } catch (error) { if (active()) handleError(error, setNoteError); }
   }
 
@@ -1503,7 +1515,8 @@ export function Workspace({
         const math_images = await exportMath(markdown, session.csrf_token);
         const source = {title, markdown, html:BLANK_HTML};
         const sent: Draft = {...source, key, notebook_id:destination, client_request_id,
-          review_required:true, create_sent:source};
+          review_required:true, create_sent:source,
+          importProgress:{filename, completed:imported, total:files.length}};
         draftStore(storageKey, sent);
         if (draftRead(storageKey)?.client_request_id !== client_request_id) {
           throw new Error("편집본을 이 탭에 보관할 수 없어 가져오기를 중단했습니다.");
@@ -1520,10 +1533,29 @@ export function Workspace({
       if (latest) commitRoute({shelf: route.shelf, notebook: destination, note: latest.id, compose: false});
       setMessage(`Markdown 노트 ${imported}개를 가져왔습니다.`);
     } catch (error) {
-      handleError(error, message => setMessage(`${filename} · ${imported}/${files.length}개 가져옴 · ${message}`));
+      const rejected = error instanceof ApiFailure && [400, 401, 403, 413, 422].includes(error.status);
+      if (held && rejected) {
+        draftDelete(storageKey);
+        held = undefined;
+      }
       if (held) {
+        const receipt = await request<CreateReceipt>(`/api/creates/${encodeURIComponent(held.client_request_id!)}`)
+          .catch(() => null);
+        if (receipt?.status === "completed" && receipt.note) {
+          const recovered = receipt.note;
+          draftDelete(storageKey);
+          imported += 1;
+          createdDraft.current = {note:recovered, draft:{key:`note:${recovered.id}`, title:recovered.title,
+            html:recovered.html, markdown:recovered.markdown, notebook_id:recovered.notebook_id, version:recovered.version}};
+          commitRoute({shelf:route.shelf, notebook:recovered.notebook_id, note:recovered.id, compose:false});
+          setMessage(confirmedImport(held.importProgress!));
+          return;
+        }
+        setMessage(`${filename} · NAS 생성 결과를 확인하고 있습니다.`);
         commitRoute({shelf: route.shelf, notebook: destination, note: null, compose: true});
         void loadPending();
+      } else {
+        handleError(error, message => setMessage(`${filename} · ${imported}/${files.length}개 가져옴 · ${message}`));
       }
     } finally {
       if (imported) await loadLists();
@@ -1749,7 +1781,10 @@ export function Workspace({
               className="icon-button"
               aria-label="전체 검색"
               title="전체 노트 검색"
-              onClick={() => setShowGlobalSearch(true)}
+              onClick={() => {
+                setShowGlobalSearch(true);
+                void loadLists();
+              }}
             >
               <Search size={19} />
             </button>

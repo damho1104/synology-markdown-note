@@ -67,6 +67,10 @@ class NasError(Exception):
         super().__init__(code)
 
 
+class NasPreflightError(NasError):
+    """An NAS failure raised before any mutation was attempted."""
+
+
 class _AttachmentReferences(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -640,36 +644,84 @@ class NasClient(LibraryNasOperations):
 
     def restore_revision(self, base: str, login: NasLogin, *, note_id: str, notebook_id: str,
                          version: str, restore_version: str) -> dict:
-        base = validate_url(base)
-        current = self.fetch(base, login, note_id)
-        if current["version"] != version:
-            raise NasError("REMOTE_CHANGED")
-        if (current["locked"] or current["trashed"] or current["notebook_id"] != notebook_id
-                or current.get("write_in_progress")):
-            raise NasError("DOCUMENT_READ_ONLY")
-        if version == restore_version:
-            raise NasError("REVISION_NOT_FOUND")
-        with self._client() as client:
-            historical = self._historical_note(client, base, login, current, restore_version)
-            path, api_version, as_json = self._info(client, base, NOTE_VERSION, 2, 2, login)
-            latest = self._fetch(client, base, login, note_id)
-            if (latest["version"] != version or latest["locked"] or latest["trashed"]
-                    or latest["notebook_id"] != notebook_id):
+        try:
+            base = validate_url(base)
+            current = self.fetch(base, login, note_id)
+            if current["version"] != version:
                 raise NasError("REMOTE_CHANGED")
-            try:
-                self._post(client, base, path, self._fields(NOTE_VERSION, "restore", api_version, login.sid,
-                    {"object_id": note_id, "ver": restore_version}, as_json), empty=True)
-                restored = self.fetch(base, login, note_id)
-                if (restored["version"] == version or restored["locked"] or restored["trashed"]
-                        or restored.get("write_in_progress")
-                        or restored["notebook_id"] not in {notebook_id, historical["notebook_id"]}
-                        or restored["html"] != historical["html"] or restored["title"] != historical["title"]
-                        or sorted(restored["attachments"], key=lambda file: file["id"])
-                        != sorted(historical["attachments"], key=lambda file: file["id"])):
-                    raise NasError("WRITE_UNCERTAIN")
-                return restored
-            except NasError as exc:
+            if (current["locked"] or current["trashed"] or current["notebook_id"] != notebook_id
+                    or current.get("write_in_progress") or current.get("read_only_reason") == "AMBIGUOUS_SOURCE"):
+                raise NasError("DOCUMENT_READ_ONLY")
+            if version == restore_version:
+                raise NasError("REVISION_NOT_FOUND")
+            with self._client() as client:
+                historical = self._historical_note(client, base, login, current, restore_version)
+                routing = self._info(client, base, NOTE, 3, 2, login)
+            files = {entry["id"]: entry for entry in current["attachments"]}
+            sources = []
+            for entry in historical["attachments"]:
+                file_id = entry["id"]
+                if entry["name"].lower().endswith(".md") and not entry["name"].startswith(ATTACHMENT_PREFIX):
+                    try:
+                        data = self.download(base, login, note_id, file_id)
+                        envelope = SourceEnvelope.decode(data)
+                    except CLIError:
+                        pass
+                    except NasError as exc:
+                        if file_id not in files and exc.code == "NAS_API_ERROR":
+                            raise NasError("REVISION_ATTACHMENTS_UNAVAILABLE") from exc
+                        raise
+                    else:
+                        if envelope.matches(historical["html"]) and not envelope.is_staging:
+                            sources.append((entry, envelope, data))
+                            continue
+                if files.get(file_id) != entry:
+                    raise NasError("REVISION_ATTACHMENTS_UNAVAILABLE")
+            if len(sources) > 1:
+                raise NasError("REVISION_ATTACHMENTS_UNAVAILABLE")
+            source_file, envelope, data = sources[0] if sources else (None, None, None)
+            source_id = source_file["id"] if source_file else None
+            current_source_id = current.get("source_file_id")
+            deleting = [current_source_id] if current_source_id and source_id != current_source_id else []
+            expected = {key: entry for key, entry in files.items() if key not in deleting}
+            if envelope and not set(envelope.attachment_bindings.values()).issubset(expected):
+                raise NasError("REVISION_ATTACHMENTS_UNAVAILABLE")
+            if source_file and source_id in files and files[source_id] != source_file:
+                raise NasError("REVISION_ATTACHMENTS_UNAVAILABLE")
+            upload = (source_file["name"], data) if source_file and source_id not in files else None
+        except NasError as exc:
+            raise NasPreflightError(exc.code, diagnostic=exc.diagnostic) from exc
+
+        # Note.Version/restore accepts the historical version only. Applying
+        # the snapshot via Note/set lets the NAS compare the current version
+        # atomically with the write, including edits from other clients.
+        try:
+            _, next_version = self._mutate_markdown(base, login, note_id=note_id, version=version,
+                notebook_id=notebook_id, title=historical["title"], html=historical["html"],
+                deleting=deleting, upload=upload, listable=True, routing=routing)
+        except NasError as exc:
+            if exc.code != "REMOTE_CHANGED":
                 raise NasError("WRITE_UNCERTAIN") from exc
+            raise
+        try:
+            restored = self.fetch(base, login, note_id)
+            actual = {entry["id"]: entry for entry in restored["attachments"]}
+            if upload:
+                added = self._new_attachment(set(expected), restored, upload[0])
+                source_id = added["id"]
+                if (source_id in files or self.download(base, login, note_id, source_id) != data):
+                    raise NasError("WRITE_UNCERTAIN")
+                del actual[source_id]
+            if (restored["version"] != next_version or restored["version"] == version
+                    or restored["locked"] or restored["trashed"] or restored.get("write_in_progress")
+                    or restored["notebook_id"] != notebook_id or actual != expected
+                    or restored["html"] != historical["html"] or restored["title"] != historical["title"]
+                    or restored.get("source_file_id") != source_id
+                    or envelope and restored.get("markdown") != envelope.markdown):
+                raise NasError("WRITE_UNCERTAIN")
+            return restored
+        except NasError as exc:
+            raise NasError("WRITE_UNCERTAIN") from exc
 
     def iter_download(self, base: str, login: NasLogin, note_id: str, file_id: str,
                       *, max_size: int = 50_000_000) -> Iterator[bytes]:
@@ -783,7 +835,8 @@ class NasClient(LibraryNasOperations):
                          version: str | None, notebook_id: str, title: str | None = None,
                          html: str | None = None, upload: tuple[str, bytes] | None = None,
                          streamed_upload: dict | None = None,
-                         deleting: list[str] | None = None, listable: bool = False) -> tuple[str, str]:
+                         deleting: list[str] | None = None, listable: bool = False,
+                         routing: tuple[str, int, bool] | None = None) -> tuple[str, str]:
         params = {"mtime": int(time.time()), "commit_msg": {"device": "web", "listable": listable}}
         if note_id:
             params.update(object_id=note_id, ver=version, check_conflict=True)
@@ -803,7 +856,7 @@ class NasClient(LibraryNasOperations):
             params["attachment"] = entries
         method = "set" if note_id else "create"
         with self._client() as client:
-            path, api_version, as_json = self._info(client, base, NOTE, 3, 2, login)
+            path, api_version, as_json = routing or self._info(client, base, NOTE, 3, 2, login)
             fields = self._fields(NOTE, method, api_version, login.sid, params, as_json)
             if upload or streamed_upload is not None:
                 routing = {key: fields.pop(key) for key in ("api", "method", "version", "_sid")}
@@ -1120,7 +1173,7 @@ class NasClient(LibraryNasOperations):
                 raise ValueError()
             html = (apply_structure(current["html"], structure_edit) if structure_edit
                     else patch_html_text(current["html"], changes))
-            if len(html) > 2_000_000:
+            if structure_edit and len(html) > max(2_000_000, len(current["html"])):
                 raise ValueError()
         except (ValueError, KeyError, TypeError) as exc:
             raise NasError("HTML_PATCH_INVALID") from exc

@@ -28,7 +28,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.requests import ClientDisconnect
 
 from .attachment_uploads import MAX_UPLOAD_SIZE, UploadError, Uploads
-from .nas import NasClient, NasError, NasLogin, validate_url
+from .nas import NasClient, NasError, NasLogin, NasPreflightError, validate_url
 from .observability import request_id
 from .settings import Settings
 from .store import Store, StoreError, token_hash
@@ -243,7 +243,8 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
         status = (422 if code in {"INVALID_NAS_URL", "MARKDOWN_UNSUPPORTED", "HTML_PATCH_INVALID"} else 401 if code in
                   {"AUTH_FAILED", "OTP_REQUIRED", "NAS_SESSION_EXPIRED"} else
                   403 if code in {"NAS_ADDRESS_BLOCKED", "NAS_HTTP_BLOCKED", "DOCUMENT_READ_ONLY"} else
-                  409 if code in {"REMOTE_CHANGED", "WRITE_UNCERTAIN", "ATTACHMENT_IN_USE", "ATTACHMENT_PROTECTED"} else
+                  409 if code in {"REMOTE_CHANGED", "WRITE_UNCERTAIN", "ATTACHMENT_IN_USE", "ATTACHMENT_PROTECTED",
+                                  "REVISION_ATTACHMENTS_UNAVAILABLE"} else
                   404 if code in {"ATTACHMENT_NOT_FOUND", "REVISION_NOT_FOUND"} else
                   413 if code == "ATTACHMENT_TOO_LARGE" else 503)
         body = {"error": code}
@@ -885,7 +886,7 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
                                    title=body.title, html=body.html, version=body.version)
         except NasError as exc:
             # A rejected preflight/version conflict is safe to retry after refreshing.
-            store.finish_write(operation_id, uncertain=exc.code not in
+            store.finish_write(operation_id, uncertain=not isinstance(exc, NasPreflightError) and exc.code not in
                                {"REMOTE_CHANGED", "DOCUMENT_READ_ONLY", "NAS_SESSION_EXPIRED", "MARKDOWN_UNSUPPORTED",
                                 "HTML_PATCH_INVALID", "ATTACHMENT_NOT_FOUND", "ATTACHMENT_IN_USE",
                                 "ATTACHMENT_PROTECTED", "REVISION_NOT_FOUND"})

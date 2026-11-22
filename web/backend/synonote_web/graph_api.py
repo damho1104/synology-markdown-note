@@ -201,13 +201,13 @@ def register_graph_routes(app: FastAPI, *, read_nas, nas: NasClient, store=None,
         needle = _search_text(body.query)
 
         def search(base, active):
-            versions = {row["id"]: row["version"] for row in nas.notes(base, active)
-                        if not row["locked"] and not row["trashed"]}
-            entries = store.load_graph_index(owner, versions) if store and owner else []
-            indexed = [entry for entry in entries if isinstance(entry.get("body_text"), str)]
-            return {"matches": [{"id": row["id"], "version": row["version"]} for row in indexed
-                                if needle and needle in row["body_text"]],
-                    "indexed": len(indexed), "total": len(versions)}
+            rows = [row for row in nas.notes(base, active) if not row["locked"] and not row["trashed"]]
+            versions = {row["id"]: row["version"] for row in rows}
+            matches, indexed = store.search_note_bodies(owner, versions, needle) if store and owner else (set(), 0)
+            fields = ("id", "version", "title", "notebook_id", "trashed", "tags", "excerpt", "modified_at", "created_at")
+            return {"matches": [{key: row[key] for key in fields if key in row}
+                                for row in rows if row["id"] in matches],
+                    "indexed": indexed, "total": len(versions)}
 
         return read_nas(request, response, search)
 
@@ -218,8 +218,9 @@ def register_graph_routes(app: FastAPI, *, read_nas, nas: NasClient, store=None,
             owner = owner_for_request(request, response) if owner_for_request else None
             def summaries(base, active):
                 rows = [row for row in nas.notes(base, active) if not row['locked'] and not row['trashed']]
-                entries = store.load_graph_index(owner, {row['id']: row['version'] for row in rows}) if store and owner else []
-                indexed = {entry['id'] for entry in entries if isinstance(entry.get('body_text'), str)}
+                versions = {row['id']: row['version'] for row in rows}
+                entries = store.load_graph_index(owner, versions) if store and owner else []
+                indexed = store.indexed_body_ids(owner, versions) & {entry['id'] for entry in entries} if store and owner else set()
                 return dict(nodes=[{key: row[key] for key in ('id', 'title', 'notebook_id', 'version', 'tags')} for row in rows],
                             edges=[], failures=[], entries=[_graph_entry(entry) for entry in entries],
                             pending=[row['id'] for row in rows if row['id'] not in indexed])

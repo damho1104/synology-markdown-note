@@ -122,10 +122,10 @@ export function OriginalEditor({
     return () => container.removeEventListener("input", input);
   }, [html, token, editable]);
   function selectCell(node: Element | null) {
-    const table = node?.closest<HTMLElement>("[data-table-index]");
-    const target = node?.closest<HTMLElement>("[data-table-row]");
+    const table = node?.closest<HTMLElement>("table");
+    const target = node?.closest<HTMLElement>("td[data-table-row], th[data-table-row]");
     setCell(table?.dataset.structureToken === token && target?.dataset.structureToken === token &&
-      root.current?.contains(target) ? {token, index:Number(table.dataset.tableIndex),
+      target.closest("table") === table && root.current?.contains(target) ? {token, index:Number(table.dataset.tableIndex),
         row:Number(target.dataset.tableRow), column:Number(target.dataset.tableColumn)} : null);
   }
   useLayoutEffect(() => {

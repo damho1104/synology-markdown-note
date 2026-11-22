@@ -14,6 +14,7 @@ class _Element:
     opened: int
     end: int | None = None
     children: list["_Element"] = field(default_factory=list)
+    columns: list["_Element"] = field(default_factory=list)
     simple: bool = True
 
 
@@ -24,6 +25,7 @@ class _Tables(HTMLParser):
         self.lines = [0] + [i + 1 for i, char in enumerate(source) if char == "\n"]
         self.tables: list[_Element] = []
         self.stack: list[_Element] = []
+        self.column_group: _Element | None = None
         self.body_end: int | None = None
 
     def position(self):
@@ -31,11 +33,26 @@ class _Tables(HTMLParser):
         return self.lines[line - 1] + column
 
     def handle_starttag(self, tag, attrs):
+        parent = self.stack[-1] if self.stack else None
+        if tag in {"colgroup", "col"} and parent and parent.tag == "table":
+            start = self.position()
+            item = _Element(tag, start, start + len(self.get_starttag_text()),
+                            simple=all(name != "span" or value == "1" for name, value in attrs))
+            if tag == "colgroup":
+                parent.columns.append(item)
+                self.column_group = item
+            else:
+                item.end = item.opened
+                if self.column_group:
+                    self.column_group.children.append(item)
+                else:
+                    parent.columns.append(item)
+            return
         if tag not in {"table", "tr", "td", "th"}:
             return
         start = self.position()
         item = _Element(tag, start, start + len(self.get_starttag_text()))
-        parent = self.stack[-1] if self.stack else None
+        self.column_group = None
         if tag == "table":
             if parent:
                 item.simple = False
@@ -53,11 +70,16 @@ class _Tables(HTMLParser):
     def handle_endtag(self, tag):
         if tag == "body":
             self.body_end = self.position()
+        if tag == "colgroup" and self.column_group:
+            self.column_group.end = self.source.index(">", self.position()) + 1
+            self.column_group = None
         if self.stack and self.stack[-1].tag == tag:
             item = self.stack.pop()
             item.end = self.source.index(">", self.position()) + 1
 
     def handle_startendtag(self, tag, attrs):
+        if tag == "col":
+            self.handle_starttag(tag, attrs)
         if tag in {"table", "tr", "td", "th"} and self.stack:
             self.stack[0].simple = False
 
@@ -82,15 +104,36 @@ def table_markers(source: str, token: str) -> list[tuple[int, str]]:
     for index, table in enumerate(_tables(source).tables):
         if not _valid_grid(table):
             continue
-        markers.append((table.opened - 1, f' data-structure-token="{token}" data-table-index="{index}"'))
+        # HTML keeps the first value of a duplicated attribute. Only the
+        # preview receives these attributes, before any original attributes.
+        markers.append((table.start + len("<table"), f' data-structure-token="{token}" data-table-index="{index}"'))
         for row, cells in enumerate(table.children):
             for column, cell in enumerate(cells.children):
-                markers.append((cell.opened - 1, f' data-structure-token="{token}" data-table-row="{row}" data-table-column="{column}"'))
+                markers.append((cell.start + 1 + len(cell.tag), f' data-structure-token="{token}" data-table-row="{row}" data-table-column="{column}"'))
     return markers
 
 
 def _cells(row: _Element) -> str:
     return "".join(f"<{cell.tag}></{cell.tag}>" for cell in row.children)
+
+
+def _column_definition_edit(table: _Element, column: int, kind: str) -> list[tuple[int, int, str]]:
+    definitions = [(group, definition) for group in table.columns
+                   for definition in group.children or [group]]
+    if any(not group.simple or not definition.simple or group.end is None or definition.end is None
+           for group, definition in definitions):
+        raise ValueError("Unsupported column definitions")
+    if len(definitions) > len(table.children[0].children):
+        raise ValueError("Column definitions differ from table grid")
+    if column >= len(definitions):
+        return []
+    group, definition = definitions[column]
+    if kind == "delete_column":
+        target = group if len(group.children) == 1 else definition
+        return [(target.start, target.end, "")]
+    position = definition.start if kind == "column_before" else definition.end
+    markup = "<colgroup></colgroup>" if definition.tag == "colgroup" else "<col>"
+    return [(position, position, markup)]
 
 
 def replace_ranges(source: str, ranges: list[tuple[int, int, str]]) -> str:
@@ -154,9 +197,10 @@ def apply_structure(source: str, edit: dict) -> str:
         return replace_ranges(source, [(selected.start, selected.end, "")])
     cells = [entry.children[column] for entry in rows]
     if kind == "delete_column" and len(selected.children) > 1:
-        return replace_ranges(source, [(cell.start, cell.end, "") for cell in cells])
+        ranges = _column_definition_edit(table, column, kind)
+        return replace_ranges(source, ranges + [(cell.start, cell.end, "") for cell in cells])
     if kind in {"column_before", "column_after"}:
-        ranges = []
+        ranges = _column_definition_edit(table, column, kind)
         for cell in cells:
             position = cell.start if kind == "column_before" else cell.end
             ranges.append((position, position, f"<{cell.tag}></{cell.tag}>"))

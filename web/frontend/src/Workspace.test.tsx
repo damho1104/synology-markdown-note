@@ -392,6 +392,7 @@ it('opens real global search from folded panels and graph without fetching note 
   mount();await screen.findByLabelText('노트 제목')
   fireEvent.click(screen.getByRole('button',{name:'노트 목록 접기'}))
   const opener=screen.getByRole('button',{name:'전체 검색'})
+  const initialLists = fetcher.mock.calls.filter(([url]) => url === '/api/notes').length
   opener.focus();fireEvent.click(opener)
   const dialog=screen.getByRole('dialog',{name:'전체 노트 검색'})
   const input=within(dialog).getByRole('searchbox',{name:'전체 노트 검색어'})
@@ -400,6 +401,8 @@ it('opens real global search from folded panels and graph without fetching note 
   fireEvent.change(input,{target:{value:'일정'}})
   expect(within(dialog).getByRole('button',{name:/다른 메모장 문서/})).toBeTruthy()
   expect(fetcher.mock.calls.length).toBe(before)
+  await waitFor(() => expect(fetcher.mock.calls.filter(([url]) => url === '/api/notes').length)
+    .toBeGreaterThan(initialLists))
   fireEvent.click(within(dialog).getByRole('button',{name:/다른 메모장 문서/}))
   await waitFor(()=>expect((screen.getByLabelText('노트 제목') as HTMLInputElement).value).toBe(other.title))
   expect(screen.queryByRole('dialog')).toBeNull()
@@ -562,6 +565,45 @@ it('stops a Markdown import batch after an uncertain request and keeps its draft
   await screen.findByText('새 노트 저장 결과 확인 필요')
   expect((screen.getByLabelText('노트 제목') as HTMLInputElement).value).toBe('내 초안')
   expect(requests).toHaveLength(1)
+})
+
+it('does not open recovery for a rejected Markdown import', async () => {
+  const original = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (url === '/api/notes' && init?.method === 'POST')
+      return Response.json({error:'MARKDOWN_UNSUPPORTED'}, {status:422})
+    return original(url, init)
+  })
+  mount()
+  await screen.findByLabelText('노트 제목')
+  fireEvent.change(screen.getByLabelText('가져올 Markdown 파일 선택'), {target:{files:[
+    new File(['거절된 본문'], '검증.md'),
+  ]}})
+  await screen.findByText(/검증.md · 0\/1개 가져옴/)
+  expect(screen.queryByText('새 노트 저장 결과 확인 필요')).toBeNull()
+  expect(window.location.search).toContain('note=note1')
+})
+
+it('reports successful import when the NAS create receipt proves the response was lost', async () => {
+  let writes = 0
+  const original = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (url === '/api/notes' && init?.method === 'POST') {
+      writes++
+      return Response.json({error:'WRITE_UNCERTAIN'}, {status:409})
+    }
+    if (String(url).startsWith('/api/creates/')) return Response.json({status:'completed',
+      note:{...note,id:'created-import',title:'복구한 파일',markdown:'되찾은 본문'}})
+    return original(url, init)
+  })
+  mount()
+  await screen.findByLabelText('노트 제목')
+  fireEvent.change(screen.getByLabelText('가져올 Markdown 파일 선택'), {target:{files:[
+    new File(['되찾은 본문'], '복구한 파일.md'), new File(['보류한 본문'], '다음 파일.md'),
+  ]}})
+  await screen.findByText('복구한 파일.md · 1/2개 가져옴 · 나머지 1개 파일을 선택해 계속할 수 있습니다.')
+  expect(window.location.search).toContain('note=created-import')
+  expect(writes).toBe(1)
 })
 
 it('confirms notebook deletion, then clears the removed notebook and note', async () => {

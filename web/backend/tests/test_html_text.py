@@ -140,6 +140,55 @@ def test_format_and_table_operations_patch_only_their_source_ranges():
         apply_structure(source, {"kind":"bold","index":block,"start":1,"end":2})
 
 
+def test_preview_table_coordinates_take_precedence_over_original_attributes():
+    from html.parser import HTMLParser
+
+    class Markers(HTMLParser):
+        table = None
+        cell = None
+
+        def handle_starttag(self, tag, attrs):
+            if tag == "table":
+                self.table = dict(reversed(attrs))
+            if tag == "td":
+                self.cell = dict(reversed(attrs))
+
+    source = '<table data-table-index="42" data-structure-token="original"><tr><td data-table-row="7" data-table-column="9">A</td></tr></table>'
+    preview = annotate(source)
+    parser = Markers()
+    parser.feed(preview["html_text_preview"])
+    assert parser.table["data-structure-token"] == preview["html_text_token"]
+    assert parser.table["data-table-index"] == "0"
+    assert parser.cell["data-table-row"] == parser.cell["data-table-column"] == "0"
+
+
+def test_deleting_a_column_removes_its_width_and_keeps_other_definitions():
+    from synonote_web.html_structure import apply_structure
+
+    source = ('<table><colgroup class="sizes"><col style="width:30px"><col style="width:90px"></colgroup>'
+              '<tr><td>A</td><td>B</td></tr></table>')
+    assert apply_structure(source, dict(kind="delete_column", index=0, row=0, column=0)) == source.replace(
+        '<col style="width:30px">', '').replace('<td>A</td>', '')
+
+
+def test_large_existing_html_note_still_accepts_title_only_edit(monkeypatch):
+    from synonote_web.nas import NasClient, NasLogin
+
+    html = "<p>" + "x" * 2_000_000 + "</p>"
+    remote = dict(id="n1", notebook_id="b1", version="v1", title="old",
+                  html=html, html_text_preview="preview", attachments=[], locked=False, trashed=False)
+    monkeypatch.setattr(NasClient, "fetch", lambda *args: remote.copy())
+
+    def mutate(self, base, login, **kwargs):
+        remote.update(title=kwargs["title"], version="v2")
+        return "n1", "v2"
+
+    monkeypatch.setattr(NasClient, "_mutate_markdown", mutate)
+    result = NasClient().write_html_text("https://nas.example", NasLogin("sid", None), note_id="n1",
+        notebook_id="b1", title="new", version="v1", changes=[], text_layout=annotate(html)["html_text_layout"])
+    assert result["title"] == "new" and result["html"] == html
+
+
 def test_html_patch_endpoint_acks_stable_slots_and_checks_layout_migration(tmp_path):
     from fastapi.testclient import TestClient
     from synonote_web.nas import NasClient,NasLogin

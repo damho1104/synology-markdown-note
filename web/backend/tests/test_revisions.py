@@ -16,6 +16,8 @@ def test_revision_preview_and_restore_verify_the_nas_version(tmp_path, monkeypat
     current = dict(old, title="현재 제목", content="<p>현재 본문</p>", ver="latest")
     mutations = []
     lost = False
+    fail_history = False
+    race = False
 
     def handler(request):
         fields = {k: v[0] for k, v in parse_qs(request.content.decode()).items()}
@@ -27,17 +29,24 @@ def test_revision_preview_and_restore_verify_the_nas_version(tmp_path, monkeypat
             assert json.loads(fields["object_id"]) == "note1"
             payload = old if json.loads(fields.get("ver", "null")) == "old" else current
         elif api == api_version and method == "list":
+            if fail_history:
+                raise httpx.ReadError("temporarily unavailable before any write")
             assert json.loads(fields["object_id"]) == "note1"
             assert json.loads(fields["filter"]) == {"listable": True}
             payload = {"offset": 0, "total": 1, "versions": [{"version":"old", "mtime":1700000000}]}
         else:
-            assert api == api_version and method == "restore" and fields["version"] == "2"
-            assert json.loads(fields["ver"]) == "old"
+            assert api == NOTE and method == "set"
+            assert json.loads(fields["check_conflict"]) is True
+            if race:
+                current.update(content="<p>other client</p>", ver="other-client")
+            if json.loads(fields["ver"]) != current["ver"]:
+                return httpx.Response(200, json={"success":False, "error":{"code":1064}})
             mutations.append(method)
-            current.update(old, ver=f"restored-{len(mutations)}")
+            current.update(content=json.loads(fields["content"]), title=json.loads(fields["title"]),
+                           ver=f"restored-{len(mutations)}")
             if lost:
                 raise httpx.ReadError("lost restoration receipt")
-            payload = {}
+            payload = {"data":[{"object_id":"note1","ver":current["ver"]}]}
         return httpx.Response(200, json={"success":True, "data":payload})
 
     monkeypatch.setattr(NasClient, "_client", lambda self: httpx.Client(transport=httpx.MockTransport(handler)))
@@ -56,12 +65,27 @@ def test_revision_preview_and_restore_verify_the_nas_version(tmp_path, monkeypat
         assert client.put(path, json=command, headers=headers).json()["error"] == "REMOTE_CHANGED"
         assert mutations == []
         command["version"] = "latest"
+        fail_history = True
+        assert client.put(path, json=command, headers=headers).json()["error"] == "NAS_UNAVAILABLE"
+        assert client.get("/api/writes").json()["operations"] == []
+        fail_history = False
+        race = True
+        assert client.put(path, json=command, headers=headers).json()["error"] == "REMOTE_CHANGED"
+        assert current["content"] == "<p>other client</p>" and not mutations
+        assert client.get("/api/writes").json()["operations"] == []
+        race = False
+        command["version"] = "other-client"
+        old["attachment"] = {"missing": {"name":"missing.pdf"}}
+        refused = client.put(path, json=command, headers=headers)
+        assert refused.json()["error"] == "REVISION_ATTACHMENTS_UNAVAILABLE"
+        assert client.get("/api/writes").json()["operations"] == [] and not mutations
+        old["attachment"] = {}
         restored = client.put(path, json=command, headers=headers)
         assert restored.status_code == 200 and restored.json()["version"] == "restored-1"
         assert restored.json()["html"] == old["content"]
-        assert mutations == ["restore"]
+        assert mutations == ["set"]
         lost = True
         command["version"] = "restored-1"
         assert client.put(path, json=command, headers=headers).json()["error"] == "WRITE_UNCERTAIN"
         assert client.put(path, json=command, headers=headers).json()["detail"] == "WRITE_REVIEW_REQUIRED"
-        assert mutations == ["restore", "restore"]
+        assert mutations == ["set", "set"]

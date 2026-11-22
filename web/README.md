@@ -69,7 +69,7 @@ Use the trash icon next to an attachment in the note information panel to remove
 
 In an existing HTML note, select a run of text to apply bold, italic, underline, or strikethrough. Insert a table at the end of the note or select a cell in a regular table to add or remove rows and columns. Changes preserve the original HTML outside the edited range.
 
-Open **Revision history** in the note information panel to preview and restore versions listed by the NAS. Completed web saves publish a listable version. A restore applies the selected NAS version to the current note and verifies the title, body, and attachments.
+Open **Revision history** in the note information panel to preview and restore versions listed by the NAS. Completed web saves publish a listable version. Restore applies the selected title and body as a new save using the current NAS version for conflict checks. Existing user attachments are kept. The app checks that the older revision's required files are available before saving.
 
 The following limitations apply to avoid data loss when handling unsupported changes:
 

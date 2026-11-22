@@ -166,6 +166,7 @@ def harness(tmp_path, monkeypatch):
     ("<p>본문</p>", 200),
     ('<img ref="ref1">', 409),
     ('<p>본문</p><a href="/download?content_id=source%2Emd">첨부</a>', 409),
+    ('<a href="/download?file_id=%22source%2Emd%22">첨부</a>', 409),
 ])
 def test_remove_nas_attachment_preserves_note_and_blocks_body_references(harness, content, status):
     station, store, _, client = harness

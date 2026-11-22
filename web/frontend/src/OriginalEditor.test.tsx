@@ -67,7 +67,7 @@ it.each(["first<div>last</div>", "first<br>last"])(
 
 it("sends a formatting range and table coordinates for the original HTML", () => {
   const edit = vi.fn();
-  render(<OriginalEditor html={'<table data-structure-token="token" data-table-index="1"><tr><td data-structure-token="token" data-table-row="0" data-table-column="0"><span data-edit-token="token" data-text-index="3">A &amp; B</span></td></tr></table>'}
+  render(<OriginalEditor html={'<table data-structure-token="token" data-table-index="1"><tr><td data-table-index="99" data-structure-token="token" data-table-row="0" data-table-column="0"><span data-edit-token="token" data-text-index="3">A &amp; B</span></td></tr></table>'}
     token="token" blocks={[{index:3,text:"A & B"}]} changes={[]} editable dark={false}
     onChange={vi.fn()} onStructureEdit={edit} />);
   const span = screen.getByRole("textbox").querySelector("span")!;

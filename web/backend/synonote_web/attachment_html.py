@@ -1,6 +1,7 @@
 """Translate local attachment URLs through verified source bindings for the NAS."""
 from html import escape, unescape
 from html.parser import HTMLParser
+import json
 import re
 import uuid
 from urllib.parse import parse_qs, unquote, urlsplit
@@ -30,9 +31,19 @@ def references_file(source: str, identities: set[str], filename: str) -> bool:
                     query = parse_qs(urlsplit(raw).query)
                 except ValueError:
                     continue
-                if any(filename in query.get(key, []) for key in ("ref", "content_id")):
-                    self.found = True
-                    return
+                for key in ("file_id", "ref", "content_id"):
+                    for candidate in query.get(key, []):
+                        if candidate == filename:
+                            self.found = True
+                            return
+                        if candidate.startswith('"'):
+                            try:
+                                candidate = json.loads(candidate)
+                            except ValueError:
+                                continue
+                        if candidate == filename:
+                            self.found = True
+                            return
 
     parser = Names()
     parser.feed(source)

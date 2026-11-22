@@ -4,7 +4,7 @@ import { sortNotes, type DatedNote } from './library'
 import { useIndexedNoteCount } from './GraphIndex'
 
 type SearchNote = DatedNote & {notebook_id:string; trashed:boolean; excerpt?:string; tags?:string[]; version?:string}
-export type BodySearchResult = {matches: {id:string;version:string}[]; indexed:number; total:number}
+export type BodySearchResult = {matches: SearchNote[]; indexed:number; total:number}
 export function GlobalSearchDialog({notes, notebooks, loading, searchBody, onSelect, onClose}: {
   notes:SearchNote[]; notebooks:{id:string;name:string}[]; loading:boolean
   searchBody?:(query:string, signal:AbortSignal)=>Promise<BodySearchResult>
@@ -39,11 +39,11 @@ export function GlobalSearchDialog({notes, notebooks, loading, searchBody, onSel
   const books=useMemo(()=>new Map(notebooks.map(book=>[book.id,book.name])),[notebooks])
   const rows=useMemo(()=>{
     const needle=term.toLocaleLowerCase()
-    const versions = new Map(result?.matches.map(match => [match.id, match.version]))
-    return sortNotes(notes.filter(note=>!note.trashed && (
-      `${note.title} ${note.excerpt ?? ''} ${(note.tags ?? []).join(' ')}`.toLocaleLowerCase().includes(needle)
-      || (versions.has(note.id) && versions.get(note.id) === note.version)
-    )),'modifiedAt','descending')
+    const matching = new Map(notes.filter(note=>!note.trashed &&
+      `${note.title} ${note.excerpt ?? ''} ${(note.tags ?? []).join(' ')}`.toLocaleLowerCase().includes(needle))
+      .map(note => [note.id, note]))
+    for (const note of result?.matches ?? []) matching.set(note.id, note)
+    return sortNotes([...matching.values()], 'modifiedAt', 'descending')
   },[notes,term,result])
   useLayoutEffect(()=>{
     const dialog=dialogRef.current!

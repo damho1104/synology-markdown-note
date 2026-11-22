@@ -18,6 +18,20 @@ it('searches metadata across notebooks and excludes trash while rendering titles
   expect(within(dialog).getByRole('button',{name:/첫 노트/})).toBeTruthy()
   expect(within(dialog).queryByRole('button',{name:/<script>/})).toBeNull()
 })
+it('includes matches from the current note body version alongside metadata', async () => {
+  const searchBody = vi.fn(async () => ({
+    matches: [{id:'2', version:'v2'}, {id:'4', version:'old'}],
+    indexed: 2, total: 3,
+  }))
+  render(<GlobalSearchDialog notes={[{...notes[0],version:'v1'}, {...notes[1],version:'v2'},
+    {...notes[2],id:'4',title:'다른 노트',version:'v3',trashed:false,tags:[]}]} notebooks={[]} loading={false}
+    onSelect={vi.fn()} onClose={vi.fn()} searchBody={searchBody}/>)
+  fireEvent.change(screen.getByRole('searchbox'), {target:{value:'업무'}})
+  expect(await screen.findByRole('button',{name:/<script>제목/})).toBeTruthy()
+  expect(screen.getByRole('button',{name:/첫 노트/})).toBeTruthy()
+  expect(screen.queryByRole('button',{name:/다른 노트/})).toBeNull()
+  expect(screen.getByRole('status').textContent).toContain('2/3')
+})
 it('keeps the dialog open on a blocked save and traps keyboard focus',async()=>{
   const select=vi.fn(async()=>false),close=vi.fn()
   render(<GlobalSearchDialog notes={notes} notebooks={[]} loading={false} onSelect={select} onClose={close}/>)

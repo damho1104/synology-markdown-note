@@ -49,7 +49,7 @@ import {
   type Status,
 } from "./api";
 import { requestId } from "./ids";
-import { GlobalSearchDialog } from "./GlobalSearchDialog";
+import { GlobalSearchDialog, type BodySearchResult } from "./GlobalSearchDialog";
 import { HttpNasWarning } from "./HttpNasWarning";
 import { NoteGraph } from "./NoteGraph";
 import { GraphIndexProvider, GraphIndexStatus } from "./GraphIndex";
@@ -684,6 +684,10 @@ export function Workspace({
     },
     [onSessionExpired],
   );
+  const searchNoteBody = useCallback((query: string, signal: AbortSignal) =>
+    request<BodySearchResult>("/api/search/body", {
+      ...jsonRequest({query}, {"X-CSRF-Token": session.csrf_token}), signal,
+    }), [session.csrf_token]);
 
   const loadLists = useCallback(async () => {
     setListLoading(true);
@@ -2598,7 +2602,7 @@ export function Workspace({
           }}
         />
       )}
-      {showGlobalSearch && <GlobalSearchDialog notes={notes} notebooks={notebooks} loading={listLoading}
+      {showGlobalSearch && <GlobalSearchDialog notes={notes} notebooks={notebooks} loading={listLoading} searchBody={searchNoteBody}
         onSelect={(id)=>navigate({shelf:null,notebook:null,note:id,compose:false},false,'')}
         onClose={()=>setShowGlobalSearch(false)} />}
       {showSettings && <SettingsDialog preferences={preferences} onChange={setPreferences} onClose={() => setShowSettings(false)} />}

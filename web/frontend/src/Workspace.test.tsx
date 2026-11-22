@@ -18,6 +18,7 @@ beforeEach(() => {
   sessionStorage.clear(); window.history.replaceState({}, '', '/?n=book1&note=note1'); writes = []
   vi.stubGlobal('fetch', vi.fn(async (path: string, init?: RequestInit) => {
     if (init?.method === 'PUT') { writes.push(JSON.parse(init.body as string)); return new Promise<Response>(resolve => {resolveSave = resolve}) }
+    if (path === '/api/search/body') return Response.json({matches:[], indexed:1, total:1})
     if (path === '/api/graph?summary=true') return new Response(JSON.stringify({nodes:[note],edges:[],failures:[],entries:[{id:note.id,links:[]}],pending:[]}))
     const body = path === '/api/notebooks' ? {notebooks: [{id: 'book1', name: '업무', stack: '프로젝트'}]} : path === '/api/notes' ? {notes: [note]} : path === '/api/writes' ? {operations: []} : note
     return new Response(JSON.stringify(body), {status: 200})

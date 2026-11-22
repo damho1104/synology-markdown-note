@@ -984,8 +984,35 @@ input {
 .original-structure-toolbar {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 4px;
-  padding: 4px 8px;
+  padding: 8px;
+  border-bottom: 1px solid var(--line);
+}
+.original-structure-toolbar select,
+.original-structure-toolbar input[type="color"] {
+  min-height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+}
+.original-structure-toolbar input[type="color"] {
+  width: 28px;
+  padding: 2px;
+}
+.original-text-editor ul,
+.original-text-editor ol {
+  padding-inline-start: 2em;
+}
+.original-text-editor ul {
+  list-style: disc;
+}
+.original-text-editor ol {
+  list-style: decimal;
+}
+.original-text-editor li:has(> label > input[type="checkbox"]) {
+  list-style: none;
 }
 .original-text-editor {
   flex: 1;

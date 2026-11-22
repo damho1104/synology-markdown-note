@@ -67,7 +67,7 @@ In editable Markdown notes, paste an image, drop a file, or choose files from th
 
 Use the trash icon next to an attachment in the note information panel to remove it from the NAS. Remove the reference in the note first if the file is still in use. The app manages Markdown source files and generated math images.
 
-In an existing HTML note, select a run of text to apply bold, italic, underline, or strikethrough. Insert a table at the end of the note or select a cell in a regular table to add or remove rows and columns. Changes preserve the original HTML outside the edited range.
+Existing notes open in their saved format without conversion. Notes written with Note Station's formatting tools open directly with a toolbar for paragraph styles, fonts, colors, lists, links, tables, and attachments. Select text for inline formatting, or place the cursor in a paragraph for alignment and list commands. Use Ctrl-click (Command-click on Mac) to open a web link while editing. The source, split, and reading toggles remain available in the Markdown editor only. Undo and redo operate on confirmed edits to the current note, not on uploaded files.
 
 Open **Revision history** in the note information panel to preview and restore versions listed by the NAS. Completed web saves publish a listable version. Restore applies the selected title and body as a new save using the current NAS version for conflict checks. Existing user attachments are kept. The app checks that the older revision's required files are available before saving.
 

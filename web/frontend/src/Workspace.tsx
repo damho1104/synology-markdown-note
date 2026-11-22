@@ -322,6 +322,7 @@ export function Workspace({
   const [listError, setListError] = useState("");
   const [noteError, setNoteError] = useState("");
   const [detail, setDetail] = useState<NoteDetail | null>(null);
+  const [formatHistory, setFormatHistory] = useState<{id:string; version:string; undo:string[]; redo:string[]}>();
   const [noteFormats, setNoteFormats] = useState<Map<string, NoteFormat>>(() => new Map());
   const [noteLoading, setNoteLoading] = useState(false);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -435,7 +436,9 @@ export function Workspace({
         (original.title !== draft.title ||
           original.html !== draft.html ||
           original.markdown !== draft.markdown ||
-          !!draft.text_changes?.length))
+           !!draft.text_changes?.length ||
+           (draft.text_changes !== undefined && !!draft.attachments?.items.some(item =>
+             item.phase !== "committed" && !item.recoveryOnly && item.phase !== "reviewed"))))
   );
   const readOnlyRecovery = !!(draft?.review_required && activeKey === draft.key && !editing);
   const reviewingUploads = !!(draft?.review_required && !saving);
@@ -496,14 +499,16 @@ export function Workspace({
   }, [changeActiveDraft]);
 
   const queue = useUploadQueue(uploads, session.csrf_token, !!(route.compose && saving), reviewingUploads, patchUpload);
-  const canAttach = !!(editing && !reviewingUploads && draft?.key === activeKey &&
-    draft.markdown !== undefined && (route.compose || (detail?.editable && !detail.locked && !detail.trashed)));
+  const canAttachFormatted = !!(editing && !reviewingUploads && !route.compose && detail?.html_text_preview &&
+    !detail.locked && !detail.trashed && draft?.key === activeKey && draft.text_changes !== undefined);
+  const canAttach = canAttachFormatted || !!(editing && !reviewingUploads && draft?.key === activeKey &&
+     draft.markdown !== undefined && (route.compose || (detail?.editable && !detail.locked && !detail.trashed)));
   const acceptFiles = useRef<(files: File[], position: number) => void>(() => {});
   acceptFiles.current = (files, position) => {
     if (!canAttach) return;
     const errors: string[] = [];
     changeActiveDraft(current => {
-      if (current.markdown === undefined) return current;
+      if (current.markdown === undefined && current.text_changes === undefined) return current;
       const target: UploadTarget = route.compose
         ? {notebook_id: current.notebook_id, client_request_id: current.client_request_id!}
         : {notebook_id: current.notebook_id, note_id: route.note!};
@@ -522,7 +527,7 @@ export function Workspace({
         const id = requestId();
         count++;
         queue.files.set(`${attachments.id}/${id}`, file);
-        items.push({id, target, name: file.name, phase: "queued", position, inserted: false});
+        items.push({id, target, name: file.name, phase: "queued", position, inserted: current.markdown === undefined});
       }
       return items.length === attachments.items.length ? current : {...current, attachments: {...attachments, items}};
     });
@@ -1092,7 +1097,7 @@ export function Workspace({
     )
       return false;
     const isNew = route.compose;
-    const manifest = uploadManifest(draft.attachments, draft.markdown, detail?.attachment_bindings);
+    const manifest = uploadManifest(draft.attachments, draft.markdown, detail?.attachment_bindings, draft.text_changes !== undefined);
     const sentUploads = manifest.map(entry => entry.upload_id);
     let sent = draft;
     const sentKey = activeKey!;
@@ -1169,6 +1174,13 @@ export function Workspace({
       draftDelete(sentStorageKey);
       if (!unchanged || attachments?.items.some(item => item.phase !== "committed")) draftStore(draftPrefix + key, rebased);
       setSaveFailure(null);
+      if (!isNew && sent.text_changes !== undefined && !sentUploads.length && detail && next.version !== detail.version) {
+        setFormatHistory(current => ({id:detail.id,version:next.version,redo:[],
+          undo:[...(current?.id === detail.id && current.version === detail.version ? current.undo : []),detail.version].slice(-30)}));
+      } else if (sentUploads.length && detail && next.html === detail.html && next.title === detail.title) {
+        setFormatHistory(current => current?.id === detail.id && current.version === detail.version
+          ? {...current,version:next.version} : undefined);
+      }
       setDetail(next); setDraft(rebased);
       const summary = {...next, is_markdown: typeof next.markdown === "string"};
       setNotes(notes => notes.some(note => note.id === summary.id)
@@ -1462,7 +1474,7 @@ export function Workspace({
     }
   }
   async function applyNoteAction(action: {structure_edit: StructureEdit; text_layout: string}
-      | {remove_attachment_id: string} | {restore_version: string}): Promise<string | undefined> {
+      | {remove_attachment_id: string} | {restore_version: string}, historyDirection?: "undo" | "redo"): Promise<string | undefined> {
     if (!detail || !draft || dirty || saving || writeInFlight.current || hasStagedUploads ||
         draft.review_required || draft.resume_paused || composingNow.current)
       return "편집본과 진행 중인 저장을 먼저 확인하세요.";
@@ -1474,6 +1486,19 @@ export function Workspace({
         title: detail.title, notebook_id: detail.notebook_id, version: detail.version,
         ...action,
       }, {"X-CSRF-Token":session.csrf_token}, "PUT"));
+      if (next.version !== detail.version) {
+        if ("structure_edit" in action || historyDirection) {
+          setFormatHistory(current => {
+            const previous = current?.id === detail.id && current.version === detail.version
+              ? current : {undo:[],redo:[]};
+            const undo = historyDirection === "undo" ? previous.undo.slice(0,-1)
+              : [...previous.undo,detail.version].slice(-30);
+            const redo = historyDirection === "undo" ? [...previous.redo,detail.version].slice(-30)
+              : historyDirection === "redo" ? previous.redo.slice(0,-1) : [];
+            return {id:detail.id,version:next.version,undo,redo};
+          });
+        } else setFormatHistory(undefined);
+      }
       setDetail(next);
       setDraft({...draft, title:next.title, html:next.html, markdown:next.markdown, version:next.version, notebook_id:next.notebook_id,
         text_changes:next.html_text_preview ? [] : undefined,
@@ -1664,6 +1689,18 @@ export function Workspace({
         ? draft.html
         : (detail?.html ?? "");
   const previewMarkdown = (editing || readOnlyRecovery) && draft ? draft.markdown : detail?.markdown;
+  const formattedNote = !!detail?.html_text_preview && previewMarkdown === undefined;
+  const displayedMode = formattedNote ? "source" : viewMode;
+  const currentHistory = detail && formatHistory?.id === detail.id && formatHistory.version === detail.version
+    ? formatHistory : undefined;
+  const bodyAttachmentPath = useCallback((reference: string) => {
+    if (!detail) return undefined;
+    const key = reference.toLowerCase();
+    const files = detail.attachments.filter(file => file.id.toLowerCase() === key || file.ref?.toLowerCase() === key);
+    return files.length === 1
+      ? `/api/notes/${encodeURIComponent(detail.id)}/attachments/${encodeURIComponent(files[0].id)}`
+      : undefined;
+  }, [detail]);
   const renderNotebook = (book: Notebook) => (
     <button
       key={book.id}
@@ -1789,7 +1826,7 @@ export function Workspace({
               <Search size={19} />
             </button>
           </div>
-          <div className="mode-picker" aria-label="보기 모드">
+          {!formattedNote && <div className="mode-picker" aria-label="보기 모드">
             {(["source", "split", "read"] as const).map((m, i) => (
               <button
                 key={m}
@@ -1799,7 +1836,7 @@ export function Workspace({
                 {["원문", "분할", "읽기"][i]}
               </button>
             ))}
-          </div>
+          </div>}
           <div className="toolbar-group">
             <button
               className="icon-button"
@@ -2188,7 +2225,7 @@ export function Workspace({
                       <button
                         className="icon-button"
                         aria-label="노트 연결"
-                        disabled={saving || viewMode === "read"}
+                        disabled={saving || displayedMode === "read"}
                         onClick={() => setShowLinkPicker(true)}
                       >
                         <Link2 size={17} />
@@ -2424,10 +2461,10 @@ export function Workspace({
                   <p>공식 앱에서 열어 주세요.</p>
                 </div>
               ) : (
-                <div className={`editor-panes mode-${viewMode}`}>
-                  {viewMode !== "read" && (
+                <div className={`editor-panes mode-${displayedMode}`}>
+                  {displayedMode !== "read" && (
                     <section className="source-pane">
-                      <div className="pane-label">
+                      {!formattedNote && <div className="pane-label">
                         <Code size={13} />
                         {previewMarkdown !== undefined
                           ? "MARKDOWN"
@@ -2442,9 +2479,15 @@ export function Workspace({
                               event.currentTarget.value = "";
                             }} />
                         </>}
-                      </div>
+                      </div>}
                       {detail?.html_text_preview &&
                       draft?.text_changes !== undefined ? (
+                        <>
+                        {canAttachFormatted && <input hidden ref={attachmentInput} type="file" multiple
+                          aria-label="첨부할 파일 선택" onChange={event=>{
+                            acceptFiles.current(Array.from(event.currentTarget.files ?? []),0);
+                            event.currentTarget.value="";
+                          }}/>}
                         <OriginalEditor
                           html={detail.html_text_preview}
                           token={detail.html_text_token!}
@@ -2453,6 +2496,18 @@ export function Workspace({
                           editable={editing}
                           dark={dark}
                           structureDisabled={saving || dirty || composing || draft.review_required || draft.resume_paused}
+                          onAttach={canAttachFormatted ? () => attachmentInput.current?.click() : undefined}
+                          attachmentPath={bodyAttachmentPath}
+                          canUndo={!!currentHistory?.undo.length}
+                          canRedo={!!currentHistory?.redo.length}
+                          onUndo={()=>{
+                            const version = currentHistory?.undo.at(-1);
+                            if (version) void applyNoteAction({restore_version:version},"undo");
+                          }}
+                          onRedo={()=>{
+                            const version = currentHistory?.redo.at(-1);
+                            if (version) void applyNoteAction({restore_version:version},"redo");
+                          }}
                           onStructureEdit={(edit) => {
                             if (detail.html_text_layout)
                               void applyNoteAction({structure_edit:edit, text_layout:detail.html_text_layout});
@@ -2474,6 +2529,7 @@ export function Workspace({
                             });
                           }}
                         />
+                        </>
                       ) : previewMarkdown !== undefined ? (
                         <CodeMirror
                           ref={editorRef}
@@ -2517,7 +2573,7 @@ export function Workspace({
                       )}
                     </section>
                   )}
-                  {viewMode !== "source" && (
+                  {displayedMode !== "source" && (
                     <section className="preview-pane">
                       {viewMode === "split" && (
                         <div className="pane-label">

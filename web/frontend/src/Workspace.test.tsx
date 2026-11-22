@@ -27,7 +27,7 @@ beforeEach(() => {
 })
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 function mount(onLogout = async () => {}, workspaceStatus: Status = status) { return render(<Workspace session={session} status={workspaceStatus} onLogout={onLogout} onSessionExpired={() => {}} />) }
-async function edit() { await screen.findByLabelText('노트 제목'); fireEvent.click(screen.getByRole('button', {name: '분할'})); fireEvent.change(screen.getByLabelText('노트 제목'), {target: {value: '수정 제목'}}) }
+async function edit() { await screen.findByLabelText('노트 제목'); const split = screen.queryByRole('button', {name: '분할'}); if (split) fireEvent.click(split); fireEvent.change(screen.getByLabelText('노트 제목'), {target: {value: '수정 제목'}}) }
 
 it('shows Markdown badges before opening notes and ignores code fences in HTML note excerpts', async () => {
   window.history.replaceState({}, '', '/?n=book1')
@@ -261,7 +261,7 @@ it('rebases later HTML text edits onto the confirmed source without replacing th
     return new Response(JSON.stringify(path === '/api/notebooks' ? {notebooks:[{id:'book1',name:'업무',stack:''}]} : path === '/api/notes' ? {notes:[original]} : path === '/api/writes' ? {operations:[]} : original))
   }))
   mount(); await edit()
-  const editor = screen.getByRole('textbox', {name:'원본 HTML 편집기'})
+  const editor = screen.getByRole('textbox', {name:'본문 편집기'})
   const span = editor.querySelector('[data-text-index="0"]')!
   span.textContent = 'sent text'; fireEvent.input(span)
   await waitFor(() => expect(writes).toHaveLength(1), {timeout:2000})
@@ -449,6 +449,46 @@ it('retains a dirty restored draft while its NAS baseline is still loading', asy
   finish(new Response(JSON.stringify(note)))
   expect((await screen.findByLabelText('노트 제목') as HTMLInputElement).value).toBe(stored.title)
 })
+it('opens a formatted note directly even when the previous view preference is reading', async () => {
+  const formatted = {...note, editable:false, html_text_preview:'<p><span data-edit-token="token" data-text-index="0">original</span></p>',
+    html_text_token:'token', html_text_blocks:[{index:0,text:'original'}]}
+  const fetcher = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation((url, init) => url === '/api/notes/note1'
+    ? Promise.resolve(Response.json(formatted)) : fetcher(url, init))
+  mount()
+  await screen.findByLabelText('노트 제목')
+  for (const name of ['원문','분할','읽기']) expect(screen.queryByRole('button',{name})).toBeNull()
+  expect(screen.queryByText('HTML 원문')).toBeNull()
+  expect(screen.getByRole('textbox',{name:'본문 편집기'})).toBeTruthy()
+  expect(writes).toEqual([])
+})
+
+it('undoes and redoes acknowledged formatting against the displayed version', async () => {
+  const formatted = {...note, editable:false, html_text_preview:'<p><span data-edit-token="token" data-text-index="0">original</span></p>',
+    html_text_token:'token', html_text_blocks:[{index:0,text:'original'}], html_text_layout:'layout'}
+  const fetcher = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (url === '/api/notes/note1' && init?.method === 'PUT') {
+      writes.push(JSON.parse(init.body as string))
+      return Response.json({...formatted, version:`v${writes.length + 1}`})
+    }
+    return url === '/api/notes/note1' ? Response.json(formatted) : fetcher(url, init)
+  })
+  vi.spyOn(window, 'prompt').mockReturnValue('2x2')
+  mount()
+  fireEvent.click(await screen.findByRole('button', {name:'본문 끝에 표 추가'}))
+  const undo = screen.getByRole('button', {name:'실행 취소'}) as HTMLButtonElement
+  await waitFor(() => expect(undo.disabled).toBe(false))
+  fireEvent.click(undo)
+  const redo = screen.getByRole('button', {name:'다시 실행'}) as HTMLButtonElement
+  await waitFor(() => expect(redo.disabled).toBe(false))
+  fireEvent.click(redo)
+  await waitFor(() => expect(writes).toHaveLength(3))
+  expect(writes[0]).toMatchObject({version:'v1',structure_edit:{kind:'insert_table',rows:2,columns:2}})
+  expect(writes[1]).toMatchObject({version:'v2',restore_version:'v1'})
+  expect(writes[2]).toMatchObject({version:'v3',restore_version:'v2'})
+})
+
 it('exports pending original HTML text changes without changing source markup', async () => {
   const html=`<!DOCTYPE html><p STYLE='color:red' data-x="a>b">old &amp; text</p><!--keep--><img ref='image' src='attachment://image'>`
   const original={...note,html,html_text_preview:`<!DOCTYPE html><p STYLE='color:red' data-x="a>b"><span data-edit-token="token" data-text-index="0">old &amp; text</span></p><!--keep--><img ref='image' src='attachment://image'>`,html_text_token:'token',html_text_blocks:[{index:0,text:'old & text',start:html.indexOf('old'),end:html.indexOf('</p>')}]}
@@ -458,8 +498,8 @@ it('exports pending original HTML text changes without changing source markup', 
   Object.defineProperty(URL,'createObjectURL',{configurable:true,value:vi.fn((value:Blob)=>{blob=value;return 'blob:test'})})
   Object.defineProperty(URL,'revokeObjectURL',{configurable:true,value:vi.fn()})
   vi.spyOn(HTMLAnchorElement.prototype,'click').mockImplementation(()=>{})
-  mount(); await screen.findByLabelText('노트 제목'); fireEvent.click(screen.getByRole('button',{name:'분할'}))
-  const span=screen.getByRole('textbox',{name:'원본 HTML 편집기'}).querySelector('span')!
+  mount(); await screen.findByLabelText('노트 제목')
+  const span=screen.getByRole('textbox',{name:'본문 편집기'}).querySelector('span')!
   span.textContent='new < & >';fireEvent.input(span)
   fireEvent.click(screen.getByText('내보내기…'))
   const exported=await new Promise<string>(resolve=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result));reader.readAsText(blob)})
@@ -701,8 +741,8 @@ it('echoes real server structural slots and layout after inline deletion with an
   expect(original.html_text_blocks.filter(block=>block.text==='')).toHaveLength(4)
   const base=vi.mocked(fetch).getMockImplementation()!
   vi.stubGlobal('fetch',vi.fn((url:string,init?:RequestInit)=>url==='/api/notes/note1' && !init?.method ? Promise.resolve(new Response(JSON.stringify(original))) : base(url,init)))
-  mount();await screen.findByLabelText('노트 제목');fireEvent.click(screen.getByRole('button',{name:'분할'}))
-  const editor=screen.getByRole('textbox',{name:'원본 HTML 편집기'})
+  mount();await screen.findByLabelText('노트 제목')
+  const editor=screen.getByRole('textbox',{name:'본문 편집기'})
   const first=editor.querySelector(`[data-text-index="${a.index}"]`)!,second=editor.querySelector(`[data-text-index="${b.index}"]`)!
   first.textContent='';fireEvent.input(first)
   await waitFor(()=>expect(writes).toHaveLength(1),{timeout:2000})
@@ -836,8 +876,8 @@ it('exports UTF16 offsets and an empty structural slot without normalizing untou
   let blob!:Blob
   Object.defineProperty(URL,'createObjectURL',{configurable:true,value:(value:Blob)=>{blob=value;return 'blob:test'}})
   Object.defineProperty(URL,'revokeObjectURL',{configurable:true,value:vi.fn()});vi.spyOn(HTMLAnchorElement.prototype,'click').mockImplementation(()=>{})
-  mount();await screen.findByLabelText('노트 제목');fireEvent.click(screen.getByRole('button',{name:'분할'}))
-  const span=screen.getByRole('textbox',{name:'원본 HTML 편집기'}).querySelector('span')!;span.textContent='D & E';fireEvent.input(span)
+  mount();await screen.findByLabelText('노트 제목')
+  const span=screen.getByRole('textbox',{name:'본문 편집기'}).querySelector('span')!;span.textContent='D & E';fireEvent.input(span)
   fireEvent.click(screen.getByText('내보내기…'))
   const exported=await new Promise<string>(resolve=>{const r=new FileReader();r.onload=()=>resolve(String(r.result));r.readAsText(blob)})
   expect(exported).toBe(html.slice(0,offset)+'D &amp; E'+html.slice(offset))

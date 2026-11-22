@@ -30,7 +30,7 @@ it("accepts text changes synchronously only for known source blocks and strips o
     />,
   );
   expect(container.querySelector("script")).toBeNull();
-  const editor = screen.getByRole("textbox", { name: "원본 HTML 편집기" });
+  const editor = screen.getByRole("textbox", { name: "본문 편집기" });
   const fake = editor.querySelector('[data-text-index="99"]')!;
   fireEvent.input(fake);
   expect(change).not.toHaveBeenCalled();
@@ -56,7 +56,7 @@ it.each(["first<div>last</div>", "first<br>last"])(
       />,
     );
     const node = screen
-      .getByRole("textbox", { name: "원본 HTML 편집기" })
+      .getByRole("textbox", { name: "본문 편집기" })
       .querySelector('[data-text-index="0"]')!;
     node.innerHTML = html;
     fireEvent.input(node);
@@ -78,9 +78,75 @@ it("sends a formatting range and table coordinates for the original HTML", () =>
   fireEvent(document, new Event("selectionchange"));
   fireEvent.click(screen.getByRole("button", {name:"굵게"}));
   expect(edit).toHaveBeenLastCalledWith({kind:"bold", index:3, start:2, end:3});
+  fireEvent.click(screen.getByRole("button", {name:"아래 첨자"}));
+  expect(edit).toHaveBeenLastCalledWith({kind:"subscript", index:3, start:2, end:3});
+  fireEvent.click(screen.getByRole("button", {name:"위 첨자"}));
+  expect(edit).toHaveBeenLastCalledWith({kind:"superscript", index:3, start:2, end:3});
+  fireEvent.change(screen.getByRole("combobox", {name:"글꼴"}), {target:{value:"Georgia"}});
+  expect(edit).toHaveBeenLastCalledWith({kind:"font_family", value:"Georgia", index:3, start:2, end:3});
+  fireEvent.change(screen.getByRole("combobox", {name:"글자 크기"}), {target:{value:"24"}});
+  expect(edit).toHaveBeenLastCalledWith({kind:"font_size", value:"24", index:3, start:2, end:3});
+  fireEvent.change(screen.getByLabelText("글자 색"), {target:{value:"#112233"}});
+  expect(edit).toHaveBeenLastCalledWith({kind:"text_color", value:"#112233", index:3, start:2, end:3});
+  fireEvent.change(screen.getByRole("combobox", {name:"문단"}), {target:{value:"h2"}});
+  expect(edit).toHaveBeenLastCalledWith({kind:"paragraph", value:"h2", index:3});
+  fireEvent.click(screen.getByRole("button", {name:"가운데 정렬"}));
+  expect(edit).toHaveBeenLastCalledWith({kind:"align", value:"center", index:3});
+  fireEvent.click(screen.getByRole("button", {name:"체크리스트"}));
+  expect(edit).toHaveBeenLastCalledWith({kind:"list", value:"check", index:3});
+  fireEvent.click(screen.getByRole("button", {name:"들여쓰기"}));
+  expect(edit).toHaveBeenLastCalledWith({kind:"indent", index:3});
   fireEvent.click(span);
   fireEvent.click(screen.getByRole("button", {name:"아래에 행 추가"}));
   expect(edit).toHaveBeenLastCalledWith({kind:"row_after", index:1, row:0, column:0});
+  vi.spyOn(window, "prompt").mockReturnValueOnce("3x4");
+  fireEvent.click(screen.getByRole("button", {name:"본문 끝에 표 추가"}));
+  expect(edit).toHaveBeenLastCalledWith({kind:"insert_table", rows:3, columns:4});
+  vi.restoreAllMocks();
+});
+
+it("renders supported inline styles without restoring unrelated styles", () => {
+  render(<OriginalEditor html={'<p style="color:#112233; background-image:url(https://example.com/a); font-size:24px">Sample</p>'}
+    token="token" blocks={[]} changes={[]} editable dark={false} onChange={vi.fn()} />);
+  const p = screen.getByRole("textbox").querySelector("p")!;
+  expect(p.style.color).toBe("rgb(17, 34, 51)");
+  expect(p.style.fontSize).toBe("24px");
+  expect(p.style.backgroundImage).toBe("");
+});
+
+it("offers attachment selection and invokes only available history commands", () => {
+  const attach = vi.fn(), undo = vi.fn(), redo = vi.fn();
+  render(<OriginalEditor html="<p>Sample</p>" token="token" blocks={[]} changes={[]} editable
+    dark={false} onChange={vi.fn()} onStructureEdit={vi.fn()} onAttach={attach} onUndo={undo} onRedo={redo} canUndo />);
+  fireEvent.click(screen.getByRole("button", {name:"첨부"}));
+  fireEvent.click(screen.getByRole("button", {name:"실행 취소"}));
+  fireEvent.click(screen.getByRole("button", {name:"다시 실행"}));
+  expect(attach).toHaveBeenCalledTimes(1);
+  expect(undo).toHaveBeenCalledTimes(1);
+  expect(redo).not.toHaveBeenCalled();
+});
+
+it("opens a web link on a modified click without interrupting ordinary text selection", () => {
+  const open = vi.spyOn(window, "open").mockImplementation(() => null);
+  try {
+    render(<OriginalEditor html={'<p><a href="https://example.com/">Sample</a></p>'}
+      token="token" blocks={[]} changes={[]} editable dark={false} onChange={vi.fn()} />);
+    const link = screen.getByRole("link", {name:"Sample"});
+    fireEvent.click(link);
+    expect(open).not.toHaveBeenCalled();
+    fireEvent.click(link, {ctrlKey:true});
+    expect(open).toHaveBeenCalledWith("https://example.com/", "_blank", "noopener,noreferrer");
+  } finally {
+    open.mockRestore();
+  }
+});
+
+it("looks up an existing image by its saved attachment reference", () => {
+  const resolve = vi.fn(() => undefined);
+  render(<OriginalEditor html={'<p><img ref="saved-photo" src="https://example.com/a.png" alt="Photo"></p>'}
+    token="token" blocks={[]} changes={[]} editable dark={false} onChange={vi.fn()} attachmentPath={resolve} />);
+  expect(resolve).toHaveBeenCalledWith("saved-photo");
+  expect(screen.getByRole("img", {name:"Photo"}).getAttribute("src")).toBeNull();
 });
 
 it("keeps the live text node and caret when an autosave updates its baseline token", () => {

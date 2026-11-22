@@ -67,6 +67,7 @@ import {
   changedHtmlPreview,
   type TextChange,
 } from "./OriginalEditor";
+import { annotateFormattedDraft, editFormattedDraft, escapeText, formattedSelection } from "./formattedDraft";
 import { NoteLinkPicker } from "./NoteLinkPicker";
 import { SettingsDialog } from "./SettingsDialog";
 import { loadPreferences, savePreferences } from "./preferences";
@@ -148,6 +149,8 @@ function confirmedImport({filename, completed, total}: ImportProgress): string {
 
 type Draft = {
   text_changes?: TextChange[];
+  formattedWrites?: FormattedWrite[];
+  projected?: boolean;
   text_layout?: string;
   text_blocks?: NoteDetail["html_text_blocks"];
   client_request_id?: string;
@@ -166,6 +169,53 @@ type Draft = {
   markdown?: string;
 };
 
+type EditorCommand = {historyDirection: "undo" | "redo"} | {structureEdit: StructureEdit};
+type FormattedSnapshot = {html:string; title:string; version?:string; writeId?:string};
+type FormattedWrite = {id:string; result:FormattedSnapshot} &
+  ({changes:TextChange[]; verify:boolean} | {edit:StructureEdit} | {restore:Pick<FormattedSnapshot,"writeId" | "version">});
+type FormattedHistory = {id:string; undo:FormattedSnapshot[]; redo:FormattedSnapshot[]};
+
+function appendFormattedWrite(draft: Draft, write: FormattedWrite) {
+  return [...(draft.formattedWrites ?? []), write];
+}
+
+function markWritten<T extends Pick<FormattedSnapshot,"writeId" | "version">>(snapshot: T, writeId: string, version: string): T {
+  return snapshot.writeId === writeId ? {...snapshot, writeId:undefined, version} : snapshot;
+}
+
+function formattedTip(note: NoteDetail, draft: Draft): FormattedSnapshot {
+  return draft.formattedWrites?.at(-1)?.result ??
+    {html:note.html,title:note.title,version:note.version};
+}
+
+function recordFormattedEdit(history: FormattedHistory, before: FormattedSnapshot): FormattedHistory {
+  return {...history, undo:[...history.undo,before].slice(-30), redo:[]};
+}
+
+// Every toolbar operation seals earlier typing at its queue position. Later
+// typing still edits the live draft, using the operation's projected layout.
+function sealFormattedText(note: NoteDetail, draft: Draft) {
+  const before = formattedTip(note,draft);
+  const title = draft.title.trim() || "제목 없음";
+  if (!draft.text_changes || (!draft.text_changes.length && before.title === title)) return null;
+  const id = requestId();
+  const result = {html:exportHtml(note,draft),title,writeId:id};
+  const write: FormattedWrite = {id,result,changes:draft.text_changes,verify:!!draft.projected};
+  const changes = new Map(draft.text_changes.map(change => [change.index,change.text]));
+  let delta = 0;
+  const shifted = (draft.text_blocks ?? note.html_text_blocks)?.map(block => {
+    if (block.start === undefined || block.end === undefined) return block;
+    const text = changes.get(block.index);
+    const start = block.start + delta;
+    if (text === undefined) return {...block,start,end:block.end+delta};
+    const size = escapeText(text).length;
+    delta += size - (block.end - block.start);
+    return {...block,start,end:start+size,text};
+  });
+  return {before, draft:{...draft,html:result.html,text_blocks:shifted,text_changes:[],
+    formattedWrites:appendFormattedWrite(draft,write)}};
+}
+
 // Offsets are supplied with the authoritative HTML, never derived from the
 // sanitized editing DOM. The server supplies UTF-16 offsets for JS slicing.
 function exportHtml(note: NoteDetail, draft: Draft): string {
@@ -180,14 +230,24 @@ function exportHtml(note: NoteDetail, draft: Draft): string {
     return {...change, start:block.start!, end:block.end!};
   }).sort((a,b) => b.start-a.start);
   for (const change of changes) {
-    const text = change.text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const text = escapeText(change.text);
     source = source.slice(0, change.start) + text + source.slice(change.end);
   }
   return source;
 }
 
+function reviewedFormattedWrites(note: NoteDetail, draft: Draft): FormattedWrite[] | undefined {
+  const writes = draft.formattedWrites;
+  const head = writes?.[0];
+  if (!head || note.markdown !== undefined || !note.html_text_preview || !note.html_text_layout) return;
+  if (note.version === draft.version && note.html_text_layout === draft.text_layout) return writes;
+  if (note.version === draft.version || note.html !== head.result.html || note.title !== head.result.title) return;
+  return writes!.slice(1).map(entry => "restore" in entry
+    ? {...entry,restore:markWritten(entry.restore,head.id,note.version)} : entry);
+}
+
 function formattedRecoveryChanges(note: NoteDetail, draft: Draft): TextChange[] | undefined {
-  if (draft.text_changes === undefined || note.markdown !== undefined ||
+  if (draft.formattedWrites?.length || draft.text_changes === undefined || note.markdown !== undefined ||
       !note.html_text_preview || !note.html_text_layout) return undefined;
   if (!draft.text_changes.length) return [];
   if (draft.html === note.html && draft.text_layout === note.html_text_layout) return draft.text_changes;
@@ -335,8 +395,10 @@ export function Workspace({
   const graphRevision = useMemo(() => JSON.stringify(notes.map(note => [note.id, note.version, note.locked, note.trashed])), [notes]);
   const [listError, setListError] = useState("");
   const [noteError, setNoteError] = useState("");
+  const [noteActionNotice, setNoteActionNotice] = useState("");
   const [detail, setDetail] = useState<NoteDetail | null>(null);
-  const [formatHistory, setFormatHistory] = useState<{id:string; version:string; undo:string[]; redo:string[]}>();
+  const [formatHistory, setFormatHistory] = useState<FormattedHistory>();
+  const [formatSelection,setFormatSelection] = useState<ReturnType<typeof formattedSelection>>();
   const [noteFormats, setNoteFormats] = useState<Map<string, NoteFormat>>(() => new Map());
   const [noteLoading, setNoteLoading] = useState(false);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -436,7 +498,12 @@ export function Workspace({
       : route.note
         ? `note:${route.note}`
         : null;
-  useEffect(() => { setPreviewLine(undefined); }, [activeKey]);
+  useEffect(() => {
+    setPreviewLine(undefined);
+    setNoteActionNotice("");
+    setFormatHistory(undefined);
+    setFormatSelection(undefined);
+  }, [activeKey]);
   const activeDraftKey = activeKey ? draftPrefix + activeKey : null;
   const original = detail && !route.compose ? detail : null;
   const dirty = !!(
@@ -450,16 +517,18 @@ export function Workspace({
         (original.title !== draft.title ||
           original.html !== draft.html ||
           original.markdown !== draft.markdown ||
-           !!draft.text_changes?.length ||
+           !!draft.text_changes?.length || !!draft.formattedWrites?.length ||
            (draft.text_changes !== undefined && !!draft.attachments?.items.some(item =>
              item.phase !== "committed" && !item.recoveryOnly && item.phase !== "reviewed"))))
   );
   const readOnlyRecovery = !!(draft?.review_required && activeKey === draft.key && !editing);
-  const reviewingUploads = !!(draft?.review_required && !saving);
+  const reviewingUploads = !!(draft?.review_required && savingAction !== "note");
   const uploads = activeKey === draft?.key ? draft?.attachments : undefined;
   const referencedUploads = useMemo(() => uploads ? uploadReferences(draft?.markdown) : new Set<string>(),
     [uploads, draft?.markdown]);
   const hasStagedUploads = !!uploads?.items.some(item => item.phase !== "committed");
+  const noteActionsDisabled = composing || !!saveFailure || !!draft?.resume_paused || reviewingUploads || hasStagedUploads;
+  const currentHistory = detail && formatHistory?.id === detail.id ? formatHistory : undefined;
   const bindings = original?.attachment_bindings;
   const attachmentsBlocked = !!uploads?.items.some(item => uploadBlocksSave(item, referencedUploads, route.compose, bindings));
   const unresolvedRecoveryLinks = useMemo(() => {
@@ -498,7 +567,7 @@ export function Workspace({
     current.attachmentsBlocked = !!next.attachments?.items.some(item =>
       uploadBlocksSave(item, references, current.route.compose, current.bindings));
     // Persist queue IDs/bookmarks before network work can run, even on a blank note.
-    if (next.attachments) draftStore(current.draftKey, next);
+    if (next.attachments || next.formattedWrites?.length) draftStore(current.draftKey, next);
     setDraft(next);
   }, []);
 
@@ -1144,9 +1213,32 @@ export function Workspace({
     )
       return false;
     const isNew = route.compose;
-    const manifest = uploadManifest(draft.attachments, draft.markdown, detail?.attachment_bindings, draft.text_changes !== undefined);
+    let writing = navigating.current.draft ?? draft;
+    if (detail && !writing.formattedWrites?.length && writing.text_changes !== undefined) {
+      try {
+        const sealed = sealFormattedText(detail,writing);
+        if (sealed) {
+          writing = sealed.draft;
+          changeActiveDraft(() => writing);
+          setFormatHistory(recordFormattedEdit(currentHistory ?? {id:detail.id,undo:[],redo:[]},sealed.before));
+        }
+      } catch (error) {
+        setSaveFailure("safe");
+        handleError(error,setNoteError);
+        return false;
+      }
+    }
+    const head = writing.formattedWrites?.[0];
+    const restore = head && "restore" in head ? head.restore : undefined;
+    if (restore && !restore.version) {
+      setSaveFailure("safe");
+      setNoteError("복원할 NAS 버전을 확인할 수 없습니다. 편집본을 보관했습니다.");
+      return false;
+    }
+    const manifest = head && !("changes" in head) ? [] :
+      uploadManifest(writing.attachments, writing.markdown, detail?.attachment_bindings, writing.text_changes !== undefined);
     const sentUploads = manifest.map(entry => entry.upload_id);
-    let sent = draft;
+    let sent = writing;
     const sentKey = activeKey!;
     const sentStorageKey = activeDraftKey;
     let mutationStarted = false;
@@ -1154,24 +1246,26 @@ export function Workspace({
     setSavingAction("note");
     setNoteError("");
     setCompare(null);
-    if (dirty) draftStore(activeDraftKey, draft);
+    if (dirty) draftStore(activeDraftKey, writing);
     try {
       const url = isNew
         ? "/api/notes"
         : `/api/notes/${encodeURIComponent(route.note!)}`;
-      const mathImages = draft.markdown === undefined ? [] : await exportMath(draft.markdown, session.csrf_token);
+      const mathImages = writing.markdown === undefined ? [] : await exportMath(writing.markdown, session.csrf_token);
       // Persist the unresolved state before the network call, including edits
       // made while the request is pending. Reload must never blindly replay it.
-      sent = {...draft, review_required:true, recovery_acknowledged:false, pending_upload_ids: sentUploads,
-        ...(isNew ? {client_request_id:draft.client_request_id ?? requestId(),
-          create_sent:{title:draft.title,html:draft.html,markdown:draft.markdown}} : {})};
-      const held = navigating.current.draft === draft ? sent : {
+      sent = {...writing, review_required:true, recovery_acknowledged:false, pending_upload_ids: sentUploads,
+        ...(isNew ? {client_request_id:writing.client_request_id ?? requestId(),
+          create_sent:{title:writing.title,html:writing.html,markdown:writing.markdown}} : {})};
+      const held = navigating.current.draft === writing ? sent : {
         ...navigating.current.draft!, review_required:true, recovery_acknowledged:false,
         client_request_id:sent.client_request_id, create_sent:sent.create_sent, pending_upload_ids: sentUploads,
       };
       draftStore(sentStorageKey, held);
       const persisted = draftRead(sentStorageKey);
-      if (!persisted?.review_required || (isNew && persisted.client_request_id !== sent.client_request_id))
+      if (!persisted?.review_required || (isNew && persisted.client_request_id !== sent.client_request_id) ||
+          (head && (persisted.formattedWrites?.[0]?.id !== head.id ||
+            persisted.formattedWrites?.at(-1)?.id !== held.formattedWrites?.at(-1)?.id)))
         throw new Error("편집본을 이 탭에 보관할 수 없어 저장을 중단했습니다. 브라우저 저장소 설정을 확인하세요.");
       changeActiveDraft(() => held);
       mutationStarted = true;
@@ -1179,17 +1273,23 @@ export function Workspace({
         url,
         jsonRequest(
           {
-            title: draft.title.trim() || "제목 없음",
+            title: head?.result.title ?? (writing.title.trim() || "제목 없음"),
             ...(isNew ? {client_request_id:sent.client_request_id} : {}),
-            ...(draft.text_changes !== undefined
-              ? { text_changes: draft.text_changes, text_layout:draft.text_layout }
-              : draft.markdown !== undefined
-                ? { markdown: draft.markdown, ...(mathImages.length ? { math_images: mathImages } : {}) }
-                : { html: draft.html }),
-            notebook_id: draft.notebook_id,
-            ...(manifest.length ? {draft_id: draft.attachments!.id, uploads: manifest} : {}),
+            ...(restore ? {restore_version:restore.version}
+              : head && "edit" in head ? {structure_edit:head.edit, text_layout:writing.text_layout,
+                expected_html:head.result.html}
+              : writing.text_changes !== undefined ? {
+                  text_changes: head && "changes" in head ? head.changes : writing.text_changes,
+                  text_layout:writing.text_layout,
+                  ...(head && "changes" in head && head.verify ? {expected_html:head.result.html} : {}),
+                }
+              : writing.markdown !== undefined
+                ? { markdown: writing.markdown, ...(mathImages.length ? { math_images: mathImages } : {}) }
+                : { html: writing.html }),
+            notebook_id: writing.notebook_id,
+            ...(manifest.length ? {draft_id: writing.attachments!.id, uploads: manifest} : {}),
             ...(!isNew
-              ? { version: draft.version ?? "unknown-draft-base" }
+              ? { version: writing.version ?? "unknown-draft-base" }
               : {}),
           },
           { "X-CSRF-Token": session.csrf_token },
@@ -1198,11 +1298,25 @@ export function Workspace({
       );
       const latest = navigating.current.draft;
       if (navigating.current.activeKey !== sentKey || !latest) return true;
+      if (head && (latest.formattedWrites?.[0]?.id !== head.id || next.html !== head.result.html ||
+          next.title !== head.result.title)) throw new ApiFailure("WRITE_UNCERTAIN",409);
+      const remaining = head ? latest.formattedWrites!.slice(1).map(entry => "restore" in entry
+        ? {...entry,restore:markWritten(entry.restore,head.id,next.version)} : entry) : undefined;
       // held can include edits made while preparing math images for sent.
       const unchanged = latest === sent;
       const attachments = savedAttachments(latest.attachments, sentUploads, isNew ? next : undefined);
       const key = isNew ? `note:${next.id}` : sentKey;
-      const rebased: Draft = unchanged ? {
+      const rebased: Draft = head ? {
+        ...latest, version:next.version, review_required:false, recovery_acknowledged:false, resume_paused:false,
+        attachments, pending_upload_ids:undefined, formattedWrites:remaining,
+        text_layout:next.html_text_layout,
+        title:latest.title.trim() === next.title || (!latest.title.trim() && next.title === "제목 없음") ? next.title : latest.title,
+        // Keep the projected editor and text coordinates while later edits
+        // depend on it. The latest verified response becomes the base version.
+        ...(remaining?.length || latest.text_changes?.length ? {} : {
+          projected:false, text_blocks:next.html_text_blocks, html:next.html,
+        }),
+      } : unchanged ? {
         key, title: next.title, html: next.html, notebook_id: next.notebook_id,
         version: next.version, markdown: next.markdown,
         text_changes: next.html_text_preview ? [] : undefined,
@@ -1216,19 +1330,16 @@ export function Workspace({
           next.html_text_blocks?.find(block => block.index === change.index)?.text !== change.text),
       };
       const rebasedReferences = attachments ? uploadReferences(rebased.markdown) : new Set<string>();
-      saveHasMore.current = rebased.title !== next.title || rebased.html !== next.html || rebased.markdown !== next.markdown || !!rebased.text_changes?.length ||
+      saveHasMore.current = rebased.title !== next.title || rebased.html !== next.html || rebased.markdown !== next.markdown || !!rebased.text_changes?.length || !!remaining?.length ||
         !!attachments?.items.some(item => uploadBlocksSave(item, rebasedReferences, false, next.attachment_bindings));
       draftDelete(sentStorageKey);
-      if (!unchanged || attachments?.items.some(item => item.phase !== "committed")) draftStore(draftPrefix + key, rebased);
+      if (!unchanged || saveHasMore.current || attachments?.items.some(item => item.phase !== "committed")) draftStore(draftPrefix + key, rebased);
       setSaveFailure(null);
-      if (!isNew && sent.text_changes !== undefined && detail && next.version !== detail.version) {
-        setFormatHistory(current => {
-          const previous = current?.id === detail.id && current.version === detail.version ? current : undefined;
-          if (next.html === detail.html && next.title === detail.title)
-            return previous && {...previous,version:next.version};
-          return {id:detail.id,version:next.version,redo:[],
-            undo:[...(previous?.undo ?? []),detail.version].slice(-30)};
-        });
+      if (head) {
+        setFormatHistory(history => history?.id === next.id ? {...history,
+          undo:history.undo.map(snapshot => markWritten(snapshot,head.id,next.version)),
+          redo:history.redo.map(snapshot => markWritten(snapshot,head.id,next.version)),
+        } : history);
       }
       setDetail(next); setDraft(rebased);
       const summary = {...next, is_markdown: typeof next.markdown === "string"};
@@ -1295,6 +1406,10 @@ export function Workspace({
   useEffect(() => {
     if (!editing || !dirty || saving || composing || saveFailure || !draft || draft.review_required ||
         draft.resume_paused || attachmentsBlocked) return;
+    if (draft.formattedWrites?.length) {
+      void saveLatest.current();
+      return;
+    }
     const timer = window.setTimeout(() => { void saveLatest.current(); }, 800);
     return () => window.clearTimeout(timer);
   }, [draft, dirty, editing, saving, composing, saveFailure, attachmentsBlocked]);
@@ -1382,7 +1497,7 @@ export function Workspace({
     return note.id === route.note && note.notebook_id === source.notebook_id &&
       !note.locked && !note.trashed && !writeInProgress(note) && !!note.version &&
       (source.markdown !== undefined ? note.editable && note.markdown !== undefined
-        : formattedRecoveryChanges(note, source) !== undefined);
+        : reviewedFormattedWrites(note,source) !== undefined || formattedRecoveryChanges(note, source) !== undefined);
   }
 
   async function resumeReviewedNote() {
@@ -1402,12 +1517,18 @@ export function Workspace({
       if (!window.confirm(formatted
         ? "NAS 확인본을 기준으로 보관한 편집본을 열까요? 이전에 선택한 첨부파일은 다시 전송하지 않습니다."
         : "최신 NAS 확인본을 기준으로 보관한 편집본을 엽니다. NAS에서 확인되지 않은 첨부 링크는 이름만 남길까요?")) return;
+      const remaining = reviewedFormattedWrites(fresh,source);
+      const needsProjection = !!remaining && (!!remaining.length || !!source.text_changes?.length);
       const next: Draft = {
-        ...source, version:fresh.version, html:fresh.html,
-        ...(source.markdown === undefined ? {
+        ...source, version:fresh.version, html:needsProjection ? source.html : fresh.html,
+        ...(remaining ? {
+          formattedWrites:remaining, projected:needsProjection && source.projected,
+          text_layout:fresh.html_text_layout,
+          text_blocks:needsProjection ? source.text_blocks : fresh.html_text_blocks,
+        } : formatted ? {
           text_changes:formattedRecoveryChanges(fresh, source),
           text_layout:fresh.html_text_layout, text_blocks:fresh.html_text_blocks,
-        } : {markdown:recoveryMarkdown(source.markdown, id => !fresh.attachment_bindings?.[id])}),
+        } : {markdown:recoveryMarkdown(source.markdown!, id => !fresh.attachment_bindings?.[id])}),
         review_required:false, recovery_acknowledged:false, resume_paused:true, pending_upload_ids:undefined,
         attachments:source.attachments && {...source.attachments,
           items:source.attachments.items.map(item => ({...item, recoveryOnly:true}))},
@@ -1417,6 +1538,14 @@ export function Workspace({
       if (!draftRead(heldKey)) throw new Error("원래 초안을 이 탭에 보관할 수 없습니다.");
       draftStore(activeDraftKey, next);
       if (!draftRead(activeDraftKey)?.resume_paused) throw new Error("복구한 초안을 이 탭에 보관할 수 없습니다.");
+      if (remaining) {
+        const confirmed = source.formattedWrites?.[0];
+        if (confirmed && fresh.version !== source.version)
+          setFormatHistory(history => history?.id === fresh.id ? {...history,
+            undo:history.undo.map(snapshot => markWritten(snapshot,confirmed.id,fresh.version)),
+            redo:history.redo.map(snapshot => markWritten(snapshot,confirmed.id,fresh.version)),
+          } : history);
+      }
       setDetail(fresh); setDraft(next); setEditing(true);
       if (!formatted) setViewMode("split");
       setRecoveredDetail(null); setCompare(null); setSaveFailure(null); setNoteError("");
@@ -1530,8 +1659,7 @@ export function Workspace({
       handleError(error, setNoteError);
     }
   }
-  async function applyNoteAction(action: {structure_edit: StructureEdit; text_layout: string}
-      | {remove_attachment_id: string} | {restore_version: string}, historyDirection?: "undo" | "redo"): Promise<string | undefined> {
+  async function applyNoteAction(action: {remove_attachment_id: string} | {restore_version: string}): Promise<string | undefined> {
     if (!detail || !draft || dirty || saving || writeInFlight.current || hasStagedUploads ||
         draft.review_required || draft.resume_paused || composingNow.current)
       return "편집본과 진행 중인 저장을 먼저 확인하세요.";
@@ -1543,19 +1671,7 @@ export function Workspace({
         title: detail.title, notebook_id: detail.notebook_id, version: detail.version,
         ...action,
       }, {"X-CSRF-Token":session.csrf_token}, "PUT"));
-      if (next.version !== detail.version) {
-        if ("structure_edit" in action || historyDirection) {
-          setFormatHistory(current => {
-            const previous = current?.id === detail.id && current.version === detail.version
-              ? current : {undo:[],redo:[]};
-            const undo = historyDirection === "undo" ? previous.undo.slice(0,-1)
-              : [...previous.undo,detail.version].slice(-30);
-            const redo = historyDirection === "undo" ? [...previous.redo,detail.version].slice(-30)
-              : historyDirection === "redo" ? previous.redo.slice(0,-1) : [];
-            return {id:detail.id,version:next.version,undo,redo};
-          });
-        } else setFormatHistory(undefined);
-      }
+      if (next.version !== detail.version) setFormatHistory(undefined);
       setDetail(next);
       setDraft({...draft, title:next.title, html:next.html, markdown:next.markdown, version:next.version, notebook_id:next.notebook_id,
         text_changes:next.html_text_preview ? [] : undefined,
@@ -1570,6 +1686,52 @@ export function Workspace({
     } finally {
       writeInFlight.current = false;
       setSavingAction(null);
+    }
+  }
+  function queueNoteAction(command: EditorCommand) {
+    const current = navigating.current.draft;
+    if (!detail || !current || current.key !== activeKey || detail.id !== route.note ||
+        !editing || noteActionsDisabled || composingNow.current) return;
+    setNoteActionNotice("");
+    try {
+      let history = currentHistory ?? {id:detail.id,undo:[],redo:[]};
+      const sealed = sealFormattedText(detail,current);
+      const before = sealed?.draft ?? current;
+      if (sealed) history = recordFormattedEdit(history,sealed.before);
+      const tip = formattedTip(detail,before);
+      const id = requestId();
+      let write: FormattedWrite;
+      let focus: ReturnType<typeof formattedSelection>;
+      const token = "local-" + id;
+      let preview;
+      if ("structureEdit" in command) {
+        const blocks = before.text_blocks?.filter((block): block is typeof block & {start:number;end:number} =>
+          block.start !== undefined && block.end !== undefined);
+        const updated = editFormattedDraft(tip.html,command.structureEdit,blocks?.length ? blocks : undefined);
+        if (updated.html === tip.html) return;
+        write = {id,result:{html:updated.html,title:tip.title,writeId:id},edit:command.structureEdit};
+        preview = annotateFormattedDraft(updated.html,token);
+        if (updated.focus) focus = formattedSelection(preview.blocks,updated.html,updated.focus);
+        history = recordFormattedEdit(history,tip);
+      } else {
+        const direction = command.historyDirection;
+        const target = history[direction].at(-1);
+        if (!target) {
+          setNoteActionNotice(direction === "undo" ? "실행 취소할 편집 이력이 없습니다." : "다시 실행할 편집 이력이 없습니다.");
+          return;
+        }
+        write = {id,result:{html:target.html,title:target.title,writeId:id},
+          restore:{version:target.version,writeId:target.writeId}};
+        preview = annotateFormattedDraft(target.html,token);
+        const other = direction === "undo" ? "redo" : "undo";
+        history = {...history,[direction]:history[direction].slice(0,-1),[other]:[...history[other],tip].slice(-30)};
+      }
+      setFormatHistory(history);
+      setFormatSelection(focus);
+      changeActiveDraft(() => ({...before,html:write.result.html,title:write.result.title,
+        text_blocks:preview.blocks,text_changes:[],projected:true,formattedWrites:appendFormattedWrite(before,write)}));
+    } catch (error) {
+      setNoteActionNotice(errorText(error));
     }
   }
 
@@ -1748,8 +1910,9 @@ export function Workspace({
   const previewMarkdown = (editing || readOnlyRecovery) && draft ? draft.markdown : detail?.markdown;
   const formattedNote = !!detail?.html_text_preview && previewMarkdown === undefined;
   const displayedMode = formattedNote ? "source" : viewMode;
-  const currentHistory = detail && formatHistory?.id === detail.id && formatHistory.version === detail.version
-    ? formatHistory : undefined;
+  const localPreview = useMemo(() => draft?.projected
+    ? annotateFormattedDraft(draft.html,"local-" + (draft.formattedWrites?.at(-1)?.id ?? draft.version))
+    : undefined, [draft?.projected,draft?.html,draft?.formattedWrites,draft?.version]);
   const bodyAttachmentPath = useCallback((reference: string) => {
     if (!detail) return undefined;
     const key = reference.toLowerCase();
@@ -2412,6 +2575,7 @@ export function Workspace({
                   {saveFailure === "safe" && <button className="native-button" onClick={() => { setSaveFailure(null); setNoteError(""); }}>자동 저장 다시 시도</button>}
                 </div>
               )}
+              {noteActionNotice && <div className="workspace-alert" role="status">{noteActionNotice}</div>}
               {!route.compose &&
                 detail &&
                 !detail.editable &&
@@ -2550,45 +2714,31 @@ export function Workspace({
                             event.currentTarget.value="";
                           }}/>}
                         <OriginalEditor
-                          html={detail.html_text_preview}
-                          token={detail.html_text_token!}
-                          blocks={detail.html_text_blocks ?? []}
-                          changes={reviewingUploads ? formattedRecoveryChanges(detail, draft) ?? [] : draft.text_changes}
+                          html={localPreview?.html ?? detail.html_text_preview}
+                          token={localPreview?.token ?? detail.html_text_token!}
+                          blocks={draft.text_blocks ?? detail.html_text_blocks ?? []}
+                          changes={reviewingUploads && !localPreview ? formattedRecoveryChanges(detail, draft) ?? [] : draft.text_changes}
+                          restoreSelection={formatSelection}
                           editable={editing && !reviewingUploads}
                           dark={dark}
-                          structureDisabled={saving || dirty || composing || draft.review_required || draft.resume_paused}
+                          structureDisabled={noteActionsDisabled}
                           onAttach={canAttachFormatted ? () => attachmentInput.current?.click() : undefined}
                           attachmentPath={bodyAttachmentPath}
-                          canUndo={!!currentHistory?.undo.length}
-                          canRedo={!!currentHistory?.redo.length}
-                          onUndo={()=>{
-                            const version = currentHistory?.undo.at(-1);
-                            if (version) void applyNoteAction({restore_version:version},"undo");
-                          }}
-                          onRedo={()=>{
-                            const version = currentHistory?.redo.at(-1);
-                            if (version) void applyNoteAction({restore_version:version},"redo");
-                          }}
-                          onStructureEdit={(edit) => {
-                            if (detail.html_text_layout)
-                              void applyNoteAction({structure_edit:edit, text_layout:detail.html_text_layout});
-                          }}
-                          onChange={(change) => {
-                            const original = detail.html_text_blocks?.find(
-                              (b) => b.index === change.index,
-                            );
-                            setDraft({
-                              ...draft,
-                              text_changes: [
-                                ...draft.text_changes!.filter(
-                                  (c) => c.index !== change.index,
-                                ),
-                                ...(original?.text === change.text
-                                  ? []
-                                  : [change]),
-                              ],
-                            });
-                          }}
+                          canUndo={!!currentHistory?.undo.length || !!draft.text_changes.length ||
+                            (draft.title.trim() || "제목 없음") !== formattedTip(detail,draft).title}
+                          canRedo={!!currentHistory?.redo.length && !draft.text_changes.length &&
+                            (draft.title.trim() || "제목 없음") === formattedTip(detail,draft).title}
+                          onUndo={() => queueNoteAction({historyDirection: "undo"})}
+                          onRedo={() => queueNoteAction({historyDirection: "redo"})}
+                          onStructureEdit={(edit) => queueNoteAction({structureEdit: edit})}
+                          onChange={(change) => changeActiveDraft(current => {
+                            const original = (current.text_blocks ?? detail.html_text_blocks)?.find(
+                              block => block.index === change.index);
+                            return {...current,text_changes:[
+                              ...(current.text_changes ?? []).filter(entry => entry.index !== change.index),
+                              ...(original?.text === change.text ? [] : [change]),
+                            ]};
+                          })}
                         />
                         </>
                       ) : previewMarkdown !== undefined ? (

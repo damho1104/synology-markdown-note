@@ -31,6 +31,7 @@ from .compat.source_envelope import SourceEnvelope
 from .compat.markdown import render as render_markdown, math_plan
 from .compat.errors import CLIError
 from .html_text import annotate, layout_identity, patch as patch_html_text
+from .html_structure import apply_structure
 from .attachment_html import bind_html
 from .library_nas import LibraryNasOperations
 from .observability import request_id
@@ -970,7 +971,8 @@ class NasClient(LibraryNasOperations):
 
 
     def write_html_text(self, base: str, login: NasLogin, *, note_id: str, notebook_id: str,
-                        title: str, version: str, changes: list[dict], text_layout: str | None = None) -> dict:
+                        title: str, version: str, changes: list[dict], text_layout: str | None = None,
+                        structure_edit: dict | None = None) -> dict:
         current = self.fetch(base, login, note_id)
         if current["version"] != version:
             raise NasError("REMOTE_CHANGED")
@@ -981,7 +983,10 @@ class NasClient(LibraryNasOperations):
         try:
             if any("\x00" in change["text"] for change in changes):
                 raise ValueError()
-            html = patch_html_text(current["html"], changes)
+            html = (apply_structure(current["html"], structure_edit) if structure_edit
+                    else patch_html_text(current["html"], changes))
+            if len(html) > 2_000_000:
+                raise ValueError()
         except (ValueError, KeyError, TypeError) as exc:
             raise NasError("HTML_PATCH_INVALID") from exc
         if html == current["html"] and title == current["title"]:

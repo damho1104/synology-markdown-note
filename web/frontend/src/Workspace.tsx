@@ -63,6 +63,7 @@ import {
 } from "./LibraryDialog";
 import {
   OriginalEditor,
+  type StructureEdit,
   changedHtmlPreview,
   type TextChange,
 } from "./OriginalEditor";
@@ -316,7 +317,7 @@ export function Workspace({
   const [noteLoading, setNoteLoading] = useState(false);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [editing, setEditing] = useState(false);
-  const [savingAction, setSavingAction] = useState<"note" | "library" | "import" | null>(null);
+  const [savingAction, setSavingAction] = useState<"note" | "library" | "import" | "structure" | null>(null);
   const markdownImportInput = useRef<HTMLInputElement>(null);
   const saving = savingAction !== null;
   const [composing, setComposing] = useState(false);
@@ -1449,6 +1450,30 @@ export function Workspace({
       handleError(error, setNoteError);
     }
   }
+  async function applyOriginalEdit(edit: StructureEdit) {
+    if (!detail?.html_text_layout || !draft || dirty || saving || writeInFlight.current ||
+        draft.review_required || draft.resume_paused || composingNow.current) return;
+    writeInFlight.current = true;
+    setSavingAction("structure");
+    setNoteError("");
+    try {
+      const next = await request<NoteDetail>(`/api/notes/${encodeURIComponent(detail.id)}`, jsonRequest({
+        title: detail.title, notebook_id: detail.notebook_id, version: detail.version,
+        text_layout: detail.html_text_layout, structure_edit: edit,
+      }, {"X-CSRF-Token":session.csrf_token}, "PUT"));
+      setDetail(next);
+      setDraft({...draft, title:next.title, html:next.html, version:next.version, text_changes:[],
+        text_layout:next.html_text_layout, text_blocks:next.html_text_blocks});
+      setNotes(current => current.map(note => note.id === next.id ? {...note, ...next} : note));
+    } catch (error) {
+      handleError(error, setNoteError);
+      void loadPending();
+    } finally {
+      writeInFlight.current = false;
+      setSavingAction(null);
+    }
+  }
+
   async function importMarkdown(files: File[]) {
     if (!files.length || !selectedNotebook || route.compose || saving || writeInFlight.current) return;
     const destination = selectedNotebook.id;
@@ -2073,7 +2098,8 @@ export function Workspace({
             <GraphIndexStatus />
           </footer>
         </section>
-        <main className="native-detail" aria-label="노트 본문" inert={savingAction === "import"}>
+        <main className="native-detail" aria-label="노트 본문"
+          inert={savingAction === "import" || savingAction === "structure"}>
           {route.filter === "graph" ? (
             <NoteGraph
               notebooks={notebooks}
@@ -2386,6 +2412,8 @@ export function Workspace({
                           changes={draft.text_changes}
                           editable={editing}
                           dark={dark}
+                          structureDisabled={saving || dirty || composing || draft.review_required || draft.resume_paused}
+                          onStructureEdit={(edit) => void applyOriginalEdit(edit)}
                           onChange={(change) => {
                             const original = detail.html_text_blocks?.find(
                               (b) => b.index === change.index,

@@ -971,6 +971,12 @@ input {
 .editor-menu button:hover {
   background: var(--selection);
 }
+.original-structure-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 8px;
+}
 .original-text-editor {
   flex: 1;
   min-height: 0;

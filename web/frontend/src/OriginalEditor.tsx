@@ -1,6 +1,18 @@
-import { useLayoutEffect, useRef } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import DOMPurify from "dompurify";
 export type TextChange = { index: number; text: string };
+const formats = {bold:"굵게", italic:"기울임", underline:"밑줄", strike:"취소선"} as const;
+const tableCommands = {
+  row_before:"위에 행 추가", row_after:"아래에 행 추가",
+  column_before:"왼쪽에 열 추가", column_after:"오른쪽에 열 추가",
+  delete_row:"행 삭제", delete_column:"열 삭제", delete_table:"표 삭제",
+} as const;
+type FormatKind = keyof typeof formats;
+type TableKind = keyof typeof tableCommands;
+type Selection = {index:number; start:number; end:number};
+type TableCell = {index:number; row:number; column:number};
+export type StructureEdit = ({kind:FormatKind} & Selection) | ({kind:TableKind} & TableCell)
+  | {kind:"insert_table"};
 const safeHtml = (html: string) =>
   DOMPurify.sanitize(html, {
     FORBID_TAGS: ["script", "style", "iframe", "form", "object", "embed"],
@@ -36,6 +48,8 @@ export function OriginalEditor({
   changes,
   editable,
   onChange,
+  onStructureEdit,
+  structureDisabled = false,
 }: {
   html: string;
   token: string;
@@ -44,8 +58,14 @@ export function OriginalEditor({
   editable: boolean;
   dark: boolean;
   onChange: (change: TextChange) => void;
+  onStructureEdit?: (edit: StructureEdit) => void;
+  structureDisabled?: boolean;
 }) {
   const root = useRef<HTMLDivElement>(null);
+  const [selection,setSelection] = useState<(Selection & {token:string}) | null>(null);
+  const [cell,setCell] = useState<(TableCell & {token:string}) | null>(null);
+  const selected = selection?.token === token ? selection : null;
+  const selectedCell = cell?.token === token ? cell : null;
   const latest = useRef({ changes, blocks, onChange });
   latest.current = { changes, blocks, onChange };
   useLayoutEffect(() => {
@@ -59,6 +79,7 @@ export function OriginalEditor({
         node.removeAttribute("contenteditable");
         node.textContent = "";
       }
+      clone.querySelectorAll("[data-structure-token]").forEach(node => node.setAttribute("data-structure-token", ""));
       return clone.innerHTML;
     };
     // Own-save acknowledgements update the baseline/token, not the live editor
@@ -69,6 +90,10 @@ export function OriginalEditor({
       const fresh = next.querySelectorAll<HTMLElement>("[data-edit-token]");
       existing.forEach((node, i) => {
         node.dataset.editToken = fresh[i].dataset.editToken;
+      });
+      const freshMarkers = next.querySelectorAll<HTMLElement>("[data-structure-token]");
+      container.querySelectorAll<HTMLElement>("[data-structure-token]").forEach((node, i) => {
+        node.dataset.structureToken = freshMarkers[i].dataset.structureToken;
       });
     } else container.replaceChildren(...Array.from(next.childNodes));
     const allowed = Array.from(
@@ -96,7 +121,55 @@ export function OriginalEditor({
     container.addEventListener("input", input);
     return () => container.removeEventListener("input", input);
   }, [html, token, editable]);
+  function selectCell(node: Element | null) {
+    const table = node?.closest<HTMLElement>("[data-table-index]");
+    const target = node?.closest<HTMLElement>("[data-table-row]");
+    setCell(table?.dataset.structureToken === token && target?.dataset.structureToken === token &&
+      root.current?.contains(target) ? {token, index:Number(table.dataset.tableIndex),
+        row:Number(target.dataset.tableRow), column:Number(target.dataset.tableColumn)} : null);
+  }
+  useLayoutEffect(() => {
+    if (!onStructureEdit || !editable) return;
+    const select = () => {
+      const current = window.getSelection();
+      const range = current?.rangeCount ? current.getRangeAt(0) : null;
+      const start = range?.startContainer;
+      const element = start instanceof Element ? start : start?.parentElement ?? null;
+      const block = element?.closest<HTMLElement>("[data-edit-token]");
+      if (!range || range.collapsed || !block || block.dataset.editToken !== token ||
+          !root.current?.contains(block) || !block.contains(range.endContainer)) {
+        setSelection(null);
+        if (element && root.current?.contains(element)) selectCell(element);
+        return;
+      }
+      const leading = range.cloneRange();
+      leading.selectNodeContents(block);
+      leading.setEnd(range.startContainer, range.startOffset);
+      const offset = leading.toString().length;
+      setSelection({token, index:Number(block.dataset.textIndex), start:offset, end:offset+range.toString().length});
+      selectCell(element);
+    };
+    document.addEventListener("selectionchange", select);
+    return () => document.removeEventListener("selectionchange", select);
+  }, [editable, onStructureEdit, token]);
   return (
+    <>
+    {editable && onStructureEdit && <div role="group" aria-label="원본 HTML 서식과 표"
+      className="original-structure-toolbar" onMouseDown={event=>event.preventDefault()}>
+      {(Object.keys(formats) as FormatKind[]).map(kind =>
+        <button key={kind} type="button" className="native-button" disabled={structureDisabled || !selected}
+          onClick={() => selected && onStructureEdit({kind, index:selected.index, start:selected.start, end:selected.end})}>
+          {formats[kind]}
+        </button>)}
+      <button type="button" className="native-button" disabled={structureDisabled}
+        onClick={() => onStructureEdit({kind:"insert_table"})}>본문 끝에 표 추가</button>
+      {selectedCell && (Object.keys(tableCommands) as TableKind[]).map(kind =>
+        <button key={kind} type="button" className="native-button" disabled={structureDisabled}
+          onClick={() => {
+            if (kind.startsWith("delete_") && !window.confirm(`선택한 ${tableCommands[kind]} 작업을 적용할까요?`)) return;
+            onStructureEdit({kind, index:selectedCell.index, row:selectedCell.row, column:selectedCell.column});
+          }}>{tableCommands[kind]}</button>)}
+    </div>}
     <div
       ref={root}
       role="textbox"
@@ -135,9 +208,12 @@ export function OriginalEditor({
       }}
       onDrop={(event) => event.preventDefault()}
       onClick={(event) => {
-        if ((event.target as HTMLElement).closest("a")) event.preventDefault();
+        const target = event.target as HTMLElement;
+        if (target.closest("a")) event.preventDefault();
+        if (onStructureEdit) selectCell(target);
       }}
     />
+    </>
   );
 }
 export function changedHtmlPreview(

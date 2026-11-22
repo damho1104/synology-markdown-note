@@ -16,6 +16,7 @@ import uuid
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 from urllib.parse import quote, unquote, urlsplit
 
 from anyio import CancelScope, fail_after
@@ -54,6 +55,16 @@ class TextChange(BaseModel):
     text: str = Field(max_length=2_000_000)
 
 
+class StructureEdit(BaseModel):
+    kind: Literal["bold", "italic", "underline", "strike", "insert_table", "delete_table",
+                  "row_before", "row_after", "column_before", "column_after", "delete_row", "delete_column"]
+    index: int | None = Field(default=None, ge=0)
+    start: int | None = Field(default=None, ge=0)
+    end: int | None = Field(default=None, ge=0)
+    row: int | None = Field(default=None, ge=0)
+    column: int | None = Field(default=None, ge=0)
+
+
 class MathImageInput(BaseModel):
     key: str = Field(pattern=r"^[0-9a-f]{64}$")
     width: int = Field(ge=1, le=2048)
@@ -77,6 +88,7 @@ class WriteInput(BaseModel):
     math_images: list[MathImageInput] = Field(default_factory=list, max_length=100)
     text_changes: list[TextChange] | None = Field(default=None, max_length=10000)
     text_layout: str | None = Field(default=None, max_length=128)
+    structure_edit: StructureEdit | None = None
     client_request_id: str | None = Field(default=None, pattern=r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
     notebook_id: str = Field(min_length=1, max_length=256)
     version: str | None = Field(default=None, max_length=128)
@@ -781,13 +793,16 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
             raise HTTPException(422, detail="INVALID_NOTE")
         if note_id and not body.version or not note_id and body.version:
             raise HTTPException(422, detail="VERSION_REQUIRED")
+        if body.structure_edit is not None and (not note_id or body.markdown is not None or body.text_changes):
+            raise HTTPException(422, detail="HTML_PATCH_INVALID")
         base, active, owner, csrf, _, _ = nas_access(request, response)
         csrf_guard(request, csrf)
         if note_id is None and body.client_request_id is None:
             raise HTTPException(422, detail='CLIENT_REQUEST_ID_REQUIRED')
         if body.uploads and (not body.draft_id or body.markdown is None or body.text_changes is not None):
             raise HTTPException(422, detail="INVALID_UPLOAD")
-        intent = body.model_dump(exclude={"draft_id", "uploads"})
+        intent = body.model_dump(exclude={"draft_id", "uploads"} |
+                                 ({"structure_edit"} if body.structure_edit is None else set()))
         if body.uploads:
             intent.update(draft_id=body.draft_id, uploads=[item.model_dump() for item in body.uploads])
         request_hash = hashlib.sha256(json.dumps(intent, sort_keys=True, ensure_ascii=False,
@@ -827,12 +842,13 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
                 if previous is not None: return previous
             raise HTTPException(409, detail="WRITE_REVIEW_REQUIRED")
         try:
-            if body.text_changes is not None:
+            if body.text_changes is not None or body.structure_edit is not None:
                 if not note_id or not body.version or body.markdown is not None:
                     raise NasError("HTML_PATCH_INVALID")
                 result = nas.write_html_text(base, active, note_id=note_id, notebook_id=body.notebook_id,
                     title=body.title, version=body.version, text_layout=body.text_layout,
-                    changes=[v.model_dump() for v in body.text_changes])
+                    changes=[v.model_dump() for v in body.text_changes or []],
+                    **({"structure_edit": body.structure_edit.model_dump()} if body.structure_edit is not None else {}))
             elif body.markdown is not None:
                 result = nas.write_markdown(base, active, note_id=note_id, notebook_id=body.notebook_id,
                                            title=body.title, markdown=body.markdown, version=body.version,

@@ -121,6 +121,25 @@ def test_empty_slots_do_not_create_invalid_table_or_list_children_in_preview():
     assert annotate(cleared)['html_text_blocks'][b]['text']=='B'
 
 
+def test_format_and_table_operations_patch_only_their_source_ranges():
+    from synonote_web.html_structure import apply_structure
+    source = '<div CLASS="nas"><p>😀 &amp; 문장</p><table data-x="keep"><tr><td>A</td><td>B</td></tr></table><!--opaque--></div>'
+    block = next(i for i, b in enumerate(text_blocks(source)) if b.text == "😀 & 문장")
+    formatted = apply_structure(source, {"kind":"bold", "index":block, "start":3, "end":4})
+    assert formatted == source.replace("&amp;", "<strong>&amp;</strong>")
+    with_column = apply_structure(source, {"kind":"column_after","index":0,"row":0,"column":0})
+    assert with_column == source.replace("<td>A</td>", "<td>A</td><td></td>")
+    assert apply_structure(source, {"kind":"row_after","index":0,"row":0,"column":0}) == source.replace(
+        "</tr>", "</tr><tr><td></td><td></td></tr>")
+    assert apply_structure(source, {"kind":"delete_table","index":0}) == (
+        '<div CLASS="nas"><p>😀 &amp; 문장</p><!--opaque--></div>')
+    merged = source.replace("<td>A", "<td colspan='2'>A")
+    with pytest.raises(ValueError):
+        apply_structure(merged, {"kind":"delete_column","index":0,"row":0,"column":0})
+    with pytest.raises(ValueError):
+        apply_structure(source, {"kind":"bold","index":block,"start":1,"end":2})
+
+
 def test_html_patch_endpoint_acks_stable_slots_and_checks_layout_migration(tmp_path):
     from fastapi.testclient import TestClient
     from synonote_web.nas import NasClient,NasLogin
@@ -161,3 +180,10 @@ def test_html_patch_endpoint_acks_stable_slots_and_checks_layout_migration(tmp_p
     saved=client.put('/api/notes/n1',json=next_body,headers=headers)
     assert saved.status_code==200 and saved.json()['html']=='<p><strong></strong> D <em>C</em></p>'
     assert nas.mutations==2
+    current = saved.json()
+    with_table = client.put('/api/notes/n1', json={**next_body, 'version':current['version'],
+        'text_layout':current['html_text_layout'], 'text_changes':[],
+        'structure_edit':{'kind':'insert_table'}}, headers=headers)
+    assert with_table.status_code == 200
+    assert '<table>' in with_table.json()['html'] and 'data-table-index="0"' in with_table.json()['html_text_preview']
+    assert nas.mutations == 3

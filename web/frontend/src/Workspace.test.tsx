@@ -463,6 +463,54 @@ it('exports pending original HTML text changes without changing source markup', 
   expect(exported).toBe(html.replace('old &amp; text','new &lt; &amp; &gt;'))
   expect(writes).toHaveLength(0)
 })
+it('imports selected Markdown files through the confirmed NAS create workflow', async () => {
+  const requests: Record<string, unknown>[] = []
+  const original = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (url === '/api/notes' && init?.method === 'POST') {
+      const input = JSON.parse(init.body as string)
+      requests.push(input)
+      return Response.json({...note, id:`imported-${requests.length}`, ...input})
+    }
+    return original(url, init)
+  })
+  mount()
+  await screen.findByLabelText('노트 제목')
+  fireEvent.change(screen.getByLabelText('가져올 Markdown 파일 선택'), {target:{files:[
+    new File(['# 한글\r\n'], '첫 노트.md'),
+    new File(['두 번째 본문'], '두 번째.markdown'),
+  ]}})
+  await screen.findByText('Markdown 노트 2개를 가져왔습니다.')
+  expect(requests).toMatchObject([
+    {title:'첫 노트', markdown:'# 한글\r\n', notebook_id:'book1'},
+    {title:'두 번째', markdown:'두 번째 본문', notebook_id:'book1'},
+  ])
+  expect(requests[0].client_request_id).not.toBe(requests[1].client_request_id)
+  expect(window.location.search).toContain('note=imported-2')
+})
+
+it('stops a Markdown import batch after an uncertain request and keeps its draft', async () => {
+  const requests: Record<string, unknown>[] = []
+  const original = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (url === '/api/notes' && init?.method === 'POST') {
+      requests.push(JSON.parse(init.body as string))
+      return Response.json({error:'WRITE_UNCERTAIN'}, {status:409})
+    }
+    if (String(url).startsWith('/api/creates/')) return Response.json({status:'uncertain'})
+    return original(url, init)
+  })
+  mount()
+  await screen.findByLabelText('노트 제목')
+  fireEvent.change(screen.getByLabelText('가져올 Markdown 파일 선택'), {target:{files:[
+    new File(['검토할 본문'], '내 초안.md'),
+    new File(['보내지 않을 본문'], '다음.md'),
+  ]}})
+  await screen.findByText('새 노트 저장 결과 확인 필요')
+  expect((screen.getByLabelText('노트 제목') as HTMLInputElement).value).toBe('내 초안')
+  expect(requests).toHaveLength(1)
+})
+
 it('confirms notebook deletion, then clears the removed notebook and note', async () => {
   const original = vi.mocked(fetch).getMockImplementation()!
   const actions = [] as unknown[]

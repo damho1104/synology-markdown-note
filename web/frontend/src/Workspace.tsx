@@ -15,6 +15,7 @@ import {
   BookOpenText,
   ChevronRight,
   FilePlus2,
+  FileUp,
   FileText,
   FolderOpen,
   LogOut,
@@ -74,6 +75,7 @@ import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { tags as syntaxTags } from "@lezer/highlight";
 import { markdown as markdownLanguage } from "@codemirror/lang-markdown";
 import { exportMath } from "./mathExport";
+import { readMarkdownFile } from "./markdownImport";
 import { NotePreview } from "./NotePreview";
 import { AttachmentQueue } from "./AttachmentQueue";
 import {
@@ -314,7 +316,8 @@ export function Workspace({
   const [noteLoading, setNoteLoading] = useState(false);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [editing, setEditing] = useState(false);
-  const [savingAction, setSavingAction] = useState<"note" | "library" | null>(null);
+  const [savingAction, setSavingAction] = useState<"note" | "library" | "import" | null>(null);
+  const markdownImportInput = useRef<HTMLInputElement>(null);
   const saving = savingAction !== null;
   const [composing, setComposing] = useState(false);
   const [saveFailure, setSaveFailure] = useState<"safe" | "conflict" | "uncertain" | null>(null);
@@ -1446,6 +1449,59 @@ export function Workspace({
       handleError(error, setNoteError);
     }
   }
+  async function importMarkdown(files: File[]) {
+    if (!files.length || !selectedNotebook || route.compose || saving || writeInFlight.current) return;
+    const destination = selectedNotebook.id;
+    const key = `new:${destination}`;
+    const storageKey = draftPrefix + key;
+    if (dirty || hasStagedUploads || draft?.review_required || draft?.resume_paused || draftRead(storageKey)) {
+      setMessage("작성하거나 보관 중인 편집본을 먼저 확인한 뒤 가져오세요.");
+      return;
+    }
+    let imported = 0;
+    let latest: NoteDetail | undefined;
+    let held: Draft | undefined;
+    let filename = "";
+    writeInFlight.current = true;
+    setSavingAction("import");
+    setMessage("");
+    try {
+      for (const file of files) {
+        filename = file.name;
+        const {title, markdown} = await readMarkdownFile(file);
+        const client_request_id = requestId();
+        const math_images = await exportMath(markdown, session.csrf_token);
+        const source = {title, markdown, html:BLANK_HTML};
+        const sent: Draft = {...source, key, notebook_id:destination, client_request_id,
+          review_required:true, create_sent:source};
+        draftStore(storageKey, sent);
+        if (draftRead(storageKey)?.client_request_id !== client_request_id) {
+          throw new Error("편집본을 이 탭에 보관할 수 없어 가져오기를 중단했습니다.");
+        }
+        held = sent;
+        latest = await request<NoteDetail>("/api/notes", jsonRequest({
+          title, markdown, notebook_id:destination, client_request_id,
+          ...(math_images.length ? {math_images} : {}),
+        }, {"X-CSRF-Token":session.csrf_token}));
+        draftDelete(storageKey);
+        held = undefined;
+        imported += 1;
+      }
+      if (latest) commitRoute({shelf: route.shelf, notebook: destination, note: latest.id, compose: false});
+      setMessage(`Markdown 노트 ${imported}개를 가져왔습니다.`);
+    } catch (error) {
+      handleError(error, message => setMessage(`${filename} · ${imported}/${files.length}개 가져옴 · ${message}`));
+      if (held) {
+        commitRoute({shelf: route.shelf, notebook: destination, note: null, compose: true});
+        void loadPending();
+      }
+    } finally {
+      if (imported) await loadLists();
+      writeInFlight.current = false;
+      setSavingAction(null);
+    }
+  }
+
   async function libraryAction(action: LibraryAction) {
     if (saving || writeInFlight.current) throw new Error("진행 중인 저장이 끝난 뒤 다시 시도하세요.");
     if (dirty)
@@ -1646,6 +1702,19 @@ export function Workspace({
             >
               <FilePlus2 size={19} />
             </button>
+            <button className="icon-button" aria-label="Markdown 가져오기"
+              title={selectedNotebook ? "Markdown 가져오기" : "메모장을 선택하세요"}
+              disabled={saving || !selectedNotebook || route.compose}
+              onClick={() => markdownImportInput.current?.click()}>
+              <FileUp size={18} />
+            </button>
+            <input hidden ref={markdownImportInput} type="file" multiple
+              accept=".md,.markdown,text/markdown" aria-label="가져올 Markdown 파일 선택"
+              onChange={event => {
+                const files = Array.from(event.currentTarget.files ?? []);
+                event.currentTarget.value = "";
+                void importMarkdown(files);
+              }} />
             <button
               className="icon-button"
               aria-label="전체 검색"
@@ -2004,7 +2073,7 @@ export function Workspace({
             <GraphIndexStatus />
           </footer>
         </section>
-        <main className="native-detail" aria-label="노트 본문">
+        <main className="native-detail" aria-label="노트 본문" inert={savingAction === "import"}>
           {route.filter === "graph" ? (
             <NoteGraph
               notebooks={notebooks}

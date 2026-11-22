@@ -57,6 +57,8 @@ If you are reusing Compose from 0.2.x, replace it with the new `docker-compose.y
 
 ## Saving and compatibility
 
+Select a notebook and use **Import Markdown** in the toolbar to create one note per UTF-8 `.md` or `.markdown` file. Add any linked local files separately from the imported note.
+
 Changes are autosaved to the NAS 0.8 seconds after you stop editing. There are no separate Save, Start editing, or Cancel buttons; edit directly in source/split view. You can continue typing while saving, and changes made while awaiting a response are saved next using the confirmed new version as their base. Saving waits during Korean character composition. The bottom status area shows saves as pending, in progress, complete, or stopped. Remaining changes are also saved before navigating away from a note or logging out. In a conflict or when the outcome is uncertain, your edits are preserved and automatic resending stops.
 
 Existing Markdown notes are read by checking source fingerprints in the Mac app/CLI's `SourceEnvelope` v1/v2/v3. Supported Markdown is saved in the sequence: register temporary source → save body → publish verified final source, rechecking the remote version and body at every step. Existing image attachments and source-preservation blocks are retained. Mermaid and KaTeX libraries and fonts are included in the image and do not depend on a CDN. Scripts included in documents are removed from previews. For internal links, only the app's nonce-restricted forwarding code runs in an opaque iframe, and the parent validates the iframe source and nonce. Automatic external network requests are blocked.

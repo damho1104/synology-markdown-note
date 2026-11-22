@@ -43,6 +43,7 @@ import {
 import { AppIcon } from "./AppIcon";
 import {
   ApiFailure,
+  errorText,
   jsonRequest,
   readInSession,
   request,
@@ -78,6 +79,7 @@ import { markdown as markdownLanguage } from "@codemirror/lang-markdown";
 import { exportMath } from "./mathExport";
 import { readMarkdownFile } from "./markdownImport";
 import { NotePreview } from "./NotePreview";
+import { NoteRevisionDialog } from "./NoteRevisionDialog";
 import { AttachmentQueue } from "./AttachmentQueue";
 import {
   detachUploadReferences, MAX_ATTACHMENT_BYTES, MAX_QUEUED_ATTACHMENTS, recoveryUploadReferences, restoreUploads, uploadManifest,
@@ -289,12 +291,6 @@ function draftDelete(key: string): void {
   }
 }
 
-function errorText(error: unknown): string {
-  return error instanceof Error
-    ? error.message
-    : "요청 처리 중 오류가 발생했습니다.";
-}
-
 export function Workspace({
   session,
   status,
@@ -364,6 +360,7 @@ export function Workspace({
     y: number;
   } | null>(null);
   const [inspector, setInspector] = useState(false);
+  const [revisionNoteId, setRevisionNoteId] = useState<string | null>(null);
   const [preferences, setPreferences] = useState(loadPreferences);
   const [showSettings, setShowSettings] = useState(false);
   const [systemDark, setSystemDark] = useState(
@@ -1452,9 +1449,11 @@ export function Workspace({
       handleError(error, setNoteError);
     }
   }
-  async function applyNoteAction(action: {structure_edit: StructureEdit; text_layout: string} | {remove_attachment_id: string}) {
+  async function applyNoteAction(action: {structure_edit: StructureEdit; text_layout: string}
+      | {remove_attachment_id: string} | {restore_version: string}): Promise<string | undefined> {
     if (!detail || !draft || dirty || saving || writeInFlight.current || hasStagedUploads ||
-        draft.review_required || draft.resume_paused || composingNow.current) return;
+        draft.review_required || draft.resume_paused || composingNow.current)
+      return "편집본과 진행 중인 저장을 먼저 확인하세요.";
     writeInFlight.current = true;
     setSavingAction("note-action");
     setNoteError("");
@@ -1464,13 +1463,16 @@ export function Workspace({
         ...action,
       }, {"X-CSRF-Token":session.csrf_token}, "PUT"));
       setDetail(next);
-      setDraft({...draft, title:next.title, html:next.html, markdown:next.markdown, version:next.version,
+      setDraft({...draft, title:next.title, html:next.html, markdown:next.markdown, version:next.version, notebook_id:next.notebook_id,
         text_changes:next.html_text_preview ? [] : undefined,
         text_layout:next.html_text_layout, text_blocks:next.html_text_blocks});
       setNotes(current => current.map(note => note.id === next.id ? {...note, ...next} : note));
+      if (route.notebook && route.notebook !== next.notebook_id)
+        commitRoute({...route, shelf:null, notebook:next.notebook_id}, true);
     } catch (error) {
       handleError(error, setNoteError);
       void loadPending();
+      return errorText(error);
     } finally {
       writeInFlight.current = false;
       setSavingAction(null);
@@ -2563,12 +2565,14 @@ export function Workspace({
             <div className="inspector-card">
               {detail?.tags?.join(" · ") || "태그 없음"}
             </div>
+            {detail && !detail.locked && !detail.trashed && <button className="native-button"
+              onClick={() => setRevisionNoteId(detail.id)}>수정 이력 조회</button>}
             <h3>첨부파일</h3>
             <div className="inspector-card">
               {detail?.attachments.length
                 ? detail.attachments.map((file) => {
                     const protectedFile = file.id === detail.source_file_id ||
-                      /^synology-note-(source|math-|stage-)/i.test(file.name) ||
+                      /^synology-note-(source|math-|upload-)/i.test(file.name) ||
                       Object.keys(detail.math_attachments ?? {}).some(uid => detail.attachment_bindings?.[uid] === file.id);
                     return <div className="inspector-attachment" key={file.id}>
                       <a href={`/api/notes/${encodeURIComponent(detail.id)}/attachments/${encodeURIComponent(file.id)}`}
@@ -2716,6 +2720,12 @@ export function Workspace({
         onSelect={(id)=>navigate({shelf:null,notebook:null,note:id,compose:false},false,'')}
         onClose={()=>setShowGlobalSearch(false)} />}
       {showSettings && <SettingsDialog preferences={preferences} onChange={setPreferences} onClose={() => setShowSettings(false)} />}
+      {detail && revisionNoteId === detail.id && <NoteRevisionDialog key={detail.id}
+        noteId={detail.id} currentVersion={detail.version} dark={dark}
+        canRestore={!saving && !dirty && !hasStagedUploads && !draft?.review_required &&
+          !draft?.resume_paused && !writeInProgress(detail)}
+        onRestore={version => applyNoteAction({restore_version:version})}
+        onClose={() => setRevisionNoteId(null)} />}
       {dialogAction && (
         <LibraryDialog
           key={JSON.stringify(dialogAction)}

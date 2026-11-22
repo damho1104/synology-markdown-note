@@ -69,11 +69,13 @@ Use the trash icon next to an attachment in the note information panel to remove
 
 In an existing HTML note, select a run of text to apply bold, italic, underline, or strikethrough. Insert a table at the end of the note or select a cell in a regular table to add or remove rows and columns. Changes preserve the original HTML outside the edited range.
 
+Open **Revision history** in the note information panel to preview and restore versions listed by the NAS. Completed web saves publish a listable version. A restore applies the selected NAS version to the current note and verifies the title, body, and attachments.
+
 The following limitations apply to avoid data loss when handling unsupported changes:
 
 - Body editing for encrypted notes and notes in the trash.
 - Arbitrary changes to source-preservation blocks.
-- Version history management and offline synchronization do not yet have feature parity with macOS. Permanent deletion is not provided in this scope.
+- Offline synchronization and permanent note deletion.
 
 Your edits and their base version are temporarily stored in the current tab's sessionStorage, separated by user and NAS, and restored after a refresh. They may disappear when the tab closes. Successful logout clears that account's drafts; failed logout retains them. NAS passwords, SIDs, and authentication tokens are not kept in browser storage.
 

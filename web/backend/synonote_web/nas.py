@@ -39,8 +39,10 @@ from .observability import request_id
 
 AUTH = "SYNO.API.Auth"
 NOTE = "SYNO.NoteStation.Note"
+NOTE_VERSION = "SYNO.NoteStation.Note.Version"
 NOTEBOOK = "SYNO.NoteStation.Notebook"
 SOURCE_DOWNLOAD_LIMIT = 32 * 1024 * 1024
+STAGING_SOURCE_PREFIX = "synology-note-upload-"
 ATTACHMENT_PREFIX = "synology-note-attachment-"
 DOWNLOAD_ONLY_PREFIX = ATTACHMENT_PREFIX + "file-"
 IMAGE_MIMES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
@@ -468,14 +470,15 @@ class NasClient(LibraryNasOperations):
 
     @classmethod
     def _list(cls, client: httpx.Client, base: str, login: NasLogin,
-              api: str, key: str, cap: int, identity: str = "object_id") -> list[dict]:
+              api: str, key: str, cap: int, identity: str = "object_id", *,
+              params: dict | None = None) -> list[dict]:
         path, version, as_json = cls._info(client, base, api, cap, min(cap, 2), login)
         rows: list[dict] = []
         seen: set[str] = set()
         expected_total: int | None = None
         while True:
             response = cls._post(client, base, path, cls._fields(api, "list", version, login.sid,
-                {"offset": len(rows), "limit": 500}, as_json))
+                {**(params or {}), "offset": len(rows), "limit": 500}, as_json))
             total, offset, page = response.get("total"), response.get("offset"), response.get(key)
             # Note Station can omit the array entirely for an empty first page.
             # Explicit nulls and incomplete/nonempty pages must still be rejected.
@@ -603,6 +606,71 @@ class NasClient(LibraryNasOperations):
             detail.update(editable=False, read_only_reason="WRITE_IN_PROGRESS", write_in_progress=True)
         return detail
 
+    def _version_history(self, client, base: str, login: NasLogin, note_id: str) -> list[dict]:
+        rows = self._list(client, base, login, NOTE_VERSION, "versions", 2, "version",
+                          params={"object_id": note_id, "filter": {"listable": True}})
+        if any(type(row.get("mtime")) not in (int, float) or not 0 <= row["mtime"] <= 253402300799 for row in rows):
+            raise NasError("NAS_API_ERROR")
+        return [{"version": row["version"], "modified_at": row["mtime"]} for row in rows]
+
+    def _historical_note(self, client, base: str, login: NasLogin, current: dict, version: str) -> dict:
+        note_id = current["id"]
+        if not any(revision["version"] == version for revision in self._version_history(client, base, login, note_id)):
+            raise NasError("REVISION_NOT_FOUND")
+        raw = self._call(client, base, login, NOTE, "get", 3, 3, {"object_id": note_id, "ver": version})
+        if str(raw.get("ver")) != version:
+            raise NasError("NAS_API_ERROR")
+        row = {"parent_id": current["notebook_id"], "encrypt":current["locked"], "recycle":current["trashed"], **raw}
+        historical = self._note(row, note_id)
+        if historical["locked"] or historical["trashed"] or any(
+                entry["name"].lower().startswith(STAGING_SOURCE_PREFIX) for entry in historical["attachments"]):
+            raise NasError("DOCUMENT_READ_ONLY")
+        return historical
+
+    def note_revisions(self, base: str, login: NasLogin, note_id: str, version: str | None = None) -> dict:
+        base = validate_url(base)
+        with self._client() as client:
+            current = self._fetch(client, base, login, note_id)
+            if current["locked"] or current["trashed"]:
+                raise NasError("DOCUMENT_READ_ONLY")
+            if version is None:
+                return {"revisions": self._version_history(client, base, login, note_id)}
+            historical = self._historical_note(client, base, login, current, version)
+            return {key: historical[key] for key in ("version", "title", "html")}
+
+    def restore_revision(self, base: str, login: NasLogin, *, note_id: str, notebook_id: str,
+                         version: str, restore_version: str) -> dict:
+        base = validate_url(base)
+        current = self.fetch(base, login, note_id)
+        if current["version"] != version:
+            raise NasError("REMOTE_CHANGED")
+        if (current["locked"] or current["trashed"] or current["notebook_id"] != notebook_id
+                or current.get("write_in_progress")):
+            raise NasError("DOCUMENT_READ_ONLY")
+        if version == restore_version:
+            raise NasError("REVISION_NOT_FOUND")
+        with self._client() as client:
+            historical = self._historical_note(client, base, login, current, restore_version)
+            path, api_version, as_json = self._info(client, base, NOTE_VERSION, 2, 2, login)
+            latest = self._fetch(client, base, login, note_id)
+            if (latest["version"] != version or latest["locked"] or latest["trashed"]
+                    or latest["notebook_id"] != notebook_id):
+                raise NasError("REMOTE_CHANGED")
+            try:
+                self._post(client, base, path, self._fields(NOTE_VERSION, "restore", api_version, login.sid,
+                    {"object_id": note_id, "ver": restore_version}, as_json), empty=True)
+                restored = self.fetch(base, login, note_id)
+                if (restored["version"] == version or restored["locked"] or restored["trashed"]
+                        or restored.get("write_in_progress")
+                        or restored["notebook_id"] not in {notebook_id, historical["notebook_id"]}
+                        or restored["html"] != historical["html"] or restored["title"] != historical["title"]
+                        or sorted(restored["attachments"], key=lambda file: file["id"])
+                        != sorted(historical["attachments"], key=lambda file: file["id"])):
+                    raise NasError("WRITE_UNCERTAIN")
+                return restored
+            except NasError as exc:
+                raise NasError("WRITE_UNCERTAIN") from exc
+
     def iter_download(self, base: str, login: NasLogin, note_id: str, file_id: str,
                       *, max_size: int = 50_000_000) -> Iterator[bytes]:
         """Yield NAS attachment bytes and close the connection on completion or close()."""
@@ -672,7 +740,7 @@ class NasClient(LibraryNasOperations):
             elif not simple_html(html):
                 raise NasError("DOCUMENT_READ_ONLY")
             fields = {"mtime": int(time.time()),
-                      "commit_msg": {"device": "web", "listable": False},
+                      "commit_msg": {"device": "web", "listable": True},
                       "title": title, "content": html, "brief": html[:180]}
             if note_id:
                 fields.update(object_id=note_id, ver=version, check_conflict=True)
@@ -715,8 +783,8 @@ class NasClient(LibraryNasOperations):
                          version: str | None, notebook_id: str, title: str | None = None,
                          html: str | None = None, upload: tuple[str, bytes] | None = None,
                          streamed_upload: dict | None = None,
-                         deleting: list[str] | None = None) -> tuple[str, str]:
-        params = {"mtime": int(time.time()), "commit_msg": {"device": "web", "listable": False}}
+                         deleting: list[str] | None = None, listable: bool = False) -> tuple[str, str]:
+        params = {"mtime": int(time.time()), "commit_msg": {"device": "web", "listable": listable}}
         if note_id:
             params.update(object_id=note_id, ver=version, check_conflict=True)
         else:
@@ -866,7 +934,7 @@ class NasClient(LibraryNasOperations):
                 operation_id=operation_id, is_staging=True, blocks=blocks, attachment_bindings=bindings).encode()
         except (CLIError, ValueError, KeyError, TypeError) as exc:
             raise NasError("MARKDOWN_UNSUPPORTED") from exc
-        stage_name = f"synology-note-upload-{document_id}-{operation_id}.md"
+        stage_name = f"{STAGING_SOURCE_PREFIX}{document_id}-{operation_id}.md"
         try:
             target, stage_version = self._mutate_markdown(base, login, note_id=note_id, version=version,
                 notebook_id=notebook_id, title=None if old else title, html=None if old else original,
@@ -948,7 +1016,7 @@ class NasClient(LibraryNasOperations):
                 operation_id=operation_id, blocks=blocks, attachment_bindings=bindings, math_attachments=math_metadata).encode()
             final_name = f"synology-note-source-{document_id}.md"
             _, final_version = self._mutate_markdown(base, login, note_id=target, version=body_version,
-                notebook_id=notebook_id, upload=(final_name, final), deleting=deleting)
+                notebook_id=notebook_id, upload=(final_name, final), deleting=deleting, listable=True)
             verified = self.fetch(base, login, target)
             check_state(verified, final_version, title, html)
             published = self._new_attachment(ids - set(deleting), verified, final_name)
@@ -988,7 +1056,7 @@ class NasClient(LibraryNasOperations):
         math = current.get("math_attachments", {})
         keys = {uid for uid, target in bindings.items() if target == file_id}
         if (file_id == source_id or keys.intersection(math)
-                or filename.lower().startswith(("synology-note-source", "synology-note-math-", "synology-note-stage-"))):
+                or filename.lower().startswith(("synology-note-source", "synology-note-math-", STAGING_SOURCE_PREFIX))):
             raise NasError("ATTACHMENT_PROTECTED")
         if filename.lower().endswith(".md") and not filename.startswith(ATTACHMENT_PREFIX):
             try:
@@ -1015,7 +1083,7 @@ class NasClient(LibraryNasOperations):
         expected = {key: entry for key, entry in files.items() if key not in deleting}
         try:
             _, next_version = self._mutate_markdown(base, login, note_id=note_id, version=version,
-                notebook_id=notebook_id, deleting=deleting, upload=upload)
+                notebook_id=notebook_id, deleting=deleting, upload=upload, listable=True)
             result = self.fetch(base, login, note_id)
             if (result["version"] != next_version
                     or any(result.get(key) != current.get(key) for key in
@@ -1060,7 +1128,7 @@ class NasClient(LibraryNasOperations):
             return current
         try:
             _, next_version = self._mutate_markdown(base, login, note_id=note_id, version=version,
-                notebook_id=notebook_id, title=title, html=html)
+                notebook_id=notebook_id, title=title, html=html, listable=True)
             result = self.fetch(base, login, note_id)
             if (result["version"] != next_version or result["html"] != html or result["title"] != title
                     or result["notebook_id"] != notebook_id or result["locked"] or result["trashed"]

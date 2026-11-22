@@ -463,6 +463,34 @@ it('exports pending original HTML text changes without changing source markup', 
   expect(exported).toBe(html.replace('old &amp; text','new &lt; &amp; &gt;'))
   expect(writes).toHaveLength(0)
 })
+it('previews a NAS revision and restores it against the currently opened version', async () => {
+  const original = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (url === '/api/notes/note1/revisions')
+      return Response.json({revisions:[{version:'v0',modified_at:1700000000}]})
+    if (url === '/api/notes/note1/revisions?version=v0')
+      return Response.json({version:'v0',title:'이전 제목',html:'<p>이전 본문</p>'})
+    if (url === '/api/notes/note1' && init?.method === 'PUT') {
+      writes.push(JSON.parse(init.body as string))
+      return Response.json({...note,version:'v2',title:'이전 제목',html:'<p>이전 본문</p>'})
+    }
+    return original(url, init)
+  })
+  mount()
+  await screen.findByLabelText('노트 제목')
+  fireEvent.click(screen.getByRole('button',{name:'노트 정보'}))
+  fireEvent.click(screen.getByRole('button',{name:'수정 이력 조회'}))
+  const revision = await screen.findByRole('button',{name:/버전 v0/})
+  fireEvent.click(revision)
+  await screen.findByText('이전 제목')
+  fireEvent.click(screen.getByRole('button',{name:'이 버전으로 복원'}))
+  expect(writes).toEqual([])
+  fireEvent.click(screen.getByRole('button',{name:'복원 확인'}))
+  await waitFor(() => expect(screen.queryByRole('dialog',{name:'노트 수정 이력'})).toBeNull())
+  expect((screen.getByLabelText('노트 제목') as HTMLInputElement).value).toBe('이전 제목')
+  expect(writes).toEqual([{version:'v1',title:note.title,notebook_id:'book1',restore_version:'v0'}])
+})
+
 it('removes a confirmed general attachment from the inspector and protects source data', async () => {
   const document = {...note, attachments:[{id:'file1',name:'문서.pdf',ref:null},
     {id:'source',name:'synology-note-source.md',ref:null}], source_file_id:'source'}

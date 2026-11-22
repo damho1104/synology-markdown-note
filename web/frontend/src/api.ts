@@ -64,6 +64,7 @@ const messages: Record<string, string> = {
   ATTACHMENT_NOT_FOUND: "첨부파일을 찾을 수 없습니다. 노트를 다시 열어 주세요.",
   ATTACHMENT_IN_USE: "본문에서 사용 중인 첨부파일입니다. 먼저 본문의 참조를 제거하세요.",
   ATTACHMENT_PROTECTED: "노트 복원에 사용하는 첨부파일은 앱에서 관리합니다.",
+  REVISION_NOT_FOUND: "해당 수정 이력을 찾을 수 없습니다. 이력 목록을 다시 열어 주세요.",
   UPLOAD_NOT_READY: "임시 파일을 아직 저장에 사용할 수 없습니다. 업로드 상태를 확인하세요.",
   JSON_REQUIRED: "요청 형식이 올바르지 않습니다.",
 };
@@ -76,6 +77,10 @@ export class ApiFailure extends Error {
     super(messages[code] ?? `요청에 실패했습니다 (${status}).`);
     this.name = "ApiFailure";
   }
+}
+
+export function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : "요청 처리 중 오류가 발생했습니다.";
 }
 
 export const SESSION_EXPIRED_EVENT = "synonote:session-expired";

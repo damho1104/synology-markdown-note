@@ -1034,6 +1034,43 @@ input {
 }
 .native-dark .native-settings-dialog { color-scheme: dark; }
 .native-settings-dialog::backdrop { background: #0005; }
+.note-revision-dialog {
+  padding: 16px;
+}
+.note-revision-dialog h2 {
+  font-size: 16px;
+  font-weight: 650;
+}
+.note-revision-dialog > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.note-revision-list {
+  max-height: 180px;
+  overflow: auto;
+  list-style: none;
+  padding: 0;
+}
+.note-revision-list button {
+  width: 100%;
+  text-align: left;
+  margin-bottom: 4px;
+}
+.note-revision-preview {
+  height: min(36vh, 320px);
+  margin: 8px 0;
+}
+.note-revision-preview .note-preview { height: 100%; }
+.note-revision-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.note-revision-confirm p { margin-right: auto; }
 .settings-window {
   display: flex;
   flex-direction: column;

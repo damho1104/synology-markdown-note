@@ -330,6 +330,8 @@ class Store:
             db.execute("UPDATE sessions SET credential=? WHERE token_hash=?",
                        (credential, token_hash(token)))
 
+    NOTEBOOK_DELETE_TARGET = "library:notebook-delete"
+
     def start_write(self, operation_id: str, owner: str, target: str,
                     note_id: str | None, title: str, intent: dict, *,
                     client_request_id: str | None = None, request_hash: str | None = None,
@@ -338,6 +340,12 @@ class Store:
         encrypted = self.cipher.encrypt(json.dumps(intent, ensure_ascii=False).encode())
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
+            # A notebook deletion also changes its notes. Reserve it before
+            # listing them so concurrent creates or moves cannot change that set.
+            if db.execute("""SELECT 1 FROM write_target_locks
+                WHERE owner=? AND (target=? OR ?=?) LIMIT 1""",
+                          (owner, self.NOTEBOOK_DELETE_TARGET, target, self.NOTEBOOK_DELETE_TARGET)).fetchone():
+                return False
             if client_request_id:
                 if db.execute('SELECT 1 FROM create_receipts WHERE owner=? AND client_request_id=?',
                               (owner, client_request_id)).fetchone():

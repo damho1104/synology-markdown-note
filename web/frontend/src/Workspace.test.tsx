@@ -462,6 +462,33 @@ it('exports pending original HTML text changes without changing source markup', 
   expect(exported).toBe(html.replace('old &amp; text','new &lt; &amp; &gt;'))
   expect(writes).toHaveLength(0)
 })
+it('confirms notebook deletion, then clears the removed notebook and note', async () => {
+  const original = vi.mocked(fetch).getMockImplementation()!
+  const actions = [] as unknown[]
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (url === '/api/library/action') {
+      actions.push(JSON.parse(init?.body as string))
+      return Response.json({})
+    }
+    if (actions.length && url === '/api/notebooks') return Response.json({notebooks: []})
+    if (actions.length && url === '/api/notes') return Response.json({notes: [{...note, trashed: true}]})
+    return original(url, init)
+  })
+  mount()
+  await screen.findByLabelText('노트 제목')
+  fireEvent.click(screen.getByRole('button', {name: '프로젝트 책장 펼치기'}))
+  fireEvent.contextMenu(screen.getByRole('button', {name: '업무'}))
+  fireEvent.click(screen.getByRole('button', {name: '메모장 삭제…'}))
+  fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', {name: '취소'}))
+  expect(actions).toEqual([])
+  fireEvent.contextMenu(screen.getByRole('button', {name: '업무'}))
+  fireEvent.click(screen.getByRole('button', {name: '메모장 삭제…'}))
+  fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', {name: '삭제'}))
+  await waitFor(() => expect(screen.queryByRole('button', {name: '업무'})).toBeNull())
+  expect(actions).toEqual([{kind: 'notebook', action: 'delete', id: 'book1'}])
+  expect(window.location.search).not.toMatch(/[?&](n|note)=/)
+})
+
 it('remaps a renamed shelf, expansion and prior history without adding a visit',async()=>{
   let stack='프로젝트'
   const original=vi.mocked(fetch).getMockImplementation()!

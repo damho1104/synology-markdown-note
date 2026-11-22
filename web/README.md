@@ -6,6 +6,8 @@ See the [self-hosting guide](SELF-HOSTING.md) for installation and operation. It
 
 This web client is based on the macOS app's `LibraryView` and `EditorView`. It provides a sidebar that expands notebooks under bookshelves; sorting by title, date added, and date modified; source, split, and reading views; CodeMirror Markdown editing; Mermaid hand-drawn diagrams; KaTeX previews; a note information panel; internal links, graphs, and backlinks; and attachment downloads. It supports changing favorites and tags, moving notes to and restoring them from the trash, moving notes, and creating, renaming, and moving bookshelves and notebooks.
 
+Right-click a notebook or bookshelf in the sidebar to delete it. Deleting a notebook moves its notes to the trash. Deleting a bookshelf clears the grouping and keeps its notebooks and notes.
+
 ## Appearance and editor settings
 
 You can check the current app version under **About → Version** at the bottom of Settings.

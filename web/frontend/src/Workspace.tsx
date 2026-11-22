@@ -1443,9 +1443,12 @@ export function Workspace({
     }
   }
   async function libraryAction(action: LibraryAction) {
-    if (saving) return;
+    if (saving || writeInFlight.current) throw new Error("진행 중인 저장이 끝난 뒤 다시 시도하세요.");
     if (dirty)
       throw new Error("편집 내용을 저장하거나 취소한 다음 실행하세요.");
+    if (action.kind === "notebook" && action.action === "delete" &&
+        (hasStagedUploads || draft?.review_required || draft?.resume_paused))
+      throw new Error("보관된 편집본과 첨부파일을 먼저 확인하세요.");
     setSavingAction("library");
     setPendingError("");
     try {
@@ -1465,6 +1468,30 @@ export function Workspace({
           const next = [...new Set(current.map(name => name === action.id ? action.name! : name))];
           savePreference("expandedStacks", next); return next;
         });
+      }
+      if (action.action === "delete") {
+        const current = historyLocation.current.route;
+        if (action.kind === "stack") {
+          if (current.shelf === action.id) commitRoute({...current, shelf: ""}, true);
+          setExpandedStacks(previous => {
+            const next = previous.filter(name => name !== action.id);
+            savePreference("expandedStacks", next);
+            return next;
+          });
+        } else if (action.kind === "notebook") {
+          const removed = notebookById.get(action.id ?? "");
+          const notebookRemoved = current.notebook === action.id;
+          const shelfRemoved = current.shelf === removed?.stack && !notebooks.some(
+            book => book.id !== action.id && book.stack === current.shelf,
+          );
+          const noteRemoved = notes.some(note => note.id === current.note && note.notebook_id === action.id && !note.trashed);
+          if (notebookRemoved || shelfRemoved || noteRemoved) {
+            commitRoute({...current, shelf: shelfRemoved ? null : current.shelf,
+              notebook: notebookRemoved ? null : current.notebook,
+              note: noteRemoved || notebookRemoved ? null : current.note,
+              compose: !notebookRemoved && current.compose}, true);
+          }
+        }
       }
       await Promise.all([loadLists(), loadPending()]);
       if (action.kind === "note") setRevision((n) => n + 1);
@@ -2530,6 +2557,20 @@ export function Workspace({
               책장으로 이동…
             </button>
           )}
+          <button
+            onClick={() => {
+              const label = contextMenu.kind === "stack" ? "책장" : "메모장";
+              const name = contextMenu.kind === "stack" ? contextMenu.id : notebookById.get(contextMenu.id)?.name;
+              setDialogAction({
+                request: {kind: contextMenu.kind, id: contextMenu.id, action: "delete"},
+                title: name ? `‘${name}’ ${label}을 삭제할까요?` : `${label}을 삭제할까요?`,
+                mode: "delete",
+              });
+              setContextMenu(null);
+            }}
+          >
+            {contextMenu.kind === "stack" ? "책장 삭제…" : "메모장 삭제…"}
+          </button>
           <button onClick={() => setContextMenu(null)}>닫기</button>
         </div>
       )}

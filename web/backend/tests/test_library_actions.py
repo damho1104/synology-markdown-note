@@ -92,6 +92,13 @@ class MockStation:
             if method == "create":
                 self.books.append({"object_id": "newbook", "title": params["title"], "stack": ""})
                 data = {"object_id": "newbook"}
+            elif method == "delete":
+                assert params["recursive"] is False
+                book_id = params["object_id"]
+                self.books = [book for book in self.books if book["object_id"] != book_id]
+                if self.note["parent_id"] == book_id:
+                    self.note.update(recycle=True, parent_id="recycle", old_parent_id=book_id)
+                data = None
             else:
                 ids = params["object_id"]
                 ids = ids if isinstance(ids, list) else [ids]
@@ -103,7 +110,7 @@ class MockStation:
             assert params["stack_id"] == "책장 & A#123"
             for book in self.books:
                 if book["stack"] == "책장 & A":
-                    book["stack"] = params["name"]
+                    book["stack"] = "" if method == "delete" else params["name"]
             data = None
         else:
             raise AssertionError((api, method))
@@ -150,6 +157,51 @@ def harness(tmp_path, monkeypatch):
         return client.post("/api/library/action", json=body,
                            headers={"Origin": "http://testserver", "X-CSRF-Token": csrf, **headers})
     return station, store, post, client
+
+
+@pytest.mark.parametrize("recycle_type", [bool, int])
+def test_delete_notebook_keeps_notes_in_recycle_bin(harness, recycle_type):
+    station, store, post, _ = harness
+    station.note["recycle"] = recycle_type(False)
+    station.corrupt = lambda remote: remote.note.update(recycle=recycle_type(True))
+    response = post({"kind": "notebook", "action": "delete", "id": "book1"})
+    assert response.status_code == 200, response.text
+    assert station.mutations[0][:3] == (BOOK, "delete", {"object_id": "book1", "recursive": False})
+    assert station.note["recycle"] and station.note["old_parent_id"] == "book1"
+    assert [book["object_id"] for book in station.books] == ["book2"]
+    assert not store.pending_writes(OWNER)
+
+
+def test_delete_stack_keeps_notebooks_and_notes(harness):
+    station, store, post, _ = harness
+    previous_note = deepcopy(station.note)
+    response = post({"kind": "stack", "action": "delete", "id": "책장 & A"})
+    assert response.status_code == 200, response.text
+    assert station.mutations[0][:3] == (STACK, "delete", {"stack_id": "책장 & A#123"})
+    assert [book["object_id"] for book in station.books] == ["book1", "book2"]
+    assert not any(book["stack"] for book in station.books)
+    assert station.note == previous_note
+    assert not store.pending_writes(OWNER)
+
+
+def test_delete_notebook_requires_review_of_unconfirmed_account_writes(harness):
+    station, store, post, _ = harness
+    assert store.start_write("pending-note", OWNER, "note1", "note1", "Note", {})
+    response = post({"kind": "notebook", "action": "delete", "id": "book1"})
+    assert response.status_code == 409, response.text
+    assert not station.mutations
+
+
+def test_delete_notebook_unverified_recycle_result_is_not_replayed(harness):
+    station, store, post, _ = harness
+    station.corrupt = lambda remote: remote.note.update(recycle=False)
+    command = {"kind": "notebook", "action": "delete", "id": "book1"}
+    assert post(command).status_code == 409
+    assert store.pending_writes(OWNER)[0]["status"] == "uncertain"
+    assert post(command).status_code == 409
+    assert not store.start_write("another", OWNER, "note1", "note1", "Note", {})
+    assert store.start_write("different-account", "other-owner", "note1", "note1", "Note", {})
+    assert len(station.mutations) == 1
 
 
 @pytest.mark.parametrize("action,value,field,want", [
@@ -380,8 +432,8 @@ def test_trash_relocation_cannot_lose_original_notebook_binding(harness):
     {"kind": "note", "id": "note1", "action": "favorite", "version": "v1", "value": "true"},
     {"kind": "note", "id": "note1", "action": "tags", "version": "v1", "value": [1]},
     {"kind": "note", "id": "../bad", "action": "trash", "version": "v1"},
-    {"kind": "notebook", "id": "book1", "action": "delete"},
-    {"kind": "stack", "id": "old", "action": "delete"},
+    {"kind": "notebook", "id": "book1", "action": "delete", "value": True},
+    {"kind": "stack", "id": "old", "action": "delete", "name": "other"},
     {"kind": "note", "id": "note1", "action": "delete", "version": "v1"},
     {"kind": "stack", "action": "create", "name": "empty", "value": []},
     {"kind": "notebook", "action": "create", "name": " "},

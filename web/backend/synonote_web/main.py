@@ -56,13 +56,18 @@ class TextChange(BaseModel):
 
 
 class StructureEdit(BaseModel):
-    kind: Literal["bold", "italic", "underline", "strike", "insert_table", "delete_table",
-                  "row_before", "row_after", "column_before", "column_after", "delete_row", "delete_column"]
+    kind: Literal["bold", "italic", "underline", "strike", "subscript", "superscript", "insert_table", "delete_table",
+                  "row_before", "row_after", "column_before", "column_after", "delete_row", "delete_column",
+                  "font_family", "font_size", "text_color", "highlight_color", "link", "unlink",
+                  "clear_format", "paragraph", "align", "list", "indent", "outdent", "check_item"]
     index: int | None = Field(default=None, ge=0)
     start: int | None = Field(default=None, ge=0)
     end: int | None = Field(default=None, ge=0)
     row: int | None = Field(default=None, ge=0)
     column: int | None = Field(default=None, ge=0)
+    value: str | None = Field(default=None, max_length=2048)
+    rows: int | None = Field(default=None, ge=1, le=30)
+    columns: int | None = Field(default=None, ge=1, le=20)
 
 
 class MathImageInput(BaseModel):
@@ -712,7 +717,9 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
             raise HTTPException(422, detail="INVALID_UPLOAD") from exc
         if note_id is not None:
             detail = await run_in_threadpool(nas.fetch, base, active, note_id)
-            if not detail.get("editable") or "markdown" not in detail or detail["notebook_id"] != notebook_id:
+            if (detail.get("locked") or detail.get("trashed") or detail.get("write_in_progress")
+                    or not ((detail.get("editable") and "markdown" in detail) or "html_text_preview" in detail)
+                    or detail["notebook_id"] != notebook_id):
                 raise HTTPException(403, detail="DOCUMENT_READ_ONLY")
         target = note_id if note_id is not None else "draft-create:" + client_request_id
         receipt = await run_in_threadpool(uploads.reserve, owner, draft_id, upload_id, target, notebook_id, name, size)
@@ -817,7 +824,9 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
         csrf_guard(request, csrf)
         if note_id is None and body.client_request_id is None:
             raise HTTPException(422, detail='CLIENT_REQUEST_ID_REQUIRED')
-        if body.uploads and (not body.draft_id or body.markdown is None or body.text_changes is not None):
+        if body.uploads and (not body.draft_id or body.structure_edit is not None
+                or ((body.markdown is None) == (body.text_changes is None))
+                or (body.text_changes is not None and not note_id)):
             raise HTTPException(422, detail="INVALID_UPLOAD")
         excluded = {"draft_id", "uploads"}
         excluded.update(field for field in ("structure_edit", "remove_attachment_id", "restore_version")
@@ -874,7 +883,8 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
                 result = nas.write_html_text(base, active, note_id=note_id, notebook_id=body.notebook_id,
                     title=body.title, version=body.version, text_layout=body.text_layout,
                     changes=[v.model_dump() for v in body.text_changes or []],
-                    **({"structure_edit": body.structure_edit.model_dump()} if body.structure_edit is not None else {}))
+                    **({"structure_edit": body.structure_edit.model_dump()} if body.structure_edit is not None else {}),
+                    **({"uploads": attachments, "operation_id": operation_id} if attachments else {}))
             elif body.markdown is not None:
                 result = nas.write_markdown(base, active, note_id=note_id, notebook_id=body.notebook_id,
                                            title=body.title, markdown=body.markdown, version=body.version,

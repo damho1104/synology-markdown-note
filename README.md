@@ -198,3 +198,13 @@ PyInstaller builds a standalone executable at `cli/dist/synonote`. See the [CLI 
 This project's own source code and documentation are available under the [MIT License](LICENSE). External libraries and resources retain their respective licenses. See the notices for the bundled [Mermaid](Sources/SynologyNote/Resources/MERMAID-LICENSE.txt) and [KaTeX](Sources/SynologyNote/Resources/KATEX-LICENSE.txt) resources.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and [SECURITY.md](SECURITY.md) to report security issues.
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=damho1104%2Fsynology-markdown-note&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=damho1104/synology-markdown-note&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=damho1104/synology-markdown-note&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=damho1104/synology-markdown-note&type=date&legend=top-left" />
+ </picture>
+</a>

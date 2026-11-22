@@ -96,6 +96,7 @@ class WriteInput(BaseModel):
     structure_edit: StructureEdit | None = None
     remove_attachment_id: str | None = Field(default=None, max_length=256)
     restore_version: str | None = Field(default=None, min_length=1, max_length=128)
+    expected_html: str | None = None
     client_request_id: str | None = Field(default=None, pattern=r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
     notebook_id: str = Field(min_length=1, max_length=256)
     version: str | None = Field(default=None, max_length=128)
@@ -811,6 +812,9 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
             raise HTTPException(422, detail="INVALID_NOTE")
         if note_id and not body.version or not note_id and body.version:
             raise HTTPException(422, detail="VERSION_REQUIRED")
+        if body.expected_html is not None and (not note_id or
+                (body.text_changes is None and body.structure_edit is None)):
+            raise HTTPException(422, detail="HTML_PATCH_INVALID")
         if body.structure_edit is not None and (not note_id or body.markdown is not None or body.text_changes):
             raise HTTPException(422, detail="HTML_PATCH_INVALID")
         if body.remove_attachment_id is not None:
@@ -828,7 +832,8 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
                 or ((body.markdown is None) == (body.text_changes is None))
                 or (body.text_changes is not None and not note_id)):
             raise HTTPException(422, detail="INVALID_UPLOAD")
-        excluded = {"draft_id", "uploads"}
+        # The preview is a preflight assertion, not part of the stored edit intent.
+        excluded = {"draft_id", "uploads", "expected_html"}
         excluded.update(field for field in ("structure_edit", "remove_attachment_id", "restore_version")
                         if getattr(body, field) is None)
         intent = body.model_dump(exclude=excluded)
@@ -884,6 +889,7 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
                     title=body.title, version=body.version, text_layout=body.text_layout,
                     changes=[v.model_dump() for v in body.text_changes or []],
                     **({"structure_edit": body.structure_edit.model_dump()} if body.structure_edit is not None else {}),
+                    **({"expected_html": body.expected_html} if body.expected_html is not None else {}),
                     **({"uploads": attachments, "operation_id": operation_id} if attachments else {}))
             elif body.markdown is not None:
                 result = nas.write_markdown(base, active, note_id=note_id, notebook_id=body.notebook_id,

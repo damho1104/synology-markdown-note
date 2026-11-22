@@ -348,6 +348,7 @@ export function Workspace({
   const [saveFailure, setSaveFailure] = useState<"safe" | "conflict" | "uncertain" | null>(null);
   const writeInFlight = useRef(false);
   const saveHasMore = useRef(false);
+  const pendingNoteAction = useRef<{structureEdit?: StructureEdit; historyDirection?: "undo" | "redo"} | null>(null);
   const saveLatest = useRef<() => Promise<boolean>>(async () => false);
   const createdDraft = useRef<{note: NoteDetail; draft: Draft} | null>(null);
   const [query, setQuery] = useState("");
@@ -436,7 +437,7 @@ export function Workspace({
       : route.note
         ? `note:${route.note}`
         : null;
-  useEffect(() => { setPreviewLine(undefined); }, [activeKey]);
+  useEffect(() => { setPreviewLine(undefined); pendingNoteAction.current = null; }, [activeKey]);
   const activeDraftKey = activeKey ? draftPrefix + activeKey : null;
   const original = detail && !route.compose ? detail : null;
   const dirty = !!(
@@ -1572,6 +1573,36 @@ export function Workspace({
       setSavingAction(null);
     }
   }
+  function dispatchNoteAction(queued: {structureEdit?: StructureEdit; historyDirection?: "undo" | "redo"}) {
+    if (queued.historyDirection) {
+      const version = queued.historyDirection === "undo" ? currentHistory?.undo.at(-1) : currentHistory?.redo.at(-1);
+      if (version) void applyNoteAction({restore_version: version}, queued.historyDirection);
+    } else if (queued.structureEdit && detail?.html_text_layout) {
+      void applyNoteAction({structure_edit: queued.structureEdit, text_layout: detail.html_text_layout});
+    }
+  }
+  function queueNoteAction(queued: {structureEdit?: StructureEdit; historyDirection?: "undo" | "redo"}) {
+    if (!detail || !draft || !editing || composing || draft.review_required || draft.resume_paused) return;
+    if (!dirty && !saving && !saveFailure) {
+      dispatchNoteAction(queued);
+      return;
+    }
+    // 편집 중이거나 저장 중이어도 동작하게 한다: 보류 중인 편집은 먼저 저장하고,
+    // 저장이 끝난 뒤 렌더된 최신 상태로 큐에 쌓은 동작을 실행한다.
+    pendingNoteAction.current = queued;
+    if (dirty && !saving && !saveFailure) void saveLatest.current();
+  }
+  useEffect(() => {
+    const queued = pendingNoteAction.current;
+    if (!queued) return;
+    if (saveFailure || !editing) {
+      pendingNoteAction.current = null;
+      return;
+    }
+    if (saving || dirty || composing || !draft || draft.review_required || draft.resume_paused) return;
+    pendingNoteAction.current = null;
+    dispatchNoteAction(queued);
+  }, [editing, saving, dirty, composing, saveFailure, draft, detail, formatHistory]);
 
   async function importMarkdown(files: File[]) {
     if (!files.length || !selectedNotebook || route.compose || saving || writeInFlight.current) return;
@@ -2556,23 +2587,14 @@ export function Workspace({
                           changes={reviewingUploads ? formattedRecoveryChanges(detail, draft) ?? [] : draft.text_changes}
                           editable={editing && !reviewingUploads}
                           dark={dark}
-                          structureDisabled={saving || dirty || composing || draft.review_required || draft.resume_paused}
+                          structureDisabled={composing || draft.review_required || draft.resume_paused}
                           onAttach={canAttachFormatted ? () => attachmentInput.current?.click() : undefined}
                           attachmentPath={bodyAttachmentPath}
-                          canUndo={!!currentHistory?.undo.length}
+                          canUndo={!!currentHistory?.undo.length || dirty}
                           canRedo={!!currentHistory?.redo.length}
-                          onUndo={()=>{
-                            const version = currentHistory?.undo.at(-1);
-                            if (version) void applyNoteAction({restore_version:version},"undo");
-                          }}
-                          onRedo={()=>{
-                            const version = currentHistory?.redo.at(-1);
-                            if (version) void applyNoteAction({restore_version:version},"redo");
-                          }}
-                          onStructureEdit={(edit) => {
-                            if (detail.html_text_layout)
-                              void applyNoteAction({structure_edit:edit, text_layout:detail.html_text_layout});
-                          }}
+                          onUndo={() => queueNoteAction({historyDirection: "undo"})}
+                          onRedo={() => queueNoteAction({historyDirection: "redo"})}
+                          onStructureEdit={(edit) => queueNoteAction({structureEdit: edit})}
                           onChange={(change) => {
                             const original = detail.html_text_blocks?.find(
                               (b) => b.index === change.index,

@@ -531,6 +531,34 @@ it('undoes and redoes acknowledged formatting against the displayed version', as
   expect(writes[2]).toMatchObject({version:'v3',restore_version:'v2'})
 })
 
+it('undoes a still-dirty text edit by saving it first instead of locking the toolbar', async () => {
+  const formatted = (version: string, text: string) => ({...note, editable:false, version,
+    html:`<p>${text}</p>`,
+    html_text_preview:`<p><span data-edit-token="${version}" data-text-index="0">${text}</span></p>`,
+    html_text_token:version, html_text_blocks:[{index:0,text}], html_text_layout:'layout'})
+  const fetcher = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (url === '/api/notes/note1' && init?.method === 'PUT') {
+      writes.push(JSON.parse(init.body as string))
+      const body = writes[writes.length - 1]
+      if (body.restore_version) return Response.json(formatted(`v${writes.length + 1}`, 'original'))
+      return Response.json(formatted(`v${writes.length + 1}`, 'typed'))
+    }
+    return url === '/api/notes/note1' ? Response.json(formatted('v1', 'original')) : fetcher(url, init)
+  })
+  mount()
+  const editor = await screen.findByRole('textbox', {name:'본문 편집기'})
+  const span = editor.querySelector('[data-text-index="0"]')!
+  span.textContent = 'typed'; fireEvent.input(span)
+  const undo = screen.getByRole('button', {name:'실행 취소'}) as HTMLButtonElement
+  expect(undo.disabled).toBe(false)
+  fireEvent.click(undo)
+  await waitFor(() => expect(writes).toHaveLength(2), {timeout: 2000})
+  expect(writes[0]).toMatchObject({version:'v1', text_changes:[{index:0,text:'typed'}]})
+  expect(writes[1]).toMatchObject({version:'v2', restore_version:'v1'})
+  await waitFor(() => expect(editor.querySelector('[data-text-index="0"]')!.textContent).toBe('original'))
+})
+
 it('keeps earlier undo history and records a body edit saved with an attachment', async () => {
   const formatted = (version: string, text = 'original', attachments: {id:string;name:string}[] = []) => ({
     ...note, editable:false, version, attachments, html:`<p>${text}</p>`,

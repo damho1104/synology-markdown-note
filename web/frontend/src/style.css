@@ -1018,6 +1018,7 @@ input {
 }
 .original-toolbar-button:not(:disabled):hover,
 .original-toolbar-button[aria-expanded="true"],
+.original-toolbar-button[aria-pressed="true"],
 :is(.original-toolbar-select, .original-toolbar-color):hover:has(> :enabled) {
   background: var(--selection);
 }

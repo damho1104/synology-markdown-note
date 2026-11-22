@@ -38,11 +38,11 @@ export type StructureEdit = ({kind:FormatKind} & Selection) | ({kind:TableKind} 
 const fonts = ["system-ui", "Arial", "Georgia", "Times New Roman", "Helvetica", "Apple SD Gothic Neo", "AppleMyungjo", "Menlo"];
 type ImageLoad = { controller: AbortController; images: HTMLImageElement[]; url?: string };
 
-function ToolbarButton({label, icon:Icon, disabled, onClick}: {
-  label:string; icon:LucideIcon; disabled?:boolean; onClick:() => void;
+function ToolbarButton({label, icon:Icon, disabled, pressed, onClick}: {
+  label:string; icon:LucideIcon; disabled?:boolean; pressed?:boolean; onClick:() => void;
 }) {
   return <button type="button" className="original-toolbar-button" aria-label={label} title={label}
-    disabled={disabled} onClick={onClick}>
+    disabled={disabled} aria-pressed={pressed} onClick={onClick}>
     <Icon size={17} strokeWidth={1.75} aria-hidden="true" />
   </button>;
 }
@@ -122,7 +122,7 @@ export function OriginalEditor({
   onChange,
   onStructureEdit,
   structureDisabled = false,
-  onAttach, onUndo, onRedo, canUndo, canRedo,
+  onAttach, onUndo, onRedo, canUndo, canRedo, restoreSelection,
   attachmentPath,
 }: {
   html: string;
@@ -140,8 +140,10 @@ export function OriginalEditor({
   canUndo?: boolean;
   canRedo?: boolean;
   attachmentPath?: (reference: string) => string | undefined;
+  restoreSelection?: Selection;
 }) {
   const root = useRef<HTMLDivElement>(null);
+  const restoredSelection = useRef<Selection>(undefined);
   const imageLoads = useRef(new Map<string, ImageLoad>());
   const [showMore, setShowMore] = useState(false);
   const moreId = useId();
@@ -260,6 +262,23 @@ export function OriginalEditor({
       loads.clear();
     };
   }, []);
+  useLayoutEffect(() => {
+    if (!editable || !restoreSelection || restoredSelection.current === restoreSelection) return;
+    const {index,start,end} = restoreSelection;
+    const span = root.current?.querySelector<HTMLElement>(`[data-edit-token="${token}"][data-text-index="${index}"]`);
+    const text = span?.firstChild;
+    const selection = window.getSelection();
+    if (!span || !text || text.nodeType !== Node.TEXT_NODE || !selection || end > (text.textContent?.length ?? 0)) return;
+    restoredSelection.current = restoreSelection;
+    span.focus({preventScroll:true});
+    const range = document.createRange();
+    range.setStart(text,start);
+    range.setEnd(text,end);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    setBlock({token,index});
+    setSelection(start === end ? null : {token,index,start,end});
+  }, [editable,restoreSelection,token]);
   function selectCell(node: Element | null) {
     const table = node?.closest<HTMLElement>("table");
     const target = node?.closest<HTMLElement>("td[data-table-row], th[data-table-row]");
@@ -267,8 +286,9 @@ export function OriginalEditor({
       target.closest("table") === table && root.current?.contains(target) ? {token, index:Number(table.dataset.tableIndex),
         row:Number(target.dataset.tableRow), column:Number(target.dataset.tableColumn)} : null);
   }
+  const structuralEditing = !!onStructureEdit && editable;
   useLayoutEffect(() => {
-    if (!onStructureEdit || !editable) return;
+    if (!structuralEditing) return;
     const select = () => {
       const current = window.getSelection();
       const range = current?.rangeCount ? current.getRangeAt(0) : null;
@@ -291,15 +311,22 @@ export function OriginalEditor({
       setSelection({token, index:Number(block.dataset.textIndex), start:offset, end:offset+range.toString().length});
       selectCell(element);
     };
+    if (root.current?.contains(window.getSelection()?.anchorNode ?? null)) select();
     document.addEventListener("selectionchange", select);
     return () => document.removeEventListener("selectionchange", select);
-  }, [editable, onStructureEdit, token]);
+  }, [structuralEditing, token]);
   const selectionDisabled = structureDisabled || !selected;
   const blockDisabled = structureDisabled || activeBlock === undefined;
+  const formatTags: Record<FormatKind,string> = {
+    bold:"strong,b", italic:"em,i", underline:"u", strike:"s,strike,del", subscript:"sub", superscript:"sup",
+  };
   function formatButton(kind: FormatKind) {
     const [label,icon] = formats[kind];
+    const block = activeBlock === undefined ? undefined
+      : root.current?.querySelector(`[data-edit-token="${token}"][data-text-index="${activeBlock}"]`);
+    const formatted = block?.parentElement?.closest(formatTags[kind]);
     return <ToolbarButton key={kind} label={label} icon={icon} disabled={selectionDisabled}
-      onClick={()=>selected && onStructureEdit?.({kind,index:selected.index,start:selected.start,end:selected.end})} />;
+      pressed={!!formatted && !!root.current?.contains(formatted)} onClick={()=>selected && onStructureEdit?.({kind,index:selected.index,start:selected.start,end:selected.end})} />;
   }
   return (
     <>

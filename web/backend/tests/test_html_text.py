@@ -226,13 +226,21 @@ def test_html_patch_endpoint_acks_stable_slots_and_checks_layout_migration(tmp_p
                'text_changes':[dict(index=a,text=''),dict(index=b,text=' D ')]}
     stale=client.put('/api/notes/n1',json={**next_body,'text_layout':first['html_text_layout']},headers=headers)
     assert stale.status_code==422 and nas.mutations==1
-    saved=client.put('/api/notes/n1',json=next_body,headers=headers)
+    wrong_preview=client.put('/api/notes/n1',json={**next_body,'expected_html':'<p>wrong target</p>'},headers=headers)
+    assert wrong_preview.status_code == 422 and wrong_preview.json()['error'] == 'HTML_PATCH_INVALID'
+    assert nas.mutations == 1
+    saved=client.put('/api/notes/n1',json={**next_body,
+        'expected_html':'<p><strong></strong> D <em>C</em></p>'},headers=headers)
     assert saved.status_code==200 and saved.json()['html']=='<p><strong></strong> D <em>C</em></p>'
     assert nas.mutations==2
     current = saved.json()
-    with_table = client.put('/api/notes/n1', json={**next_body, 'version':current['version'],
-        'text_layout':current['html_text_layout'], 'text_changes':[],
-        'structure_edit':{'kind':'insert_table'}}, headers=headers)
+    table_edit = {**next_body, 'version':current['version'], 'text_layout':current['html_text_layout'],
+                  'text_changes':[], 'structure_edit':{'kind':'insert_table'}}
+    wrong_preview = client.put('/api/notes/n1', json={**table_edit,'expected_html':current['html']}, headers=headers)
+    assert wrong_preview.status_code == 422 and wrong_preview.json()['error'] == 'HTML_PATCH_INVALID'
+    assert nas.mutations == 2
+    expected = current['html'] + '<table><tbody>' + '<tr><td></td><td></td></tr>' * 2 + '</tbody></table>'
+    with_table = client.put('/api/notes/n1', json={**table_edit,'expected_html':expected}, headers=headers)
     assert with_table.status_code == 200
     assert '<table>' in with_table.json()['html'] and 'data-table-index="0"' in with_table.json()['html_text_preview']
     assert nas.mutations == 3

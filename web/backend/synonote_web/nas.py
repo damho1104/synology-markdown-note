@@ -1161,7 +1161,7 @@ class NasClient(LibraryNasOperations):
     def write_html_text(self, base: str, login: NasLogin, *, note_id: str, notebook_id: str,
                         title: str, version: str, changes: list[dict], text_layout: str | None = None,
                         structure_edit: dict | None = None, uploads: list[dict] | None = None,
-                        operation_id: str | None = None) -> dict:
+                        operation_id: str | None = None, expected_html: str | None = None) -> dict:
         current = self.fetch(base, login, note_id)
         if current["version"] != version:
             raise NasError("REMOTE_CHANGED")
@@ -1174,6 +1174,8 @@ class NasClient(LibraryNasOperations):
                 raise ValueError()
             html = (apply_structure(current["html"], structure_edit) if structure_edit
                     else patch_html_text(current["html"], changes))
+            if expected_html is not None and html != expected_html:
+                raise ValueError("The local preview differs from the validated edit")
             if structure_edit and len(html) > max(2_000_000, len(current["html"])):
                 raise ValueError()
         except (ValueError, KeyError, TypeError) as exc:

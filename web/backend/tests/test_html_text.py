@@ -294,6 +294,46 @@ def test_paragraph_toolbar_keeps_other_paragraphs(kind, value, expected):
     assert apply_structure(source, dict(kind=kind, value=value, index=index)) == expected + source[8:]
 
 
+@pytest.mark.parametrize(("source", "expected"), [
+    ("<div id='outer'>First<p>Second</p><p>Third</p></div>",
+     "<div id='outer'><p>First</p><p>Second</p><p>Third</p></div>"),
+    ("<div><strong>First</strong> &amp; next<p>Second</p></div>",
+     "<div><p><strong>First</strong> &amp; next</p><p>Second</p></div>"),
+])
+def test_paragraph_style_keeps_nested_blocks_and_container_attributes(source, expected):
+    from synonote_web.html_structure import apply_structure
+
+    index = next(i for i, block in enumerate(text_blocks(source)) if block.text == "First")
+    assert apply_structure(source, dict(kind="paragraph", value="p", index=index)) == expected
+
+
+def test_alignment_preserves_quoted_css_values_comments_and_function_arguments():
+    from synonote_web.html_structure import apply_structure
+
+    source = '<p STYLE="font-family: &quot;A; text-align: B; C&quot; ;/* ; */ --paint: fn(a;b); text-align: right">A</p>'
+    index = next(i for i, block in enumerate(text_blocks(source)) if block.text == "A")
+    assert apply_structure(source, dict(kind="align", value="center", index=index)) == source.replace(
+        "text-align: right", "text-align:center"
+    )
+
+
+@pytest.mark.parametrize(("source", "value", "expected"), [
+    ("<ol><li>A</li><li data-x='y'>B</li><li>C</li></ol>", "bullet",
+     "<ol><li>A</li></ol><ul><li data-x='y'>B</li></ul><ol start=\"3\"><li>C</li></ol>"),
+    ("<ol><li>A</li><li>B</li></ol>", "number", "<ol><li>A</li></ol><p>B</p>"),
+    ("<ol start='5'><li><div>B</div></li><li>C</li></ol>", "number",
+     '<div><div>B</div></div><ol start="6"><li>C</li></ol>'),
+    ('<ul><li><label><input type="checkbox" checked> B</label></li></ul>', "check", "<p>B</p>"),
+    ('<ul><li><label><input type="checkbox" checked=""> B</label></li></ul>', "check", "<p>B</p>"),
+    ("<ul><li>B</li></ul>", "check", '<ul><li><label><input type="checkbox"> B</label></li></ul>'),
+])
+def test_existing_list_converts_or_toggles_the_selected_item(source, value, expected):
+    from synonote_web.html_structure import apply_structure
+
+    index = next(i for i, block in enumerate(text_blocks(source)) if block.text.strip() == "B")
+    assert apply_structure(source, dict(kind="list", value=value, index=index)) == expected
+
+
 @pytest.mark.parametrize(("kind", "source", "expected"), [
     ("unlink", '<p><a href="#x">A</a> B</p>', '<p>A B</p>'),
     ("clear_format", '<p><strong><em>A</em></strong> B</p>', '<p>A B</p>'),
@@ -322,6 +362,14 @@ def test_checklist_toggles_only_the_selected_item():
     checked = apply_structure(source, edit)
     assert checked == source.replace('<input type="checkbox">', '<input type="checkbox" checked>', 1)
     assert apply_structure(checked, edit) == source
+
+
+def test_checklist_toggles_checked_attribute_saved_by_dom():
+    from synonote_web.html_structure import apply_structure
+
+    source = '<ul><li><label><input type="checkbox" checked=""> One</label></li></ul>'
+    index = next(i for i, block in enumerate(text_blocks(source)) if block.text == " One")
+    assert apply_structure(source, dict(kind="check_item", index=index)) == source.replace(' checked=""', '')
 
 
 @pytest.mark.parametrize("confirmed", [True, False])
@@ -378,5 +426,18 @@ def test_clearing_format_preserves_bookmarks_and_rejects_nested_links():
     assert apply_structure(source, dict(kind="clear_format", index=index, start=0, end=3)) == (
         '<p><a href="#one"><span id="bookmark">ABC</span></a></p>'
     )
+    with pytest.raises(ValueError, match="existing link"):
+        apply_structure(source, dict(kind="link", index=index, start=0, end=1, value="#two"))
+
+
+@pytest.mark.parametrize("source", [
+    '<p><a href="#one">AB</p>',
+    '<p><a href="#one"/>AB</p>',
+    '<p><a href="#one"><em>A</em></p><p>AB</p>',
+])
+def test_link_toolbar_rejects_selections_inside_unclosed_anchors(source):
+    from synonote_web.html_structure import apply_structure
+
+    index = next(i for i, block in enumerate(text_blocks(source)) if block.text == "AB")
     with pytest.raises(ValueError, match="existing link"):
         apply_structure(source, dict(kind="link", index=index, start=0, end=1, value="#two"))

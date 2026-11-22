@@ -1,13 +1,31 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import DOMPurify from "dompurify";
+import {
+  AlignCenter, AlignJustify, AlignLeft, AlignRight, Baseline, Bold, CaseSensitive, ChevronDown,
+  Ellipsis, Highlighter, IndentDecrease, IndentIncrease, Italic, Link2, List, ListChecks, ListOrdered,
+  PanelBottomOpen, PanelLeftClose, PanelLeftOpen, PanelRightOpen, PanelTopClose, PanelTopOpen,
+  Paperclip, Pilcrow, Redo2, RemoveFormatting, Strikethrough, Subscript, Superscript, Table2, Trash2,
+  Type, Underline, Undo2, Unlink2, type LucideIcon,
+} from "lucide-react";
 export type TextChange = { index: number; text: string };
-const formats = {bold:"굵게", italic:"기울임", underline:"밑줄", strike:"취소선",
-  subscript:"아래 첨자", superscript:"위 첨자"} as const;
-const tableCommands = {
-  row_before:"위에 행 추가", row_after:"아래에 행 추가",
-  column_before:"왼쪽에 열 추가", column_after:"오른쪽에 열 추가",
-  delete_row:"행 삭제", delete_column:"열 삭제", delete_table:"표 삭제",
+const formats = {
+  bold:["굵게", Bold], italic:["기울임", Italic], underline:["밑줄", Underline],
+  strike:["취소선", Strikethrough], subscript:["아래 첨자", Subscript], superscript:["위 첨자", Superscript],
 } as const;
+const tableCommands = {
+  row_before:["위에 행 추가", PanelTopOpen], row_after:["아래에 행 추가", PanelBottomOpen],
+  column_before:["왼쪽에 열 추가", PanelLeftOpen], column_after:["오른쪽에 열 추가", PanelRightOpen],
+  delete_row:["행 삭제", PanelTopClose], delete_column:["열 삭제", PanelLeftClose], delete_table:["표 삭제", Trash2],
+} as const;
+const alignmentCommands = [
+  ["왼쪽 정렬", AlignLeft, "left"], ["가운데 정렬", AlignCenter, "center"],
+  ["오른쪽 정렬", AlignRight, "right"], ["양쪽 정렬", AlignJustify, "justify"],
+] as const;
+const layoutCommands = [
+  ["글머리 목록", List, "list", "bullet"], ["번호 목록", ListOrdered, "list", "number"],
+  ["체크리스트", ListChecks, "list", "check"], ["들여쓰기", IndentIncrease, "indent", undefined],
+  ["내어쓰기", IndentDecrease, "outdent", undefined],
+] as const;
 type FormatKind = keyof typeof formats;
 type ValueKind = "font_family" | "font_size" | "text_color" | "highlight_color" | "link";
 type BlockKind = "paragraph" | "align" | "list" | "indent" | "outdent" | "check_item";
@@ -18,6 +36,35 @@ export type StructureEdit = ({kind:FormatKind} & Selection) | ({kind:TableKind} 
   | ({kind:ValueKind; value:string} & Selection) | ({kind:"unlink" | "clear_format"} & Selection)
   | {kind:BlockKind; index:number; value?:string} | {kind:"insert_table"; rows?:number; columns?:number};
 const fonts = ["system-ui", "Arial", "Georgia", "Times New Roman", "Helvetica", "Apple SD Gothic Neo", "AppleMyungjo", "Menlo"];
+type ImageLoad = { controller: AbortController; images: HTMLImageElement[]; url?: string };
+
+function ToolbarButton({label, icon:Icon, disabled, onClick}: {
+  label:string; icon:LucideIcon; disabled?:boolean; onClick:() => void;
+}) {
+  return <button type="button" className="original-toolbar-button" aria-label={label} title={label}
+    disabled={disabled} onClick={onClick}>
+    <Icon size={17} strokeWidth={1.75} aria-hidden="true" />
+  </button>;
+}
+
+function ToolbarSelect({label, icon:Icon, disabled, onChange, children}: {
+  label:string; icon:LucideIcon; disabled:boolean; onChange:(value:string)=>void; children:ReactNode;
+}) {
+  return <label className="original-toolbar-select" title={label}>
+    <Icon size={17} strokeWidth={1.75} aria-hidden="true" />
+    <ChevronDown size={11} aria-hidden="true" />
+    <select aria-label={label} value="" disabled={disabled} onChange={event=>onChange(event.target.value)}>
+      <option value="" disabled>{label}</option>
+      {children}
+    </select>
+  </label>;
+}
+
+function releaseImage(load: ImageLoad) {
+  load.controller.abort();
+  if (load.url) URL.revokeObjectURL(load.url);
+}
+
 function safeHtml(html: string): string {
   const root = DOMPurify.sanitize(html, {
     FORBID_TAGS: ["script", "style", "iframe", "form", "object", "embed"],
@@ -95,6 +142,9 @@ export function OriginalEditor({
   attachmentPath?: (reference: string) => string | undefined;
 }) {
   const root = useRef<HTMLDivElement>(null);
+  const imageLoads = useRef(new Map<string, ImageLoad>());
+  const [showMore, setShowMore] = useState(false);
+  const moreId = useId();
   const [selection,setSelection] = useState<(Selection & {token:string}) | null>(null);
   const [cell,setCell] = useState<(TableCell & {token:string}) | null>(null);
   const selected = selection?.token === token ? selection : null;
@@ -115,6 +165,8 @@ export function OriginalEditor({
         node.textContent = "";
       }
       clone.querySelectorAll("[data-structure-token]").forEach(node => node.setAttribute("data-structure-token", ""));
+      // The live editor adds blob URLs after sanitizing the saved markup.
+      clone.querySelectorAll("img[src]").forEach(image => image.removeAttribute("src"));
       return clone.innerHTML;
     };
     // Own-save acknowledgements update the baseline/token, not the live editor
@@ -157,14 +209,34 @@ export function OriginalEditor({
     return () => container.removeEventListener("input", input);
   }, [html, token, editable]);
   useLayoutEffect(() => {
-    if (!attachmentPath || !root.current) return;
-    const urls: string[] = [];
-    const cancel = new AbortController();
-    for (const image of root.current.querySelectorAll("img")) {
+    const loads = imageLoads.current;
+    const desired = new Map<string, HTMLImageElement[]>();
+    for (const image of root.current!.querySelectorAll("img")) {
       const ref = image.getAttribute("ref") ?? image.getAttribute("data-attachment-ref");
-      const path = ref && attachmentPath(ref);
+      const path = ref && attachmentPath?.(ref);
+      const url = path ? loads.get(path)?.url : undefined;
+      if (url && image.getAttribute("src") !== url) image.src = url;
+      if (!url && image.hasAttribute("src")) image.removeAttribute("src");
       if (!path) continue;
-      void fetch(path, {credentials:"same-origin", signal:cancel.signal}).then(async response => {
+      const images = desired.get(path);
+      if (images) images.push(image);
+      else desired.set(path, [image]);
+    }
+    for (const [path, load] of loads) {
+      if (desired.has(path)) continue;
+      releaseImage(load);
+      loads.delete(path);
+    }
+    for (const [path, images] of desired) {
+      const cached = loads.get(path);
+      if (cached) {
+        cached.images = images;
+        continue;
+      }
+      const load: ImageLoad = {controller:new AbortController(), images};
+      loads.set(path, load);
+      const {signal} = load.controller;
+      void fetch(path, {credentials:"same-origin", signal}).then(async response => {
         if (!response.ok) return;
         const blob = await response.blob();
         const bytes = new Uint8Array(await blob.slice(0,12).arrayBuffer());
@@ -173,17 +245,21 @@ export function OriginalEditor({
           : bytes[0] === 255 && bytes[1] === 216 ? "image/jpeg"
           : signature.startsWith("GIF8") ? "image/gif"
           : signature.startsWith("RIFF") && signature.slice(8) === "WEBP" ? "image/webp" : undefined;
-        if (!mime || cancel.signal.aborted) return;
-        const url = URL.createObjectURL(new Blob([blob], {type:mime}));
-        urls.push(url);
-        image.src = url;
-      }).catch(() => {});
+        if (!mime || signal.aborted) return;
+        load.url = URL.createObjectURL(new Blob([blob], {type:mime}));
+        for (const image of load.images) image.src = load.url;
+      }).catch(() => {}).finally(() => {
+        if (!load.url && loads.get(path) === load) loads.delete(path);
+      });
     }
+  }, [html, token, editable, attachmentPath]);
+  useLayoutEffect(() => {
+    const loads = imageLoads.current;
     return () => {
-      cancel.abort();
-      urls.forEach(url => URL.revokeObjectURL(url));
+      loads.forEach(releaseImage);
+      loads.clear();
     };
-  }, [html, token, attachmentPath]);
+  }, []);
   function selectCell(node: Element | null) {
     const table = node?.closest<HTMLElement>("table");
     const target = node?.closest<HTMLElement>("td[data-table-row], th[data-table-row]");
@@ -218,74 +294,92 @@ export function OriginalEditor({
     document.addEventListener("selectionchange", select);
     return () => document.removeEventListener("selectionchange", select);
   }, [editable, onStructureEdit, token]);
+  const selectionDisabled = structureDisabled || !selected;
+  const blockDisabled = structureDisabled || activeBlock === undefined;
+  function formatButton(kind: FormatKind) {
+    const [label,icon] = formats[kind];
+    return <ToolbarButton key={kind} label={label} icon={icon} disabled={selectionDisabled}
+      onClick={()=>selected && onStructureEdit?.({kind,index:selected.index,start:selected.start,end:selected.end})} />;
+  }
   return (
     <>
     {editable && onStructureEdit && <div role="group" aria-label="본문 서식과 표"
-      className="original-structure-toolbar" onMouseDown={event=>{
+      className="original-structure-toolbar" data-expanded={showMore} onMouseDown={event=>{
         if ((event.target as Element).closest("button")) event.preventDefault();
       }}>
-      <select aria-label="문단" value="" disabled={structureDisabled || activeBlock === undefined}
-        onChange={event=>activeBlock !== undefined && event.target.value &&
-          onStructureEdit({kind:"paragraph",index:activeBlock,value:event.target.value})}>
-        <option value="">본문</option>
-        {Object.entries({p:"본문",h1:"제목 1",h2:"제목 2",h3:"제목 3",blockquote:"인용",pre:"코드"})
-          .map(([value,label])=><option key={value} value={value}>{label}</option>)}
-      </select>
-      <select aria-label="글꼴" value="" disabled={structureDisabled || !selected} onChange={event=>{
-        if (selected && event.target.value) onStructureEdit({kind:"font_family",value:event.target.value,index:selected.index,start:selected.start,end:selected.end});
-      }}>
-        <option value="">글꼴</option>
-        {fonts.map(font=><option key={font} value={font}>{font === "system-ui" ? "시스템" : font}</option>)}
-      </select>
-      <select aria-label="글자 크기" value="" disabled={structureDisabled || !selected} onChange={event=>{
-        if (selected && event.target.value) onStructureEdit({kind:"font_size",value:event.target.value,index:selected.index,start:selected.start,end:selected.end});
-      }}>
-        <option value="">크기</option>
-        {[10,12,14,16,18,24,32,48,72].map(size=><option key={size} value={size}>{size} px</option>)}
-      </select>
-      {(Object.keys(formats) as FormatKind[]).map(kind =>
-        <button key={kind} type="button" className="native-button" disabled={structureDisabled || !selected}
-          onClick={() => selected && onStructureEdit({kind, index:selected.index, start:selected.start, end:selected.end})}>
-          {formats[kind]}
-        </button>)}
-      {(["text_color","highlight_color"] as const).map(kind=>
-        <input key={kind} type="color" aria-label={kind === "text_color" ? "글자 색" : "강조 색"}
-          defaultValue={kind === "text_color" ? "#000000" : "#ffff00"} disabled={structureDisabled || !selected}
-          onChange={event=>selected && onStructureEdit({kind,value:event.target.value,index:selected.index,start:selected.start,end:selected.end})}/>)}
-      {([
-        ["왼쪽 정렬","align","left"], ["가운데 정렬","align","center"],
-        ["오른쪽 정렬","align","right"], ["양쪽 정렬","align","justify"],
-        ["글머리 목록","list","bullet"], ["번호 목록","list","number"], ["체크리스트","list","check"],
-        ["들여쓰기","indent"], ["내어쓰기","outdent"],
-      ] as const).map(([label,kind,value])=>
-        <button key={label} type="button" className="native-button" disabled={structureDisabled || activeBlock === undefined}
-          onClick={()=>activeBlock !== undefined && onStructureEdit({kind,index:activeBlock,...(value ? {value} : {})})}>{label}</button>)}
-      {([["서식 지우기","clear_format"],["링크 해제","unlink"]] as const).map(([label,kind])=>
-        <button key={kind} type="button" className="native-button" disabled={structureDisabled || !selected}
-          onClick={()=>selected && onStructureEdit({kind,index:selected.index,start:selected.start,end:selected.end})}>{label}</button>)}
-      <button type="button" className="native-button" disabled={structureDisabled || !selected} onClick={()=>{
-        if (!selected) return;
-        const value = window.prompt("링크 주소", "https://");
-        if (value && value !== "https://") onStructureEdit({kind:"link",value,index:selected.index,start:selected.start,end:selected.end});
-      }}>링크</button>
-      <button type="button" className="native-button" disabled={structureDisabled}
-        onClick={() => {
-          const input = window.prompt("행 × 열 (최대 30 × 20)", "2x2");
-          const size = input?.match(/^\s*(\d+)\s*[x×]\s*(\d+)\s*$/i);
-          if (!size) return;
-          const rows = Number(size[1]), columns = Number(size[2]);
-          if (rows >= 1 && rows <= 30 && columns >= 1 && columns <= 20)
-            onStructureEdit({kind:"insert_table",rows,columns});
-        }}>본문 끝에 표 추가</button>
-      {selectedCell && (Object.keys(tableCommands) as TableKind[]).map(kind =>
-        <button key={kind} type="button" className="native-button" disabled={structureDisabled}
-          onClick={() => {
-            if (kind.startsWith("delete_") && !window.confirm(`선택한 ${tableCommands[kind]} 작업을 적용할까요?`)) return;
-            onStructureEdit({kind, index:selectedCell.index, row:selectedCell.row, column:selectedCell.column});
-          }}>{tableCommands[kind]}</button>)}
-      {onAttach && <button type="button" className="native-button" onClick={onAttach}>첨부</button>}
-      {onUndo && <button type="button" className="native-button" disabled={structureDisabled || !canUndo} onClick={onUndo}>실행 취소</button>}
-      {onRedo && <button type="button" className="native-button" disabled={structureDisabled || !canRedo} onClick={onRedo}>다시 실행</button>}
+      <div className="original-toolbar-group">
+        <ToolbarSelect label="문단" icon={Pilcrow} disabled={blockDisabled}
+          onChange={value=>activeBlock !== undefined && onStructureEdit({kind:"paragraph",index:activeBlock,value})}>
+          {Object.entries({p:"본문",h1:"제목 1",h2:"제목 2",h3:"제목 3",blockquote:"인용",pre:"코드"})
+            .map(([value,label])=><option key={value} value={value}>{label}</option>)}
+        </ToolbarSelect>
+        {(["bold","italic","underline"] as const).map(formatButton)}
+      </div>
+      <div className="original-toolbar-group">
+        <ToolbarButton label="링크" icon={Link2} disabled={selectionDisabled} onClick={()=>{
+          if (!selected) return;
+          const value = window.prompt("링크 주소", "https://");
+          if (value && value !== "https://") onStructureEdit({kind:"link",value,index:selected.index,start:selected.start,end:selected.end});
+        }}/>
+        {onAttach && <ToolbarButton label="첨부" icon={Paperclip} onClick={onAttach}/>}
+        {onUndo && <ToolbarButton label="실행 취소" icon={Undo2} disabled={structureDisabled || !canUndo} onClick={onUndo}/>}
+        {onRedo && <ToolbarButton label="다시 실행" icon={Redo2} disabled={structureDisabled || !canRedo} onClick={onRedo}/>}
+      </div>
+      <button className="original-toolbar-button original-toolbar-more" type="button"
+        aria-label="편집 도구 더보기" title="편집 도구 더보기" aria-controls={moreId}
+        aria-expanded={showMore} onClick={()=>setShowMore(current=>!current)}>
+        <Ellipsis size={19} aria-hidden="true"/>
+      </button>
+      <div className="original-toolbar-secondary" id={moreId}>
+        <div className="original-toolbar-group">
+          <ToolbarSelect label="글꼴" icon={Type} disabled={selectionDisabled}
+            onChange={value=>selected && onStructureEdit({kind:"font_family",value,index:selected.index,start:selected.start,end:selected.end})}>
+            {fonts.map(font=><option key={font} value={font}>{font === "system-ui" ? "시스템" : font}</option>)}
+          </ToolbarSelect>
+          <ToolbarSelect label="글자 크기" icon={CaseSensitive} disabled={selectionDisabled}
+            onChange={value=>selected && onStructureEdit({kind:"font_size",value,index:selected.index,start:selected.start,end:selected.end})}>
+            {[10,12,14,16,18,24,32,48,72].map(size=><option key={size} value={size}>{size} px</option>)}
+          </ToolbarSelect>
+          {(["strike","subscript","superscript"] as const).map(formatButton)}
+          {([["text_color","글자 색",Baseline,"#000000"],["highlight_color","강조 색",Highlighter,"#ffff00"]] as const)
+            .map(([kind,label,Icon,color])=><label key={kind} className="original-toolbar-color" title={label}>
+              <Icon size={17} strokeWidth={1.75} aria-hidden="true"/>
+              <input type="color" aria-label={label} defaultValue={color} disabled={selectionDisabled}
+                onChange={event=>selected && onStructureEdit({kind,value:event.target.value,index:selected.index,start:selected.start,end:selected.end})}/>
+            </label>)}
+          <ToolbarButton label="서식 지우기" icon={RemoveFormatting} disabled={selectionDisabled}
+            onClick={()=>selected && onStructureEdit({kind:"clear_format",index:selected.index,start:selected.start,end:selected.end})}/>
+        </div>
+        <div className="original-toolbar-group">
+          {alignmentCommands.map(([label,icon,value])=><ToolbarButton key={value} label={label} icon={icon}
+            disabled={blockDisabled} onClick={()=>activeBlock !== undefined && onStructureEdit({kind:"align",index:activeBlock,value})}/>)}
+        </div>
+        <div className="original-toolbar-group">
+          {layoutCommands.map(([label,icon,kind,value])=><ToolbarButton key={label} label={label} icon={icon}
+            disabled={blockDisabled} onClick={()=>activeBlock !== undefined && onStructureEdit({kind,index:activeBlock,value})}/>)}
+        </div>
+        <div className="original-toolbar-group">
+          <ToolbarButton label="링크 해제" icon={Unlink2} disabled={selectionDisabled}
+            onClick={()=>selected && onStructureEdit({kind:"unlink",index:selected.index,start:selected.start,end:selected.end})}/>
+          <ToolbarButton label="본문 끝에 표 추가" icon={Table2} disabled={structureDisabled} onClick={()=>{
+            const input = window.prompt("행 × 열 (최대 30 × 20)", "2x2");
+            const size = input?.match(/^\s*(\d+)\s*[x×]\s*(\d+)\s*$/i);
+            if (!size) return;
+            const rows = Number(size[1]), columns = Number(size[2]);
+            if (rows >= 1 && rows <= 30 && columns >= 1 && columns <= 20)
+              onStructureEdit({kind:"insert_table",rows,columns});
+          }}/>
+        </div>
+        {selectedCell && <div className="original-toolbar-group">
+          {(Object.keys(tableCommands) as TableKind[]).map(kind => {
+            const [label,icon] = tableCommands[kind];
+            return <ToolbarButton key={kind} label={label} icon={icon} disabled={structureDisabled} onClick={()=>{
+              if (kind.startsWith("delete_") && !window.confirm(`선택한 ${label} 작업을 적용할까요?`)) return;
+              onStructureEdit({kind,index:selectedCell.index,row:selectedCell.row,column:selectedCell.column});
+            }}/>;
+          })}
+        </div>}
+      </div>
     </div>}
     <div
       ref={root}

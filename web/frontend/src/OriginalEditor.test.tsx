@@ -1,8 +1,25 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { OriginalEditor, changedHtmlPreview } from "./OriginalEditor";
 afterEach(cleanup);
+
+it("uses accessible icon buttons and lets a compact toolbar reveal its secondary commands", () => {
+  render(<OriginalEditor html="<p>Sample</p>" token="token" blocks={[]} changes={[]} editable
+    dark={false} onChange={vi.fn()} onStructureEdit={vi.fn()} onAttach={vi.fn()} />);
+  const bold = screen.getByRole("button", {name:"굵게"});
+  expect(bold.textContent).toBe("");
+  expect(bold.querySelector("svg[aria-hidden=true]")).toBeTruthy();
+  const more = screen.getByRole("button", {name:"편집 도구 더보기"});
+  const secondary = document.getElementById(more.getAttribute("aria-controls")!);
+  expect(secondary?.contains(screen.getByRole("button", {name:"가운데 정렬"}))).toBe(true);
+  expect(more.getAttribute("aria-expanded")).toBe("false");
+  fireEvent.click(more);
+  expect(more.getAttribute("aria-expanded")).toBe("true");
+  fireEvent.click(more);
+  expect(more.getAttribute("aria-expanded")).toBe("false");
+});
+
 it("preserves formatting in preview and escapes edited text", () => {
   expect(
     changedHtmlPreview(
@@ -163,4 +180,51 @@ it("keeps the live text node and caret when an autosave updates its baseline tok
   expect(window.getSelection()!.anchorNode).toBe(text);
   expect(window.getSelection()!.anchorOffset).toBe(3);
   expect(node.getAttribute('data-edit-token')).toBe('two');
+});
+
+it("keeps the caret and loaded attachment on autosave and releases its URL on unmount", async () => {
+  const originalUrl = globalThis.URL;
+  const create = vi.fn(() => "blob:photo");
+  const revoke = vi.fn();
+  const png = Uint8Array.from([137, 80, 78, 71]).buffer;
+  const fetchImage = vi.fn(async () => ({
+    ok:true, blob:async () => ({slice:() => ({arrayBuffer:async () => png})}),
+  }));
+  vi.stubGlobal("URL", Object.assign(class extends originalUrl {}, {createObjectURL:create,revokeObjectURL:revoke}));
+  vi.stubGlobal("fetch", fetchImage);
+  try {
+    const props = {changes:[],editable:true,dark:false,onChange:vi.fn()};
+    const preview = (token: string, text: string) =>
+      `<p><span data-edit-token="${token}" data-text-index="0">${text}</span><img ref="photo" alt="Photo"></p>`;
+    const view = render(<OriginalEditor {...props} blocks={[{index:0,text:"old"}]}
+      html={preview("one","old")} token="one" attachmentPath={() => "/photo"}/>);
+    const image = screen.getByRole("img", {name:"Photo"});
+    await waitFor(() => expect(image.getAttribute("src")).toBe("blob:photo"));
+    const node = screen.getByRole("textbox").querySelector("[data-text-index='0']")!;
+    node.textContent = "typed";
+    const text = node.firstChild!;
+    window.getSelection()!.collapse(text, 3);
+
+    view.rerender(<OriginalEditor {...props} blocks={[{index:0,text:"typed"}]}
+      html={preview("two","typed")} token="two" attachmentPath={() => "/photo"}/>);
+
+    expect(screen.getByRole("img", {name:"Photo"})).toBe(image);
+    expect(image.getAttribute("src")).toBe("blob:photo");
+    expect(window.getSelection()!.anchorNode).toBe(text);
+    expect(window.getSelection()!.anchorOffset).toBe(3);
+
+    view.rerender(<OriginalEditor {...props} blocks={[{index:0,text:"typed"}]}
+      html={preview("three","typed").replace("<p>","<h2>").replace("</p>","</h2>")}
+      token="three" attachmentPath={() => "/photo"}/>);
+    const replaced = screen.getByRole("img", {name:"Photo"});
+    expect(replaced).not.toBe(image);
+    expect(replaced.getAttribute("src")).toBe("blob:photo");
+    expect(fetchImage).toHaveBeenCalledTimes(1);
+    expect(revoke).not.toHaveBeenCalled();
+    view.unmount();
+    expect(revoke).toHaveBeenCalledExactlyOnceWith("blob:photo");
+  } finally {
+    cleanup();
+    vi.unstubAllGlobals();
+  }
 });

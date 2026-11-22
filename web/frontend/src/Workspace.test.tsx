@@ -29,6 +29,48 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 function mount(onLogout = async () => {}, workspaceStatus: Status = status) { return render(<Workspace session={session} status={workspaceStatus} onLogout={onLogout} onSessionExpired={() => {}} />) }
 async function edit() { await screen.findByLabelText('노트 제목'); const split = screen.queryByRole('button', {name: '분할'}); if (split) fireEvent.click(split); fireEvent.change(screen.getByLabelText('노트 제목'), {target: {value: '수정 제목'}}) }
 
+it('follows the mobile bookshelf, notebook, note and editor hierarchy through browser history', async () => {
+  window.history.replaceState({}, '', '/')
+  const {container} = mount()
+  const expectPage = (page: string) => expect(container.querySelector('.native-columns')?.getAttribute('data-mobile-page')).toBe(page)
+  expectPage('shelves')
+  fireEvent.click(await screen.findByRole('button',{name:'프로젝트'}))
+  expectPage('notebooks')
+  expect(new URLSearchParams(location.search).get('s')).toBe('프로젝트')
+  fireEvent.click(screen.getByRole('button',{name:'업무'}))
+  expectPage('notes')
+  fireEvent.click(await screen.findByRole('button',{name:/기존 제목/}))
+  await screen.findByLabelText('노트 제목')
+  expectPage('editor')
+  fireEvent.change(screen.getByLabelText('노트 제목'),{target:{value:'모바일 수정'}})
+  fireEvent.click(screen.getByRole('button',{name:'메모 목록으로 돌아가기'}))
+  await waitFor(()=>expect(writes).toHaveLength(1))
+  expectPage('editor')
+  resolveSave(Response.json({...note,title:'모바일 수정',version:'v2'}))
+  await waitFor(()=>expectPage('notes'))
+  fireEvent.click(screen.getByRole('button',{name:'메모장 목록으로 돌아가기'}))
+  await waitFor(()=>expectPage('notebooks'))
+  fireEvent.click(screen.getByRole('button',{name:'책장 목록으로 돌아가기'}))
+  await waitFor(()=>expectPage('shelves'))
+  fireEvent.click(screen.getByRole('button',{name:'다음 화면'}))
+  await waitFor(()=>expectPage('notebooks'))
+})
+
+it('goes up from a deep-linked mobile note to its unfiled notebook and retains the empty shelf in the URL', async () => {
+  window.history.replaceState({}, '', '/?note=note1')
+  const fetcher = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation((url,init) => url === '/api/notebooks'
+    ? Promise.resolve(Response.json({notebooks:[{id:'book1',name:'업무',stack:''}]})) : fetcher(url,init))
+  const {container} = mount()
+  await screen.findByLabelText('노트 제목')
+  fireEvent.click(screen.getByRole('button',{name:'메모 목록으로 돌아가기'}))
+  await waitFor(()=>expect(new URLSearchParams(location.search).get('n')).toBe('book1'))
+  fireEvent.click(screen.getByRole('button',{name:'메모장 목록으로 돌아가기'}))
+  await waitFor(()=>expect(new URLSearchParams(location.search).get('s')).toBe(''))
+  expect(container.querySelector('.native-columns')?.getAttribute('data-mobile-page')).toBe('notebooks')
+  expect(writes).toHaveLength(0)
+})
+
 it('shows Markdown badges before opening notes and ignores code fences in HTML note excerpts', async () => {
   window.history.replaceState({}, '', '/?n=book1')
   const cached = {...note, id: 'cached', title: '저장된 마크다운', is_markdown: true}
@@ -487,6 +529,47 @@ it('undoes and redoes acknowledged formatting against the displayed version', as
   expect(writes[0]).toMatchObject({version:'v1',structure_edit:{kind:'insert_table',rows:2,columns:2}})
   expect(writes[1]).toMatchObject({version:'v2',restore_version:'v1'})
   expect(writes[2]).toMatchObject({version:'v3',restore_version:'v2'})
+})
+
+it('keeps earlier undo history and records a body edit saved with an attachment', async () => {
+  const formatted = (version: string, text = 'original', attachments: {id:string;name:string}[] = []) => ({
+    ...note, editable:false, version, attachments, html:`<p>${text}</p>`,
+    html_text_preview:`<p><span data-edit-token="${version}" data-text-index="0">${text}</span></p>`,
+    html_text_token:version, html_text_blocks:[{index:0,text}], html_text_layout:`layout-${text}`,
+  })
+  const file = {id:'stored',name:'report.pdf'}
+  const fetcher = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (typeof url === 'string' && url.includes('/uploads/') && init?.method === 'PUT')
+      return Response.json({upload_id:url.split('?')[0].split('/').at(-1),name:file.name,size:3,
+        sha256:'a'.repeat(64),mime:'application/pdf',image:false,status:'ready'})
+    if (url === '/api/notes/note1' && init?.method === 'PUT') {
+      const body = JSON.parse(init.body as string)
+      writes.push(body)
+      return Response.json(formatted(`v${writes.length + 1}`, body.text_changes?.[0]?.text,
+        writes.length === 1 ? [] : [file]))
+    }
+    return url === '/api/notes/note1' ? Response.json(formatted('v1')) : fetcher(url, init)
+  })
+  vi.spyOn(window, 'prompt').mockReturnValue('2x2')
+  mount()
+  fireEvent.click(await screen.findByRole('button', {name:'본문 끝에 표 추가'}))
+  const undo = () => screen.getByRole<HTMLButtonElement>('button', {name:'실행 취소'})
+  await waitFor(() => expect(undo().disabled).toBe(false))
+  fireEvent.change(screen.getByLabelText('첨부할 파일 선택'), {target:{files:[new File(['pdf'],file.name)]}})
+  const span = screen.getByRole('textbox',{name:'본문 편집기'}).querySelector('[data-text-index="0"]')!
+  span.textContent = 'edited'
+  fireEvent.input(span)
+  await waitFor(() => expect(writes).toHaveLength(2))
+  expect(writes[1]).toMatchObject({version:'v2',text_changes:[{index:0,text:'edited'}],
+    uploads:[{upload_id:expect.any(String),sha256:'a'.repeat(64)}]})
+
+  await waitFor(() => expect(undo().disabled).toBe(false))
+  fireEvent.click(undo())
+  await waitFor(() => expect(writes[2]).toMatchObject({version:'v3',restore_version:'v2'}))
+  await waitFor(() => expect(undo().disabled).toBe(false))
+  fireEvent.click(undo())
+  await waitFor(() => expect(writes[3]).toMatchObject({version:'v4',restore_version:'v1'}))
 })
 
 it('exports pending original HTML text changes without changing source markup', async () => {
@@ -1206,6 +1289,49 @@ it('resumes an editable NAS note with confirmed bindings and stays paused over r
   expect(writes[0]).toMatchObject({version:'v2',markdown:`로컬 영수증 · [NAS 파일](attachment://${committedUpload})`})
   expect(writes[0]).not.toHaveProperty('uploads')
 })
+
+it.each(['unchanged', 'already saved', 'changed layout'])(
+  'recovers a formatted draft safely when the NAS body is %s',
+  async outcome => {
+    const {key, held, fetcher} = attachmentRecovery()
+    sessionStorage.setItem(key, JSON.stringify({...held, markdown:undefined, html:note.html,
+      text_layout:'original-layout', text_blocks:[{index:0,text:'original',start:3,end:11}],
+      text_changes:[{index:0,text:'edited'}]}))
+    const body = outcome === 'unchanged' ? 'original' : outcome === 'already saved' ? 'edited' : 'elsewhere'
+    const fresh = {...note, title:held.title, editable:false, version:'v2', html:`<p>${body}</p>`,
+      html_text_layout:outcome === 'unchanged' ? 'original-layout' : 'new-layout',
+      html_text_preview:`<p><span data-edit-token="token" data-text-index="0">${body}</span></p>`,
+      html_text_token:'token', html_text_blocks:[{index:0,text:body,start:3,end:3+body.length}]}
+    const respond = fetcher.getMockImplementation()!
+    fetcher.mockImplementation((path, init) => path === '/api/notes/note1' && !init?.method
+      ? Promise.resolve(Response.json(fresh)) : respond(path, init))
+    mount()
+    fireEvent.click(await screen.findByRole('button',{name:/NAS 확인 후 보류 해제/}))
+    if (outcome === 'changed layout') {
+      expect(await screen.findByText(/본문이 바뀌어 보관한 편집 위치를/)).toBeTruthy()
+      expect(screen.queryByRole('button',{name:'보관한 편집본으로 계속'})).toBeNull()
+      expect(JSON.parse(sessionStorage.getItem(key)!)).toMatchObject({review_required:true,text_changes:[{index:0,text:'edited'}]})
+      expect(writes).toHaveLength(0)
+      return
+    }
+    fireEvent.click(await screen.findByRole('button',{name:'보관한 편집본으로 계속'}))
+    const save = await screen.findByRole('button',{name:'편집본 저장하고 자동 저장 재개'})
+    expect(screen.getByRole('textbox',{name:'본문 편집기'}).textContent).toBe('edited')
+    expect(JSON.parse(sessionStorage.getItem(key)!)).toMatchObject({version:'v2', resume_paused:true,
+      text_changes:outcome === 'unchanged' ? [{index:0,text:'edited'}] : [],
+      attachments:{items:[{id:unresolvedUpload,recoveryOnly:true}]}})
+    expect(writes).toHaveLength(0)
+    fireEvent.click(save)
+    if (outcome === 'unchanged') {
+      await waitFor(() => expect(writes).toHaveLength(1))
+      expect(writes[0]).toMatchObject({version:'v2',text_layout:'original-layout',text_changes:[{index:0,text:'edited'}]})
+      expect(writes[0]).not.toHaveProperty('uploads')
+    } else {
+      await waitFor(() => expect(screen.queryByRole('button',{name:'편집본 저장하고 자동 저장 재개'})).toBeNull())
+      expect(writes).toHaveLength(0)
+    }
+  },
+)
 
 it('opens a separate draft from preserved text when the NAS note remains staged', async () => {
   const {key} = attachmentRecovery({staged:true})

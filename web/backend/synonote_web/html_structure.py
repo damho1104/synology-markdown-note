@@ -1,4 +1,5 @@
 """Apply allowlisted formatting commands to the original HTML source."""
+from bisect import bisect_right
 from dataclasses import dataclass, field
 from html import escape, unescape
 from html.parser import HTMLParser
@@ -198,8 +199,7 @@ def _format(source: str, edit: dict) -> str:
         parser = _Containers(source)
         parser.feed(source)
         parser.close()
-        if any(node.tag == "a" and node.opened <= block.start <= block.end <= end
-               for node, end in parser.closed):
+        if parser.in_link(block.start + left):
             raise ValueError("Selection is already inside an existing link")
     opening, closing = _inline_tags(edit["kind"], edit.get("value"))
     if (edit["kind"] in FORMATS and not prefix and not suffix and source[:block.start].endswith(opening)
@@ -261,14 +261,40 @@ class _Containers(_Tables):
     def __init__(self, source: str):
         super().__init__(source)
         self.closed: list[tuple[_Element, int]] = []
+        self.link_start: int | None = None
+        self.links: list[tuple[int, int]] = []
+
+    def in_link(self, position: int) -> bool:
+        return (self.link_start is not None and self.link_start <= position
+                or any(start <= position < end for start, end in self.links))
+
+    def _track_link(self, tag: str, *, opening: bool, position: int):
+        if tag != "a" or any(node.tag in {"textarea", "title", "svg", "math"} for node in self.stack):
+            return
+        if self.link_start is not None:
+            self.links.append((self.link_start, position))
+        # An unclosed HTML anchor can remain active after its parent closes.
+        self.link_start = position if opening else None
 
     def handle_starttag(self, tag, attrs):
+        element = self._child(tag)
+        self._track_link(tag, opening=True, position=element.start)
         if tag not in {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta",
                        "param", "source", "track", "wbr"}:
-            start = self.position()
-            self.stack.append(_Element(tag, start, start + len(self.get_starttag_text())))
+            self.stack.append(element)
+        else:
+            element.end = element.opened
+
+    def _child(self, tag):
+        start = self.position()
+        element = _Element(tag, start, start + len(self.get_starttag_text()))
+        if self.stack:
+            self.stack[-1].children.append(element)
+        return element
 
     def handle_endtag(self, tag):
+        if tag == "a":
+            self._track_link(tag, opening=False, position=self.source.index(">", self.position()) + 1)
         for index in range(len(self.stack) - 1, -1, -1):
             if self.stack[index].tag == tag:
                 element = self.stack[index]
@@ -279,11 +305,89 @@ class _Containers(_Tables):
                 break
 
     def handle_startendtag(self, tag, attrs):
-        pass
+        element = self._child(tag)
+        self._track_link(tag, opening=True, position=element.start)
+        element.end = element.opened
 
 
 _PARAGRAPHS = {"p", "h1", "h2", "h3", "h4", "pre", "blockquote"}
 _INLINE_FORMATTING = set(FORMATS.values()) | {"b", "i", "strike", "font", "span", "mark"}
+_PHRASING = _INLINE_FORMATTING | {
+    "a", "abbr", "bdi", "bdo", "br", "cite", "code", "del", "dfn", "img", "input",
+    "ins", "kbd", "label", "q", "rp", "rt", "ruby", "samp", "small", "time", "var", "wbr",
+}
+
+
+def _is_phrasing(node: _Element) -> bool:
+    pending = [node]
+    while pending:
+        child = pending.pop()
+        if child.tag not in _PHRASING:
+            return False
+        pending.extend(child.children)
+    return True
+
+
+def _only_phrasing(node: _Element) -> bool:
+    return all(_is_phrasing(child) for child in node.children)
+
+
+_CHECK_CONTROL = (
+    r"""<input\s+type\s*=\s*(?:"checkbox"|'checkbox'|checkbox)"""
+    r"""(?P<checked>\s+checked(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?)?(?P<close>\s*/?>)"""
+)
+
+
+def _list_item(value: str, attrs: str, body: str) -> str:
+    if value == "check":
+        if re.search(r"<(?:label|input)\b", body, re.I):
+            raise ValueError("Unsupported checklist structure")
+        body = f'<label><input type="checkbox"> {body}</label>'
+    tag = "ol" if value == "number" else "ul"
+    return f"<{tag}><li{attrs}>{body}</li></{tag}>"
+
+
+def _edit_list_item(source: str, ancestors: list[tuple[_Element, int]], value: str) -> str:
+    item, closing = next((node, end) for node, end in ancestors if node.tag == "li")
+    parent = next((node for node, _ in ancestors if any(child is item for child in node.children)), None)
+    if not parent or parent.tag not in {"ol", "ul"} or any(node.tag == "li" and node is not item for node, _ in ancestors):
+        raise ValueError("Unsupported nested list")
+    opening = source[parent.start:parent.opened]
+    if parent.tag == "ol":
+        tag = re.fullmatch(r"""<ol(?:\s+start\s*=\s*(?:"(-?\d{1,9})"|'(-?\d{1,9})'|(-?\d{1,9})))?\s*>""", opening, re.I)
+    else:
+        tag = re.fullmatch(r"<ul\s*>", opening, re.I)
+    if not tag or any(child.tag != "li" or child.end is None for child in parent.children):
+        raise ValueError("Unsupported list structure")
+    if any(
+        re.search(r"\svalue\s*=", source[child.start:child.opened], re.I) for child in parent.children
+    ):
+        raise ValueError("Unsupported list item")
+    attrs = source[item.start + 3:item.opened - 1]
+    body = source[item.opened:closing]
+    checkbox = re.fullmatch(r"<label>" + _CHECK_CONTROL + r" (?P<body>.*)</label>", body, re.I | re.S)
+    current = "number" if parent.tag == "ol" else "check" if checkbox else "bullet"
+    if checkbox:
+        body = checkbox["body"]
+    phrasing = _only_phrasing(item)
+    if value == "check" and current != "check" and not phrasing:
+        raise ValueError("Unsupported checklist structure")
+    paragraph_tag = "p" if phrasing else "div"
+    replacement = (f"<{paragraph_tag}{attrs}>{body}</{paragraph_tag}>" if value == current
+                   else _list_item(value, attrs, body))
+
+    index = next(i for i, child in enumerate(parent.children) if child is item)
+    before = source[parent.opened:item.start]
+    parent_close = next(end for node, end in ancestors if node is parent)
+    after = source[item.end:parent_close]
+    end_tag = source[parent_close:parent.end]
+    if index:
+        before = opening + before + end_tag
+    if index + 1 < len(parent.children):
+        start = int(next((group for group in tag.groups() if group is not None), "1"))
+        suffix_opening = f'<ol start="{start + index + 1}">' if parent.tag == "ol" else opening
+        after = suffix_opening + after + end_tag
+    return replace_ranges(source, [(parent.start, parent.end, before + replacement + after)])
 
 
 def _edit_container(source: str, edit: dict) -> str:
@@ -303,12 +407,14 @@ def _edit_container(source: str, edit: dict) -> str:
         for node, _ in ancestors:
             if node.tag != "label":
                 continue
-            control = re.match(r"""<input\s+type=(["'])checkbox\1(?P<checked> checked)?>""",
+            control = re.match(_CHECK_CONTROL,
                                source[node.opened:], re.I)
             if control:
-                end = node.opened + control.end() - 1
-                return replace_ranges(source, [(end - 8, end, "")] if control["checked"] else
-                                      [(end, end, " checked")])
+                if control["checked"]:
+                    start, end = control.span("checked")
+                    return replace_ranges(source, [(node.opened + start, node.opened + end, "")])
+                end = node.opened + control.start("close")
+                return replace_ranges(source, [(end, end, " checked")])
         raise ValueError("Unsupported checklist item")
     if kind in {"unlink", "clear_format"}:
         tags = {"a"} if kind == "unlink" else _INLINE_FORMATTING
@@ -343,18 +449,33 @@ def _edit_container(source: str, edit: dict) -> str:
     node, closing = target
     opening = source[node.start:node.opened]
     if kind == "paragraph" and value in _PARAGRAPHS and node.tag != "li":
+        if node.tag == value:
+            return source
+        if not _only_phrasing(node):
+            if node.tag not in {"div", "blockquote"} or not block.text.strip():
+                raise ValueError("Unsupported paragraph structure")
+            start, end = node.opened, closing
+            for child in node.children:
+                if _is_phrasing(child):
+                    continue
+                if child.end is None or child.start < block.end and block.start < child.end:
+                    raise ValueError("Unsupported paragraph structure")
+                if child.end <= block.start:
+                    start = child.end
+                elif child.start >= block.end:
+                    end = child.start
+                    break
+            return replace_ranges(source, [(start, end, f"<{value}>{source[start:end]}</{value}>")])
         return replace_ranges(source, [(node.start + 1, node.start + 1 + len(node.tag), value),
                                        (closing + 2, closing + 2 + len(node.tag), value)])
-    if kind == "list" and value in {"bullet", "number", "check"} and node.tag in _PARAGRAPHS:
+    if kind == "list" and value in {"bullet", "number", "check"}:
         if any(parent.tag == "li" for parent, _ in ancestors):
-            raise ValueError("Unsupported nested list")
-        tag = "ol" if value == "number" else "ul"
+            return _edit_list_item(source, ancestors, value)
+        if node.tag not in _PARAGRAPHS | {"div"} or not _only_phrasing(node):
+            raise ValueError("Unsupported paragraph structure")
         attrs = opening[1 + len(node.tag):-1]
-        checked = value == "check"
-        prefix = '<label><input type="checkbox"> ' if checked else ""
-        suffix = "</label>" if checked else ""
-        return replace_ranges(source, [(node.start, node.opened, f"<{tag}><li{attrs}>{prefix}"),
-                                       (closing, node.end, f"{suffix}</li></{tag}>")])
+        return replace_ranges(source, [(node.start, node.end,
+                                        _list_item(value, attrs, source[node.opened:closing]))])
     if kind == "align" and value in {"left", "center", "right", "justify"}:
         updated = _style_opening(opening, "text-align", value)
     elif kind in {"indent", "outdent"}:
@@ -365,6 +486,47 @@ def _edit_container(source: str, edit: dict) -> str:
 
 
 _ATTRIBUTES = re.compile(r"""[^\s=<>/]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?""")
+_CSS_TOKEN = re.compile(r"""(?s)/\*.*?\*/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\\.|/\*|[\\"'()[\]{};]""")
+_CSS_TRIVIA = r"(?:\s|/\*.*?\*/)*"
+_ATTRIBUTE_REFERENCE = re.compile(r"&#(?:[0-9]+|[xX][0-9a-fA-F]+);?|&[a-zA-Z][a-zA-Z0-9]*(?:;|(?![a-zA-Z0-9=]))")
+
+
+def _decode_css_attribute(raw: str) -> tuple[str, list[int], list[int]]:
+    # An entity is represented by its original bytes in the saved attribute.
+    # Track only the positions where its decoded length changes the offset.
+    pieces = []
+    positions, shifts = [0], [0]
+    cursor = shift = 0
+    for match in _ATTRIBUTE_REFERENCE.finditer(raw):
+        decoded = unescape(match.group())
+        pieces.extend((raw[cursor:match.start()], decoded))
+        cursor = match.end()
+        shift += len(match.group()) - len(decoded)
+        positions.append(cursor - shift)
+        shifts.append(shift)
+    pieces.append(raw[cursor:])
+    return "".join(pieces), positions, shifts
+
+
+def _css_declarations(css: str):
+    closing = dict(zip("([{", ")]}"))
+    stack = []
+    start = 0
+    for match in _CSS_TOKEN.finditer(css):
+        token = match.group()
+        if token in closing:
+            stack.append(closing[token])
+        elif token in closing.values():
+            if not stack or stack.pop() != token:
+                raise ValueError("Unsupported inline style")
+        elif token in {'"', "'", "/*", "\\"}:
+            raise ValueError("Unsupported inline style")
+        elif token == ";" and not stack:
+            yield start, match.start()
+            start = match.end()
+    if stack:
+        raise ValueError("Unsupported inline style")
+    yield start, len(css)
 
 
 def _style_opening(opening: str, name: str, value: str = "", *, step: int = 0) -> str:
@@ -374,29 +536,70 @@ def _style_opening(opening: str, name: str, value: str = "", *, step: int = 0) -
     styles = [m for m, key in attrs if key == "style"]
     if len(styles) > 1:
         raise ValueError("Ambiguous style")
-    prior = ""
-    remaining = []
-    if styles:
-        match = styles[0]
-        raw = match.group().partition("=")[2].strip()
-        if raw.startswith(("'", '"')):
-            raw = raw[1:-1]
-        for declaration in raw.split(";"):
-            key, _, content = declaration.partition(":")
-            if key.strip().lower() == name:
-                prior = content.strip()
-            elif declaration.strip():
-                remaining.append(declaration.strip())
+    if not styles:
+        value = f"{step}px" if step > 0 else value
+        return opening[:-1] + (f' style="{name}:{value}"' if value else "") + ">"
+
+    match = styles[0]
+    attr = match.group()
+    attr_value = re.match(r"[^=]*=\s*(.*)", attr, re.S)
+    raw = attr_value[1] if attr_value else ""
+    quote = raw[0] if raw.startswith(("'", '"')) else ""
+    if quote:
+        raw = raw[1:-1]
+    css, positions, shifts = _decode_css_attribute(raw)
+
+    def raw_offset(offset: int) -> int:
+        return offset + shifts[bisect_right(positions, offset) - 1]
+
+    property_pattern = re.compile(rf"{_CSS_TRIVIA}({name}{_CSS_TRIVIA}:)(.*)", re.I | re.S)
+    importance = re.compile(rf"!{_CSS_TRIVIA}important{_CSS_TRIVIA}$", re.I | re.S)
+    targets = []
+    needs_separator = False
+    for start, end in _css_declarations(css):
+        declaration = css[start:end]
+        needs_separator = not re.fullmatch(_CSS_TRIVIA, declaration, re.S)
+        prop = property_pattern.fullmatch(declaration)
+        if prop:
+            important = importance.search(prop[2])
+            targets.append((start + prop.start(1), end, prop[2], important))
+
     if step:
+        prior = ""
+        if targets:
+            effective = next((target for target in reversed(targets) if target[3]), targets[-1])
+            content, important = effective[2:]
+            prior = content[:important.start()].strip() if important else content.strip()
         if prior and not re.fullmatch(r"[0-9]{1,3}px", prior):
             raise ValueError("Unsupported indentation")
         amount = min(240, max(0, (int(prior[:-2]) if prior else 0) + step))
         value = f"{amount}px" if amount else ""
-    replacement = ";".join([*remaining, *([f"{name}:{value}"] if value else [])])
-    if styles:
+
+    if targets:
+        ranges = []
+        for start, end, content, important in targets:
+            suffix = content[len(content.rstrip()):]
+            if important:
+                suffix = " !important" + suffix
+            ranges.append((raw_offset(start), raw_offset(end), f"{name}:{value}{suffix}" if value else ""))
+        replacement = replace_ranges(raw, ranges)
+    elif value:
+        separator = ";" if needs_separator else ""
+        replacement = f"{raw}{separator}{name}:{value}"
+    else:
+        return opening
+
+    if not replacement.strip(" ;\t\r\n\f"):
         start = match.start()
-        if not replacement:
-            while start > tag_end and opening[start - 1].isspace():
-                start -= 1
-        return opening[:start] + (f'style="{replacement.replace(chr(34), "&quot;")}"' if replacement else "") + opening[match.end():]
-    return opening[:-1] + (f' style="{replacement}"' if replacement else "") + ">"
+        while start > tag_end and opening[start - 1].isspace():
+            start -= 1
+        return opening[:start] + opening[match.end():]
+    if attr_value:
+        position = attr_value.start(1)
+        if not quote and re.search(r"""[\s"'=`<>]""", replacement):
+            quote = '"'
+            replacement = replacement.replace('"', "&quot;")
+        rewritten = attr[:position] + quote + replacement + quote
+    else:
+        rewritten = f'{attr}="{replacement}"'
+    return opening[:match.start()] + rewritten + opening[match.end():]

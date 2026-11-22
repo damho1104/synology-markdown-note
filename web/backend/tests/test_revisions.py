@@ -13,7 +13,8 @@ def test_revision_preview_and_restore_verify_the_nas_version(tmp_path, monkeypat
     api_version = "SYNO.NoteStation.Note.Version"
     old = dict(object_id="note1", title="이전 제목", content="<p>이전 본문</p>", ver="old",
                parent_id="book1", encrypt=False, recycle=False, attachment={})
-    current = dict(old, title="현재 제목", content="<p>현재 본문</p>", ver="latest")
+    current = dict(old, title="현재 제목", content="<p>현재 본문</p>", ver="latest",
+                   attachment={"new-file": {"name":"new.pdf"}})
     mutations = []
     lost = False
     fail_history = False
@@ -37,6 +38,7 @@ def test_revision_preview_and_restore_verify_the_nas_version(tmp_path, monkeypat
         else:
             assert api == NOTE and method == "set"
             assert json.loads(fields["check_conflict"]) is True
+            assert "attachment" not in fields
             if race:
                 current.update(content="<p>other client</p>", ver="other-client")
             if json.loads(fields["ver"]) != current["ver"]:
@@ -83,6 +85,7 @@ def test_revision_preview_and_restore_verify_the_nas_version(tmp_path, monkeypat
         restored = client.put(path, json=command, headers=headers)
         assert restored.status_code == 200 and restored.json()["version"] == "restored-1"
         assert restored.json()["html"] == old["content"]
+        assert [(file["id"], file["name"]) for file in restored.json()["attachments"]] == [("new-file", "new.pdf")]
         assert mutations == ["set"]
         lost = True
         command["version"] = "restored-1"

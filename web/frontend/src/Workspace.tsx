@@ -348,7 +348,7 @@ export function Workspace({
   const [saveFailure, setSaveFailure] = useState<"safe" | "conflict" | "uncertain" | null>(null);
   const writeInFlight = useRef(false);
   const saveHasMore = useRef(false);
-  const pendingNoteAction = useRef<{structureEdit?: StructureEdit; historyDirection?: "undo" | "redo"} | null>(null);
+  const pendingNoteActions = useRef<{structureEdit?: StructureEdit; historyDirection?: "undo" | "redo"}[]>([]);
   const saveLatest = useRef<() => Promise<boolean>>(async () => false);
   const createdDraft = useRef<{note: NoteDetail; draft: Draft} | null>(null);
   const [query, setQuery] = useState("");
@@ -437,7 +437,7 @@ export function Workspace({
       : route.note
         ? `note:${route.note}`
         : null;
-  useEffect(() => { setPreviewLine(undefined); pendingNoteAction.current = null; }, [activeKey]);
+  useEffect(() => { setPreviewLine(undefined); pendingNoteActions.current = []; }, [activeKey]);
   const activeDraftKey = activeKey ? draftPrefix + activeKey : null;
   const original = detail && !route.compose ? detail : null;
   const dirty = !!(
@@ -1582,25 +1582,27 @@ export function Workspace({
     }
   }
   function queueNoteAction(queued: {structureEdit?: StructureEdit; historyDirection?: "undo" | "redo"}) {
-    if (!detail || !draft || !editing || composing || draft.review_required || draft.resume_paused) return;
+    if (!detail || !draft || !editing || composing || draft.resume_paused ||
+        // 저장 비행 중의 review_required는 큐가 흡수한다. 해야 하는 건 충돌/복구 검토 상태뿐이다.
+        (draft.review_required && !saving)) return;
     if (!dirty && !saving && !saveFailure) {
       dispatchNoteAction(queued);
       return;
     }
     // 편집 중이거나 저장 중이어도 동작하게 한다: 보류 중인 편집은 먼저 저장하고,
-    // 저장이 끝난 뒤 렌더된 최신 상태로 큐에 쌓은 동작을 실행한다.
-    pendingNoteAction.current = queued;
+    // 저장과 편집이 모두 끝난 뒤 렌더된 최신 상태로 큐에 쌓인 동작을 순서대로 실행한다.
+    pendingNoteActions.current.push(queued);
     if (dirty && !saving && !saveFailure) void saveLatest.current();
   }
   useEffect(() => {
-    const queued = pendingNoteAction.current;
+    const queued = pendingNoteActions.current[0];
     if (!queued) return;
     if (saveFailure || !editing) {
-      pendingNoteAction.current = null;
+      pendingNoteActions.current = [];
       return;
     }
     if (saving || dirty || composing || !draft || draft.review_required || draft.resume_paused) return;
-    pendingNoteAction.current = null;
+    pendingNoteActions.current.shift();
     dispatchNoteAction(queued);
   }, [editing, saving, dirty, composing, saveFailure, draft, detail, formatHistory]);
 
@@ -2587,7 +2589,7 @@ export function Workspace({
                           changes={reviewingUploads ? formattedRecoveryChanges(detail, draft) ?? [] : draft.text_changes}
                           editable={editing && !reviewingUploads}
                           dark={dark}
-                          structureDisabled={composing || draft.review_required || draft.resume_paused}
+                          structureDisabled={composing || draft.resume_paused || (!!draft.review_required && !saving)}
                           onAttach={canAttachFormatted ? () => attachmentInput.current?.click() : undefined}
                           attachmentPath={bodyAttachmentPath}
                           canUndo={!!currentHistory?.undo.length || dirty}

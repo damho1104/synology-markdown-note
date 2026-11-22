@@ -559,6 +559,66 @@ it('undoes a still-dirty text edit by saving it first instead of locking the too
   await waitFor(() => expect(editor.querySelector('[data-text-index="0"]')!.textContent).toBe('original'))
 })
 
+it('queues an undo clicked while a save is in flight and runs it after the ack', async () => {
+  const formatted = (version: string, text: string) => ({...note, editable:false, version,
+    html:`<p>${text}</p>`,
+    html_text_preview:`<p><span data-edit-token="${version}" data-text-index="0">${text}</span></p>`,
+    html_text_token:version, html_text_blocks:[{index:0,text}], html_text_layout:'layout'})
+  const fetcher = vi.mocked(fetch).getMockImplementation()!
+  let resolvePut!: (response: Response) => void
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (url === '/api/notes/note1' && init?.method === 'PUT') {
+      writes.push(JSON.parse(init.body as string))
+      return new Promise<Response>(resolve => { resolvePut = resolve })
+    }
+    return url === '/api/notes/note1' ? Response.json(formatted('v1', 'original')) : fetcher(url, init)
+  })
+  mount()
+  const editor = await screen.findByRole('textbox', {name:'본문 편집기'})
+  const span = editor.querySelector('[data-text-index="0"]')!
+  span.textContent = 'typed'; fireEvent.input(span)
+  await waitFor(() => expect(writes).toHaveLength(1), {timeout: 2000})
+  const undo = screen.getByRole('button', {name:'실행 취소'}) as HTMLButtonElement
+  expect(undo.disabled).toBe(false)
+  fireEvent.click(undo)
+  resolvePut(Response.json(formatted('v2', 'typed')))
+  await waitFor(() => expect(writes).toHaveLength(2), {timeout: 2000})
+  expect(writes[1]).toMatchObject({version:'v2', restore_version:'v1'})
+  resolvePut(Response.json(formatted('v3', 'original')))
+  await waitFor(() => expect(editor.querySelector('[data-text-index="0"]')!.textContent).toBe('original'))
+})
+
+it('drains multiple undo clicks queued during one save flight in order', async () => {
+  const formatted = (version: string, text: string) => ({...note, editable:false, version,
+    html:`<p>${text}</p>`,
+    html_text_preview:`<p><span data-edit-token="${version}" data-text-index="0">${text}</span></p>`,
+    html_text_token:version, html_text_blocks:[{index:0,text}], html_text_layout:'layout'})
+  const fetcher = vi.mocked(fetch).getMockImplementation()!
+  let resolvePut!: (response: Response) => void
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (url === '/api/notes/note1' && init?.method === 'PUT') {
+      writes.push(JSON.parse(init.body as string))
+      return new Promise<Response>(resolve => { resolvePut = resolve })
+    }
+    return url === '/api/notes/note1' ? Response.json(formatted('v1', 'original')) : fetcher(url, init)
+  })
+  mount()
+  const editor = await screen.findByRole('textbox', {name:'본문 편집기'})
+  const span = editor.querySelector('[data-text-index="0"]')!
+  span.textContent = 'typed'; fireEvent.input(span)
+  await waitFor(() => expect(writes).toHaveLength(1), {timeout: 2000})
+  const undo = screen.getByRole('button', {name:'실행 취소'}) as HTMLButtonElement
+  expect(undo.disabled).toBe(false)
+  fireEvent.click(undo)
+  fireEvent.click(undo)
+  resolvePut(Response.json(formatted('v2', 'typed')))
+  await waitFor(() => expect(writes).toHaveLength(2), {timeout: 2000})
+  expect(writes[1]).toMatchObject({version:'v2', restore_version:'v1'})
+  resolvePut(Response.json(formatted('v3', 'original')))
+  await waitFor(() => expect(editor.querySelector('[data-text-index="0"]')!.textContent).toBe('original'))
+  expect(writes).toHaveLength(2)
+})
+
 it('keeps earlier undo history and records a body edit saved with an attachment', async () => {
   const formatted = (version: string, text = 'original', attachments: {id:string;name:string}[] = []) => ({
     ...note, editable:false, version, attachments, html:`<p>${text}</p>`,

@@ -14,9 +14,11 @@ _GRAPH_READS = BoundedSemaphore(4)
 from collections import defaultdict
 from html.parser import HTMLParser
 from urllib.parse import unquote
+from unicodedata import normalize
 
 from fastapi import FastAPI, Request, Response, Query
 from markdown_it import MarkdownIt
+from pydantic import BaseModel, Field
 
 from .nas import NasClient, NasError
 
@@ -84,6 +86,41 @@ class _Anchors(HTMLParser):
     def handle_startendtag(self, tag, attrs):
         self.handle_starttag(tag, attrs)
         self.handle_endtag(tag)
+
+
+class _BodyText(_Anchors):
+    boundaries = {"p", "div", "br", "li", "tr", "td", "th", "pre", "blockquote",
+                  "h1", "h2", "h3", "h4", "h5", "h6"}
+
+    def __init__(self):
+        super().__init__()
+        self.parts: list[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        super().handle_starttag(tag, attrs)
+        if tag in self.boundaries and not self.hidden:
+            self.parts.append(" ")
+
+    def handle_endtag(self, tag):
+        super().handle_endtag(tag)
+        if tag in self.boundaries and not self.hidden:
+            self.parts.append(" ")
+
+    def handle_data(self, data):
+        if not self.hidden:
+            self.parts.append(data)
+
+
+def _search_text(value: str) -> str:
+    return " ".join(normalize("NFKC", value).casefold().split())
+
+
+class BodySearch(BaseModel):
+    query: str = Field(min_length=1, max_length=256)
+
+
+def _graph_entry(entry: dict) -> dict:
+    return {name: value for name, value in entry.items() if name != "body_text"}
 
 
 def _destinations(detail: dict, markdown: MarkdownIt) -> set[str]:
@@ -157,6 +194,23 @@ def register_graph_routes(app: FastAPI, *, read_nas, nas: NasClient, store=None,
         owner = owner_for_request(request, response) if owner_for_request else None
         return {"note_id": read_nas(request, response, lambda base, active: _resolve(nas, base, active, target, store=store, owner=owner))}
 
+    @app.post("/api/search/body")
+    def search_body(body: BodySearch, request: Request, response: Response):
+        response.headers["Cache-Control"] = "no-store"
+        owner = owner_for_request(request, response) if owner_for_request else None
+        needle = _search_text(body.query)
+
+        def search(base, active):
+            rows = [row for row in nas.notes(base, active) if not row["locked"] and not row["trashed"]]
+            versions = {row["id"]: row["version"] for row in rows}
+            matches, indexed = store.search_note_bodies(owner, versions, needle) if store and owner else (set(), 0)
+            fields = ("id", "version", "title", "notebook_id", "trashed", "tags", "excerpt", "modified_at", "created_at")
+            return {"matches": [{key: row[key] for key in fields if key in row}
+                                for row in rows if row["id"] in matches],
+                    "indexed": indexed, "total": len(versions)}
+
+        return read_nas(request, response, search)
+
     @app.get("/api/graph")
     def graph(request: Request, response: Response, summary: bool = False):
         response.headers["Cache-Control"] = "no-store"
@@ -164,10 +218,12 @@ def register_graph_routes(app: FastAPI, *, read_nas, nas: NasClient, store=None,
             owner = owner_for_request(request, response) if owner_for_request else None
             def summaries(base, active):
                 rows = [row for row in nas.notes(base, active) if not row['locked'] and not row['trashed']]
-                entries = store.load_graph_index(owner, {row['id']: row['version'] for row in rows}) if store and owner else []
-                indexed = {entry['id'] for entry in entries}
+                versions = {row['id']: row['version'] for row in rows}
+                entries = store.load_graph_index(owner, versions) if store and owner else []
+                indexed = store.indexed_body_ids(owner, versions) & {entry['id'] for entry in entries} if store and owner else set()
                 return dict(nodes=[{key: row[key] for key in ('id', 'title', 'notebook_id', 'version', 'tags')} for row in rows],
-                            edges=[], failures=[], entries=entries, pending=[row['id'] for row in rows if row['id'] not in indexed])
+                            edges=[], failures=[], entries=[_graph_entry(entry) for entry in entries],
+                            pending=[row['id'] for row in rows if row['id'] not in indexed])
             return read_nas(request, response, summaries)
         return read_nas(request, response, lambda base, active: _snapshot(nas, base, active))
 
@@ -185,7 +241,7 @@ def register_graph_routes(app: FastAPI, *, read_nas, nas: NasClient, store=None,
         result = read_nas(request, response, lambda base, active: _entries(nas, base, active, values))
         if store and owner:
             for entry in result['entries']: store.save_graph_index(owner, entry)
-        return result
+        return {'entries': [_graph_entry(entry) for entry in result['entries']]}
 
 
 def _resolve(nas, base, active, target: str, *, store=None, owner=None) -> str:
@@ -243,5 +299,14 @@ def entry_from_detail(detail):
     for link in sorted(_destinations(detail, MarkdownIt('commonmark'))):
         identity = _identity(link)
         if identity: links.append(dict(kind=identity[0], target=identity[1]))
+    markdown = detail.get("markdown")
+    if isinstance(markdown, str):
+        body_text = _search_text(markdown)
+    else:
+        parser = _BodyText()
+        parser.feed(detail["html"])
+        parser.close()
+        body_text = _search_text("".join(parser.parts))
     return dict(id=note_id, title=detail['title'], notebook_id=detail['notebook_id'],
-                version=detail['version'], document_id=detail.get('source_document_id'), links=links)
+                version=detail['version'], document_id=detail.get('source_document_id'),
+                links=links, body_text=body_text)

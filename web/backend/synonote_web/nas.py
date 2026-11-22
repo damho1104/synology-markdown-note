@@ -31,15 +31,18 @@ from .compat.source_envelope import SourceEnvelope
 from .compat.markdown import render as render_markdown, math_plan
 from .compat.errors import CLIError
 from .html_text import annotate, layout_identity, patch as patch_html_text
-from .attachment_html import bind_html
+from .html_structure import apply_structure
+from .attachment_html import bind_html, references_file
 from .library_nas import LibraryNasOperations
 from .observability import request_id
 
 
 AUTH = "SYNO.API.Auth"
 NOTE = "SYNO.NoteStation.Note"
+NOTE_VERSION = "SYNO.NoteStation.Note.Version"
 NOTEBOOK = "SYNO.NoteStation.Notebook"
 SOURCE_DOWNLOAD_LIMIT = 32 * 1024 * 1024
+STAGING_SOURCE_PREFIX = "synology-note-upload-"
 ATTACHMENT_PREFIX = "synology-note-attachment-"
 DOWNLOAD_ONLY_PREFIX = ATTACHMENT_PREFIX + "file-"
 IMAGE_MIMES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
@@ -62,6 +65,10 @@ class NasError(Exception):
             elif key in {"api", "method", "reason", "transport"} and isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.]{1,100}", value):
                 self.diagnostic[key] = value
         super().__init__(code)
+
+
+class NasPreflightError(NasError):
+    """An NAS failure raised before any mutation was attempted."""
 
 
 class _AttachmentReferences(HTMLParser):
@@ -467,14 +474,15 @@ class NasClient(LibraryNasOperations):
 
     @classmethod
     def _list(cls, client: httpx.Client, base: str, login: NasLogin,
-              api: str, key: str, cap: int, identity: str = "object_id") -> list[dict]:
+              api: str, key: str, cap: int, identity: str = "object_id", *,
+              params: dict | None = None) -> list[dict]:
         path, version, as_json = cls._info(client, base, api, cap, min(cap, 2), login)
         rows: list[dict] = []
         seen: set[str] = set()
         expected_total: int | None = None
         while True:
             response = cls._post(client, base, path, cls._fields(api, "list", version, login.sid,
-                {"offset": len(rows), "limit": 500}, as_json))
+                {**(params or {}), "offset": len(rows), "limit": 500}, as_json))
             total, offset, page = response.get("total"), response.get("offset"), response.get(key)
             # Note Station can omit the array entirely for an empty first page.
             # Explicit nulls and incomplete/nonempty pages must still be rejected.
@@ -602,6 +610,119 @@ class NasClient(LibraryNasOperations):
             detail.update(editable=False, read_only_reason="WRITE_IN_PROGRESS", write_in_progress=True)
         return detail
 
+    def _version_history(self, client, base: str, login: NasLogin, note_id: str) -> list[dict]:
+        rows = self._list(client, base, login, NOTE_VERSION, "versions", 2, "version",
+                          params={"object_id": note_id, "filter": {"listable": True}})
+        if any(type(row.get("mtime")) not in (int, float) or not 0 <= row["mtime"] <= 253402300799 for row in rows):
+            raise NasError("NAS_API_ERROR")
+        return [{"version": row["version"], "modified_at": row["mtime"]} for row in rows]
+
+    def _historical_note(self, client, base: str, login: NasLogin, current: dict, version: str) -> dict:
+        note_id = current["id"]
+        if not any(revision["version"] == version for revision in self._version_history(client, base, login, note_id)):
+            raise NasError("REVISION_NOT_FOUND")
+        raw = self._call(client, base, login, NOTE, "get", 3, 3, {"object_id": note_id, "ver": version})
+        if str(raw.get("ver")) != version:
+            raise NasError("NAS_API_ERROR")
+        row = {"parent_id": current["notebook_id"], "encrypt":current["locked"], "recycle":current["trashed"], **raw}
+        historical = self._note(row, note_id)
+        if historical["locked"] or historical["trashed"] or any(
+                entry["name"].lower().startswith(STAGING_SOURCE_PREFIX) for entry in historical["attachments"]):
+            raise NasError("DOCUMENT_READ_ONLY")
+        return historical
+
+    def note_revisions(self, base: str, login: NasLogin, note_id: str, version: str | None = None) -> dict:
+        base = validate_url(base)
+        with self._client() as client:
+            current = self._fetch(client, base, login, note_id)
+            if current["locked"] or current["trashed"]:
+                raise NasError("DOCUMENT_READ_ONLY")
+            if version is None:
+                return {"revisions": self._version_history(client, base, login, note_id)}
+            historical = self._historical_note(client, base, login, current, version)
+            return {key: historical[key] for key in ("version", "title", "html")}
+
+    def restore_revision(self, base: str, login: NasLogin, *, note_id: str, notebook_id: str,
+                         version: str, restore_version: str) -> dict:
+        try:
+            base = validate_url(base)
+            current = self.fetch(base, login, note_id)
+            if current["version"] != version:
+                raise NasError("REMOTE_CHANGED")
+            if (current["locked"] or current["trashed"] or current["notebook_id"] != notebook_id
+                    or current.get("write_in_progress") or current.get("read_only_reason") == "AMBIGUOUS_SOURCE"):
+                raise NasError("DOCUMENT_READ_ONLY")
+            if version == restore_version:
+                raise NasError("REVISION_NOT_FOUND")
+            with self._client() as client:
+                historical = self._historical_note(client, base, login, current, restore_version)
+                routing = self._info(client, base, NOTE, 3, 2, login)
+            files = {entry["id"]: entry for entry in current["attachments"]}
+            sources = []
+            for entry in historical["attachments"]:
+                file_id = entry["id"]
+                if entry["name"].lower().endswith(".md") and not entry["name"].startswith(ATTACHMENT_PREFIX):
+                    try:
+                        data = self.download(base, login, note_id, file_id)
+                        envelope = SourceEnvelope.decode(data)
+                    except CLIError:
+                        pass
+                    except NasError as exc:
+                        if file_id not in files and exc.code == "NAS_API_ERROR":
+                            raise NasError("REVISION_ATTACHMENTS_UNAVAILABLE") from exc
+                        raise
+                    else:
+                        if envelope.matches(historical["html"]) and not envelope.is_staging:
+                            sources.append((entry, envelope, data))
+                            continue
+                if files.get(file_id) != entry:
+                    raise NasError("REVISION_ATTACHMENTS_UNAVAILABLE")
+            if len(sources) > 1:
+                raise NasError("REVISION_ATTACHMENTS_UNAVAILABLE")
+            source_file, envelope, data = sources[0] if sources else (None, None, None)
+            source_id = source_file["id"] if source_file else None
+            current_source_id = current.get("source_file_id")
+            deleting = [current_source_id] if current_source_id and source_id != current_source_id else []
+            expected = {key: entry for key, entry in files.items() if key not in deleting}
+            if envelope and not set(envelope.attachment_bindings.values()).issubset(expected):
+                raise NasError("REVISION_ATTACHMENTS_UNAVAILABLE")
+            if source_file and source_id in files and files[source_id] != source_file:
+                raise NasError("REVISION_ATTACHMENTS_UNAVAILABLE")
+            upload = (source_file["name"], data) if source_file and source_id not in files else None
+        except NasError as exc:
+            raise NasPreflightError(exc.code, diagnostic=exc.diagnostic) from exc
+
+        # Note.Version/restore accepts the historical version only. Applying
+        # the snapshot via Note/set lets the NAS compare the current version
+        # atomically with the write, including edits from other clients.
+        try:
+            _, next_version = self._mutate_markdown(base, login, note_id=note_id, version=version,
+                notebook_id=notebook_id, title=historical["title"], html=historical["html"],
+                deleting=deleting, upload=upload, listable=True, routing=routing)
+        except NasError as exc:
+            if exc.code != "REMOTE_CHANGED":
+                raise NasError("WRITE_UNCERTAIN") from exc
+            raise
+        try:
+            restored = self.fetch(base, login, note_id)
+            actual = {entry["id"]: entry for entry in restored["attachments"]}
+            if upload:
+                added = self._new_attachment(set(expected), restored, upload[0])
+                source_id = added["id"]
+                if (source_id in files or self.download(base, login, note_id, source_id) != data):
+                    raise NasError("WRITE_UNCERTAIN")
+                del actual[source_id]
+            if (restored["version"] != next_version or restored["version"] == version
+                    or restored["locked"] or restored["trashed"] or restored.get("write_in_progress")
+                    or restored["notebook_id"] != notebook_id or actual != expected
+                    or restored["html"] != historical["html"] or restored["title"] != historical["title"]
+                    or restored.get("source_file_id") != source_id
+                    or envelope and restored.get("markdown") != envelope.markdown):
+                raise NasError("WRITE_UNCERTAIN")
+            return restored
+        except NasError as exc:
+            raise NasError("WRITE_UNCERTAIN") from exc
+
     def iter_download(self, base: str, login: NasLogin, note_id: str, file_id: str,
                       *, max_size: int = 50_000_000) -> Iterator[bytes]:
         """Yield NAS attachment bytes and close the connection on completion or close()."""
@@ -671,7 +792,7 @@ class NasClient(LibraryNasOperations):
             elif not simple_html(html):
                 raise NasError("DOCUMENT_READ_ONLY")
             fields = {"mtime": int(time.time()),
-                      "commit_msg": {"device": "web", "listable": False},
+                      "commit_msg": {"device": "web", "listable": True},
                       "title": title, "content": html, "brief": html[:180]}
             if note_id:
                 fields.update(object_id=note_id, ver=version, check_conflict=True)
@@ -714,8 +835,9 @@ class NasClient(LibraryNasOperations):
                          version: str | None, notebook_id: str, title: str | None = None,
                          html: str | None = None, upload: tuple[str, bytes] | None = None,
                          streamed_upload: dict | None = None,
-                         deleting: list[str] | None = None) -> tuple[str, str]:
-        params = {"mtime": int(time.time()), "commit_msg": {"device": "web", "listable": False}}
+                         deleting: list[str] | None = None, listable: bool = False,
+                         routing: tuple[str, int, bool] | None = None) -> tuple[str, str]:
+        params = {"mtime": int(time.time()), "commit_msg": {"device": "web", "listable": listable}}
         if note_id:
             params.update(object_id=note_id, ver=version, check_conflict=True)
         else:
@@ -734,7 +856,7 @@ class NasClient(LibraryNasOperations):
             params["attachment"] = entries
         method = "set" if note_id else "create"
         with self._client() as client:
-            path, api_version, as_json = self._info(client, base, NOTE, 3, 2, login)
+            path, api_version, as_json = routing or self._info(client, base, NOTE, 3, 2, login)
             fields = self._fields(NOTE, method, api_version, login.sid, params, as_json)
             if upload or streamed_upload is not None:
                 routing = {key: fields.pop(key) for key in ("api", "method", "version", "_sid")}
@@ -865,7 +987,7 @@ class NasClient(LibraryNasOperations):
                 operation_id=operation_id, is_staging=True, blocks=blocks, attachment_bindings=bindings).encode()
         except (CLIError, ValueError, KeyError, TypeError) as exc:
             raise NasError("MARKDOWN_UNSUPPORTED") from exc
-        stage_name = f"synology-note-upload-{document_id}-{operation_id}.md"
+        stage_name = f"{STAGING_SOURCE_PREFIX}{document_id}-{operation_id}.md"
         try:
             target, stage_version = self._mutate_markdown(base, login, note_id=note_id, version=version,
                 notebook_id=notebook_id, title=None if old else title, html=None if old else original,
@@ -947,7 +1069,7 @@ class NasClient(LibraryNasOperations):
                 operation_id=operation_id, blocks=blocks, attachment_bindings=bindings, math_attachments=math_metadata).encode()
             final_name = f"synology-note-source-{document_id}.md"
             _, final_version = self._mutate_markdown(base, login, note_id=target, version=body_version,
-                notebook_id=notebook_id, upload=(final_name, final), deleting=deleting)
+                notebook_id=notebook_id, upload=(final_name, final), deleting=deleting, listable=True)
             verified = self.fetch(base, login, target)
             check_state(verified, final_version, title, html)
             published = self._new_attachment(ids - set(deleting), verified, final_name)
@@ -969,8 +1091,76 @@ class NasClient(LibraryNasOperations):
             raise NasError("WRITE_UNCERTAIN", diagnostic=getattr(exc, "diagnostic", None)) from exc
 
 
+    def remove_attachment(self, base: str, login: NasLogin, *, note_id: str, notebook_id: str,
+                          version: str, file_id: str, operation_id: str | None = None) -> dict:
+        current = self.fetch(base, login, note_id)
+        if current["version"] != version:
+            raise NasError("REMOTE_CHANGED")
+        if (current["locked"] or current["trashed"] or current["notebook_id"] != notebook_id
+                or current.get("write_in_progress") or current.get("read_only_reason") == "AMBIGUOUS_SOURCE"):
+            raise NasError("DOCUMENT_READ_ONLY")
+        files = {file["id"]: file for file in current["attachments"]}
+        file = files.get(file_id)
+        if file is None:
+            raise NasError("ATTACHMENT_NOT_FOUND")
+        filename = file["name"]
+        source_id = current.get("source_file_id")
+        bindings = current.get("attachment_bindings", {})
+        math = current.get("math_attachments", {})
+        keys = {uid for uid, target in bindings.items() if target == file_id}
+        if (file_id == source_id or keys.intersection(math)
+                or filename.lower().startswith(("synology-note-source", "synology-note-math-", STAGING_SOURCE_PREFIX))):
+            raise NasError("ATTACHMENT_PROTECTED")
+        if filename.lower().endswith(".md") and not filename.startswith(ATTACHMENT_PREFIX):
+            try:
+                SourceEnvelope.decode(self.download(base, login, note_id, file_id))
+            except CLIError:
+                pass
+            else:
+                raise NasError("ATTACHMENT_PROTECTED")
+        identities = {value.casefold() for value in {file_id, file.get("ref"), *keys} if value}
+        blocks = current.get("blocks", [])
+        if any(references_file(source, identities, filename)
+               for source in [current["html"], current.get("markdown", ""), *(block["html"] for block in blocks)]):
+            raise NasError("ATTACHMENT_IN_USE")
+        remaining_bindings = {uid: target for uid, target in bindings.items() if target != file_id}
+        upload = None
+        deleting = [file_id]
+        if keys:
+            document_id = current["source_document_id"]
+            upload = (f"synology-note-source-{document_id}.md", SourceEnvelope.make(
+                current["markdown"], current["html"], document_id=document_id,
+                operation_id=operation_id or str(uuid.uuid4()), blocks=blocks,
+                attachment_bindings=remaining_bindings, math_attachments=math).encode())
+            deleting.append(source_id)
+        expected = {key: entry for key, entry in files.items() if key not in deleting}
+        try:
+            _, next_version = self._mutate_markdown(base, login, note_id=note_id, version=version,
+                notebook_id=notebook_id, deleting=deleting, upload=upload, listable=True)
+            result = self.fetch(base, login, note_id)
+            if (result["version"] != next_version
+                    or any(result.get(key) != current.get(key) for key in
+                           ("title", "html", "markdown", "blocks", "source_document_id",
+                            "notebook_id", "locked", "trashed", "math_attachments"))
+                    or result.get("attachment_bindings", {}) != remaining_bindings
+                    or result.get("write_in_progress")):
+                raise NasError("WRITE_UNCERTAIN")
+            actual = {entry["id"]: entry for entry in result["attachments"]}
+            if upload:
+                added = self._new_attachment(set(expected), result, upload[0])
+                if (added["id"] in files or result.get("source_file_id") != added["id"]
+                        or self.download(base, login, note_id, added["id"]) != upload[1]):
+                    raise NasError("WRITE_UNCERTAIN")
+                del actual[added["id"]]
+            if actual != expected:
+                raise NasError("WRITE_UNCERTAIN")
+            return result
+        except NasError as exc:
+            raise NasError("WRITE_UNCERTAIN") from exc
+
     def write_html_text(self, base: str, login: NasLogin, *, note_id: str, notebook_id: str,
-                        title: str, version: str, changes: list[dict], text_layout: str | None = None) -> dict:
+                        title: str, version: str, changes: list[dict], text_layout: str | None = None,
+                        structure_edit: dict | None = None) -> dict:
         current = self.fetch(base, login, note_id)
         if current["version"] != version:
             raise NasError("REMOTE_CHANGED")
@@ -981,14 +1171,17 @@ class NasClient(LibraryNasOperations):
         try:
             if any("\x00" in change["text"] for change in changes):
                 raise ValueError()
-            html = patch_html_text(current["html"], changes)
+            html = (apply_structure(current["html"], structure_edit) if structure_edit
+                    else patch_html_text(current["html"], changes))
+            if structure_edit and len(html) > max(2_000_000, len(current["html"])):
+                raise ValueError()
         except (ValueError, KeyError, TypeError) as exc:
             raise NasError("HTML_PATCH_INVALID") from exc
         if html == current["html"] and title == current["title"]:
             return current
         try:
             _, next_version = self._mutate_markdown(base, login, note_id=note_id, version=version,
-                notebook_id=notebook_id, title=title, html=html)
+                notebook_id=notebook_id, title=title, html=html, listable=True)
             result = self.fetch(base, login, note_id)
             if (result["version"] != next_version or result["html"] != html or result["title"] != title
                     or result["notebook_id"] != notebook_id or result["locked"] or result["trashed"]

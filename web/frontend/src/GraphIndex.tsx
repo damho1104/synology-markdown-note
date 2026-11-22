@@ -79,7 +79,7 @@ function useGraphLoader(enabled: boolean, revision = ''): GraphIndexState {
         if (!first.pending) break;
         const entries: Entry[] = [...first.entries ?? []];
         const total = first.nodes.length;
-        const cached = entries.length;
+        const cached = total - first.pending.length;
         setProgress({done:cached,total});
         for (let offset=0; offset<first.pending.length; offset+=8) {
           if (controller.signal.aborted) return;
@@ -107,6 +107,9 @@ export function useGraphIndex() {
   const shared = useContext(GraphIndexContext)
   const standalone = useGraphLoader(!shared)
   return shared ?? standalone
+}
+export function useIndexedNoteCount() {
+  return useContext(GraphIndexContext)?.progress.done ?? 0;
 }
 export function GraphIndexStatus() {
   const index = useContext(GraphIndexContext)

@@ -92,6 +92,10 @@ class Store:
                     owner TEXT NOT NULL, note_id TEXT NOT NULL, version TEXT NOT NULL,
                     entry BLOB NOT NULL, PRIMARY KEY(owner, note_id)
                 );
+                CREATE TABLE IF NOT EXISTS note_body_index (
+                    owner TEXT NOT NULL, note_id TEXT NOT NULL, version TEXT NOT NULL,
+                    body BLOB NOT NULL, PRIMARY KEY(owner, note_id)
+                );
                 CREATE TABLE IF NOT EXISTS note_formats (
                     owner TEXT NOT NULL, note_id TEXT NOT NULL, version TEXT NOT NULL,
                     is_markdown INTEGER NOT NULL, PRIMARY KEY(owner, note_id)
@@ -191,7 +195,31 @@ class Store:
                           WHERE status='pinned' AND operation_id IS NOT NULL AND NOT EXISTS
                           (SELECT 1 FROM write_operations WHERE operation_id=draft_uploads.operation_id)""",
                        (time.time() + REVIEWED_TTL,))
+        self._migrate_embedded_body_index()
         self.db.chmod(0o600)
+
+    def _migrate_embedded_body_index(self) -> None:
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            marker = "separate_note_body_index_v1"
+            if db.execute("SELECT 1 FROM config WHERE name=?", (marker,)).fetchone():
+                return
+            for row in db.execute("SELECT owner, note_id, version, entry FROM graph_index"):
+                try:
+                    entry = json.loads(self.cipher.decrypt(row["entry"]))
+                except (InvalidToken, ValueError, TypeError):
+                    continue
+                if not isinstance(entry, dict) or "body_text" not in entry:
+                    continue
+                body = entry.pop("body_text")
+                identity = (row["owner"], row["note_id"], row["version"])
+                if (isinstance(body, str) and entry.get("id") == row["note_id"]
+                        and entry.get("version") == row["version"]):
+                    db.execute("INSERT OR IGNORE INTO note_body_index VALUES(?,?,?,?)",
+                               (*identity, self.cipher.encrypt(body.encode())))
+                db.execute("UPDATE graph_index SET entry=? WHERE owner=? AND note_id=? AND version=?",
+                           (self.cipher.encrypt(json.dumps(entry, ensure_ascii=False).encode()), *identity))
+            db.execute("INSERT INTO config(name,value) VALUES (?, 'done')", (marker,))
 
     @contextmanager
     def connect(self, *, thread_bound: bool = True) -> Iterator[sqlite3.Connection]:
@@ -330,6 +358,8 @@ class Store:
             db.execute("UPDATE sessions SET credential=? WHERE token_hash=?",
                        (credential, token_hash(token)))
 
+    NOTEBOOK_DELETE_TARGET = "library:notebook-delete"
+
     def start_write(self, operation_id: str, owner: str, target: str,
                     note_id: str | None, title: str, intent: dict, *,
                     client_request_id: str | None = None, request_hash: str | None = None,
@@ -338,6 +368,12 @@ class Store:
         encrypted = self.cipher.encrypt(json.dumps(intent, ensure_ascii=False).encode())
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
+            # A notebook deletion also changes its notes. Reserve it before
+            # listing them so concurrent creates or moves cannot change that set.
+            if db.execute("""SELECT 1 FROM write_target_locks
+                WHERE owner=? AND (target=? OR ?=?) LIMIT 1""",
+                          (owner, self.NOTEBOOK_DELETE_TARGET, target, self.NOTEBOOK_DELETE_TARGET)).fetchone():
+                return False
             if client_request_id:
                 if db.execute('SELECT 1 FROM create_receipts WHERE owner=? AND client_request_id=?',
                               (owner, client_request_id)).fetchone():
@@ -465,6 +501,7 @@ class Store:
             rows = db.execute('SELECT note_id, version, entry FROM graph_index WHERE owner=?', (owner,)).fetchall()
             deleted = [(owner, row['note_id']) for row in rows if row['note_id'] not in versions]
             db.executemany('DELETE FROM graph_index WHERE owner=? AND note_id=?', deleted)
+            db.executemany('DELETE FROM note_body_index WHERE owner=? AND note_id=?', deleted)
         for row in rows:
             if versions.get(row['note_id']) != row['version']: continue
             try:
@@ -477,7 +514,34 @@ class Store:
 
     def save_graph_index(self, owner: str, entry: dict) -> None:
         if entry.get('error') or entry.get('hidden') or not entry.get('version'): return
-        encrypted = self.cipher.encrypt(json.dumps(entry, ensure_ascii=False).encode())
+        graph = dict(entry)
+        body = graph.pop("body_text", None)
+        encrypted = self.cipher.encrypt(json.dumps(graph, ensure_ascii=False).encode())
         with self.connect() as db:
             db.execute('INSERT OR REPLACE INTO graph_index(owner,note_id,version,entry) VALUES(?,?,?,?)',
                 (owner, entry['id'], entry['version'], encrypted))
+            if isinstance(body, str):
+                db.execute('INSERT OR REPLACE INTO note_body_index VALUES(?,?,?,?)',
+                           (owner, entry['id'], entry['version'], self.cipher.encrypt(body.encode())))
+
+    def indexed_body_ids(self, owner: str, versions: dict[str, str]) -> set[str]:
+        with self.connect() as db:
+            return {row["note_id"] for row in db.execute(
+                "SELECT note_id, version FROM note_body_index WHERE owner=?", (owner,))
+                if versions.get(row["note_id"]) == row["version"]}
+
+    def search_note_bodies(self, owner: str, versions: dict[str, str], needle: str) -> tuple[set[str], int]:
+        matches = set()
+        indexed = 0
+        with self.connect() as db:
+            for row in db.execute("SELECT note_id, version, body FROM note_body_index WHERE owner=?", (owner,)):
+                if versions.get(row["note_id"]) != row["version"]:
+                    continue
+                try:
+                    body = self.cipher.decrypt(row["body"]).decode()
+                except (InvalidToken, UnicodeError):
+                    continue
+                indexed += 1
+                if needle and needle in body:
+                    matches.add(row["note_id"])
+        return matches, indexed

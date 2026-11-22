@@ -2,7 +2,7 @@ import { useState } from "react";
 export type LibraryAction = {
   kind: "note" | "notebook" | "stack";
   action:
-    "favorite" | "tags" | "trash" | "restore" | "move" | "create" | "rename";
+    "favorite" | "tags" | "trash" | "restore" | "move" | "create" | "rename" | "delete";
   id?: string;
   version?: string;
   value?: string | boolean | string[];
@@ -11,7 +11,7 @@ export type LibraryAction = {
 export type DialogAction = {
   request: LibraryAction;
   title: string;
-  mode: "name" | "notebook" | "stack" | "tags" | "createStack";
+  mode: "name" | "notebook" | "stack" | "tags" | "createStack" | "delete";
   initial?: string;
 };
 export function LibraryDialog({
@@ -46,7 +46,7 @@ export function LibraryDialog({
               .filter(Boolean),
           ),
         );
-      else request.value = value;
+      else if (config.mode !== "delete") request.value = value;
       if (config.mode === "createStack") request.value = members;
       await onSubmit(request);
       onClose();
@@ -64,7 +64,11 @@ export function LibraryDialog({
       >
         <h2 id="library-dialog-title">{config.title}</h2>
         <form onSubmit={(e) => void submit(e)}>
-          {config.mode === "notebook" ? (
+          {config.mode === "delete" ? (
+            <p>{config.request.kind === "stack"
+              ? "책장 분류를 해제합니다. 메모장과 노트는 그대로 남습니다."
+              : "NAS에서 메모장을 삭제하고 포함된 노트를 휴지통으로 이동합니다."}</p>
+          ) : config.mode === "notebook" ? (
             <label>
               메모장
               <select
@@ -158,7 +162,7 @@ export function LibraryDialog({
                 busy || (config.mode === "createStack" && !members.length)
               }
             >
-              {busy ? "저장 중…" : "확인"}
+              {busy ? "처리 중…" : config.mode === "delete" ? "삭제" : "확인"}
             </button>
           </div>
         </form>

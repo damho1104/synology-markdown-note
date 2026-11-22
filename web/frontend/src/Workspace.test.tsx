@@ -18,6 +18,7 @@ beforeEach(() => {
   sessionStorage.clear(); window.history.replaceState({}, '', '/?n=book1&note=note1'); writes = []
   vi.stubGlobal('fetch', vi.fn(async (path: string, init?: RequestInit) => {
     if (init?.method === 'PUT') { writes.push(JSON.parse(init.body as string)); return new Promise<Response>(resolve => {resolveSave = resolve}) }
+    if (path === '/api/search/body') return Response.json({matches:[], indexed:1, total:1})
     if (path === '/api/graph?summary=true') return new Response(JSON.stringify({nodes:[note],edges:[],failures:[],entries:[{id:note.id,links:[]}],pending:[]}))
     const body = path === '/api/notebooks' ? {notebooks: [{id: 'book1', name: '업무', stack: '프로젝트'}]} : path === '/api/notes' ? {notes: [note]} : path === '/api/writes' ? {operations: []} : note
     return new Response(JSON.stringify(body), {status: 200})
@@ -391,6 +392,7 @@ it('opens real global search from folded panels and graph without fetching note 
   mount();await screen.findByLabelText('노트 제목')
   fireEvent.click(screen.getByRole('button',{name:'노트 목록 접기'}))
   const opener=screen.getByRole('button',{name:'전체 검색'})
+  const initialLists = fetcher.mock.calls.filter(([url]) => url === '/api/notes').length
   opener.focus();fireEvent.click(opener)
   const dialog=screen.getByRole('dialog',{name:'전체 노트 검색'})
   const input=within(dialog).getByRole('searchbox',{name:'전체 노트 검색어'})
@@ -399,6 +401,8 @@ it('opens real global search from folded panels and graph without fetching note 
   fireEvent.change(input,{target:{value:'일정'}})
   expect(within(dialog).getByRole('button',{name:/다른 메모장 문서/})).toBeTruthy()
   expect(fetcher.mock.calls.length).toBe(before)
+  await waitFor(() => expect(fetcher.mock.calls.filter(([url]) => url === '/api/notes').length)
+    .toBeGreaterThan(initialLists))
   fireEvent.click(within(dialog).getByRole('button',{name:/다른 메모장 문서/}))
   await waitFor(()=>expect((screen.getByLabelText('노트 제목') as HTMLInputElement).value).toBe(other.title))
   expect(screen.queryByRole('dialog')).toBeNull()
@@ -462,6 +466,173 @@ it('exports pending original HTML text changes without changing source markup', 
   expect(exported).toBe(html.replace('old &amp; text','new &lt; &amp; &gt;'))
   expect(writes).toHaveLength(0)
 })
+it('previews a NAS revision and restores it against the currently opened version', async () => {
+  const original = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (url === '/api/notes/note1/revisions')
+      return Response.json({revisions:[{version:'v0',modified_at:1700000000}]})
+    if (url === '/api/notes/note1/revisions?version=v0')
+      return Response.json({version:'v0',title:'이전 제목',html:'<p>이전 본문</p>'})
+    if (url === '/api/notes/note1' && init?.method === 'PUT') {
+      writes.push(JSON.parse(init.body as string))
+      return Response.json({...note,version:'v2',title:'이전 제목',html:'<p>이전 본문</p>'})
+    }
+    return original(url, init)
+  })
+  mount()
+  await screen.findByLabelText('노트 제목')
+  fireEvent.click(screen.getByRole('button',{name:'노트 정보'}))
+  fireEvent.click(screen.getByRole('button',{name:'수정 이력 조회'}))
+  const revision = await screen.findByRole('button',{name:/버전 v0/})
+  fireEvent.click(revision)
+  await screen.findByText('이전 제목')
+  fireEvent.click(screen.getByRole('button',{name:'이 버전으로 복원'}))
+  expect(writes).toEqual([])
+  fireEvent.click(screen.getByRole('button',{name:'복원 확인'}))
+  await waitFor(() => expect(screen.queryByRole('dialog',{name:'노트 수정 이력'})).toBeNull())
+  expect((screen.getByLabelText('노트 제목') as HTMLInputElement).value).toBe('이전 제목')
+  expect(writes).toEqual([{version:'v1',title:note.title,notebook_id:'book1',restore_version:'v0'}])
+})
+
+it('removes a confirmed general attachment from the inspector and protects source data', async () => {
+  const document = {...note, attachments:[{id:'file1',name:'문서.pdf',ref:null},
+    {id:'source',name:'synology-note-source.md',ref:null}], source_file_id:'source'}
+  const original = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (url === '/api/notes/note1' && init?.method === 'PUT') {
+      writes.push(JSON.parse(init.body as string))
+      return Response.json({...document,version:'v2',attachments:[document.attachments[1]]})
+    }
+    if (url === '/api/notes/note1') return Response.json(document)
+    return original(url, init)
+  })
+  mount()
+  await screen.findByLabelText('노트 제목')
+  fireEvent.click(screen.getByRole('button',{name:'노트 정보'}))
+  expect(screen.queryByRole('button',{name:'synology-note-source.md 제거'})).toBeNull()
+  const remove = screen.getByRole('button',{name:'문서.pdf 제거'})
+  vi.mocked(window.confirm).mockReturnValueOnce(false)
+  fireEvent.click(remove)
+  expect(writes).toEqual([])
+  fireEvent.click(remove)
+  await waitFor(() => expect(screen.queryByRole('link',{name:'문서.pdf'})).toBeNull())
+  expect(writes).toEqual([{version:'v1', title:note.title, notebook_id:'book1', remove_attachment_id:'file1'}])
+})
+
+it('imports selected Markdown files through the confirmed NAS create workflow', async () => {
+  const requests: Record<string, unknown>[] = []
+  const original = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (url === '/api/notes' && init?.method === 'POST') {
+      const input = JSON.parse(init.body as string)
+      requests.push(input)
+      return Response.json({...note, id:`imported-${requests.length}`, ...input})
+    }
+    return original(url, init)
+  })
+  mount()
+  await screen.findByLabelText('노트 제목')
+  fireEvent.change(screen.getByLabelText('가져올 Markdown 파일 선택'), {target:{files:[
+    new File(['# 한글\r\n'], '첫 노트.md'),
+    new File(['두 번째 본문'], '두 번째.markdown'),
+  ]}})
+  await screen.findByText('Markdown 노트 2개를 가져왔습니다.')
+  expect(requests).toMatchObject([
+    {title:'첫 노트', markdown:'# 한글\r\n', notebook_id:'book1'},
+    {title:'두 번째', markdown:'두 번째 본문', notebook_id:'book1'},
+  ])
+  expect(requests[0].client_request_id).not.toBe(requests[1].client_request_id)
+  expect(window.location.search).toContain('note=imported-2')
+})
+
+it('stops a Markdown import batch after an uncertain request and keeps its draft', async () => {
+  const requests: Record<string, unknown>[] = []
+  const original = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (url === '/api/notes' && init?.method === 'POST') {
+      requests.push(JSON.parse(init.body as string))
+      return Response.json({error:'WRITE_UNCERTAIN'}, {status:409})
+    }
+    if (String(url).startsWith('/api/creates/')) return Response.json({status:'uncertain'})
+    return original(url, init)
+  })
+  mount()
+  await screen.findByLabelText('노트 제목')
+  fireEvent.change(screen.getByLabelText('가져올 Markdown 파일 선택'), {target:{files:[
+    new File(['검토할 본문'], '내 초안.md'),
+    new File(['보내지 않을 본문'], '다음.md'),
+  ]}})
+  await screen.findByText('새 노트 저장 결과 확인 필요')
+  expect((screen.getByLabelText('노트 제목') as HTMLInputElement).value).toBe('내 초안')
+  expect(requests).toHaveLength(1)
+})
+
+it('does not open recovery for a rejected Markdown import', async () => {
+  const original = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (url === '/api/notes' && init?.method === 'POST')
+      return Response.json({error:'MARKDOWN_UNSUPPORTED'}, {status:422})
+    return original(url, init)
+  })
+  mount()
+  await screen.findByLabelText('노트 제목')
+  fireEvent.change(screen.getByLabelText('가져올 Markdown 파일 선택'), {target:{files:[
+    new File(['거절된 본문'], '검증.md'),
+  ]}})
+  await screen.findByText(/검증.md · 0\/1개 가져옴/)
+  expect(screen.queryByText('새 노트 저장 결과 확인 필요')).toBeNull()
+  expect(window.location.search).toContain('note=note1')
+})
+
+it('reports successful import when the NAS create receipt proves the response was lost', async () => {
+  let writes = 0
+  const original = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (url === '/api/notes' && init?.method === 'POST') {
+      writes++
+      return Response.json({error:'WRITE_UNCERTAIN'}, {status:409})
+    }
+    if (String(url).startsWith('/api/creates/')) return Response.json({status:'completed',
+      note:{...note,id:'created-import',title:'복구한 파일',markdown:'되찾은 본문'}})
+    return original(url, init)
+  })
+  mount()
+  await screen.findByLabelText('노트 제목')
+  fireEvent.change(screen.getByLabelText('가져올 Markdown 파일 선택'), {target:{files:[
+    new File(['되찾은 본문'], '복구한 파일.md'), new File(['보류한 본문'], '다음 파일.md'),
+  ]}})
+  await screen.findByText('복구한 파일.md · 1/2개 가져옴 · 나머지 1개 파일을 선택해 계속할 수 있습니다.')
+  expect(window.location.search).toContain('note=created-import')
+  expect(writes).toBe(1)
+})
+
+it('confirms notebook deletion, then clears the removed notebook and note', async () => {
+  const original = vi.mocked(fetch).getMockImplementation()!
+  const actions = [] as unknown[]
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (url === '/api/library/action') {
+      actions.push(JSON.parse(init?.body as string))
+      return Response.json({})
+    }
+    if (actions.length && url === '/api/notebooks') return Response.json({notebooks: []})
+    if (actions.length && url === '/api/notes') return Response.json({notes: [{...note, trashed: true}]})
+    return original(url, init)
+  })
+  mount()
+  await screen.findByLabelText('노트 제목')
+  fireEvent.click(screen.getByRole('button', {name: '프로젝트 책장 펼치기'}))
+  fireEvent.contextMenu(screen.getByRole('button', {name: '업무'}))
+  fireEvent.click(screen.getByRole('button', {name: '메모장 삭제…'}))
+  fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', {name: '취소'}))
+  expect(actions).toEqual([])
+  fireEvent.contextMenu(screen.getByRole('button', {name: '업무'}))
+  fireEvent.click(screen.getByRole('button', {name: '메모장 삭제…'}))
+  fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', {name: '삭제'}))
+  await waitFor(() => expect(screen.queryByRole('button', {name: '업무'})).toBeNull())
+  expect(actions).toEqual([{kind: 'notebook', action: 'delete', id: 'book1'}])
+  expect(window.location.search).not.toMatch(/[?&](n|note)=/)
+})
+
 it('remaps a renamed shelf, expansion and prior history without adding a visit',async()=>{
   let stack='프로젝트'
   const original=vi.mocked(fetch).getMockImplementation()!

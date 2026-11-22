@@ -6,6 +6,8 @@ See the [self-hosting guide](SELF-HOSTING.md) for installation and operation. It
 
 This web client is based on the macOS app's `LibraryView` and `EditorView`. It provides a sidebar that expands notebooks under bookshelves; sorting by title, date added, and date modified; source, split, and reading views; CodeMirror Markdown editing; Mermaid hand-drawn diagrams; KaTeX previews; a note information panel; internal links, graphs, and backlinks; and attachment downloads. It supports changing favorites and tags, moving notes to and restoring them from the trash, moving notes, and creating, renaming, and moving bookshelves and notebooks.
 
+Right-click a notebook or bookshelf in the sidebar to delete it. Deleting a notebook moves its notes to the trash. Deleting a bookshelf clears the grouping and keeps its notebooks and notes.
+
 ## Appearance and editor settings
 
 You can check the current app version under **About → Version** at the bottom of Settings.
@@ -16,7 +18,7 @@ Mermaid SVGs retain the fonts used for text placement and their alignment and co
 
 ## Panels and graphs
 
-The magnifying glass at the top opens a search dialog for all notes. It works even when panels are collapsed or the graph is displayed, and searches titles, previews, and tags across the entire list excluding the trash. It uses the list already loaded, so typing a search does not fetch additional note bodies from the NAS. Selecting a result clears notebook and tag scopes and opens that note; the shared Back button restores the previous screen and search state. You can cancel the search by closing the dialog, pressing Esc, or clicking the backdrop, while preserving your edits.
+The magnifying glass at the top opens global search. It searches titles, previews, tags, and indexed note bodies outside the trash. Locked note bodies are excluded. Body search shares the link indexer's NAS reads and shows how many note bodies are searchable while indexing runs. Selecting a result clears notebook and tag scopes. Use the shared Back button to restore the previous screen and search state.
 
 The Back and Forward buttons at the top treat notes, bookshelves, notebooks, favorites, tags, trash, and graphs as a single navigation history. They also record changes to note selection, neighborhood view, connection depth, notebook/tag filters, and the display of unconnected notes within the graph. Search input, zooming, and dragging only update the current entry; returning restores both the search query and graph state. Navigating somewhere new after going back clears the previous forward history. Buttons are disabled when there is no corresponding history, and clicking the shared buttons while editing waits for confirmed autosave before navigating. Note bodies and credentials are not included in navigation history.
 
@@ -26,7 +28,7 @@ Once the note list loads after login, link indexing starts in the background whe
 
 The full graph first displays the note list and saved links, then indexes links in unread notes in small batches. Even on the first run, it does not block the screen until all note bodies have been fetched, and displays progress as `노트 링크 인덱싱 중… 완료/전체` (Indexing note links… completed/total). Body fetches are limited to at most 8 per batch and at most 4 concurrently. If a batch fails, the collected graph is retained and you can retry.
 
-The link index is encrypted in the server's SQLite database, separated by NAS and account. After reentry or a server restart, it compares list versions and reads only new and changed notes. It also reuses results already read when opening and saving notes normally. There is no need to synchronize the macOS local SQLite file. Initial indexing requires NAS requests to check each note's links.
+The link and body search index is encrypted in the server's SQLite database and scoped to the NAS and account. After reconnecting or restarting the web server, it checks note versions to determine which notes need indexing. It also reuses bodies read when opening and saving notes.
 
 Links using document IDs, NAS note IDs, and unique `title.md` filenames are connected; if multiple notes have the same title, no arbitrary connection is made. Notebook and tag filters, connection depth for the local graph, and showing unconnected notes are supported. In the full graph, the middle note list becomes a note connection map panel like the Mac app's. It shows key notes, search results, incoming/outgoing connections for the selected note, and a notebook color legend, sharing node colors and connection-direction highlighting with the canvas.
 
@@ -55,17 +57,25 @@ If you are reusing Compose from 0.2.x, replace it with the new `docker-compose.y
 
 ## Saving and compatibility
 
+Select a notebook and use **Import Markdown** in the toolbar to create one note per UTF-8 `.md` or `.markdown` file. Add any linked local files separately from the imported note.
+
 Changes are autosaved to the NAS 0.8 seconds after you stop editing. There are no separate Save, Start editing, or Cancel buttons; edit directly in source/split view. You can continue typing while saving, and changes made while awaiting a response are saved next using the confirmed new version as their base. Saving waits during Korean character composition. The bottom status area shows saves as pending, in progress, complete, or stopped. Remaining changes are also saved before navigating away from a note or logging out. In a conflict or when the outcome is uncertain, your edits are preserved and automatic resending stops.
 
 Existing Markdown notes are read by checking source fingerprints in the Mac app/CLI's `SourceEnvelope` v1/v2/v3. Supported Markdown is saved in the sequence: register temporary source → save body → publish verified final source, rechecking the remote version and body at every step. Existing image attachments and source-preservation blocks are retained. Mermaid and KaTeX libraries and fonts are included in the image and do not depend on a CDN. Scripts included in documents are removed from previews. For internal links, only the app's nonce-restricted forwarding code runs in an opaque iframe, and the parent validates the iframe source and nonce. Automatic external network requests are blocked.
 
 In editable Markdown notes, paste an image, drop a file, or choose files from the editor. Each file can be up to 50 MB (50,000,000 bytes). Larger files are rejected. The web server encrypts staged uploads and transfers them to the NAS when the note autosaves.
 
+Use the trash icon next to an attachment in the note information panel to remove it from the NAS. Remove the reference in the note first if the file is still in use. The app manages Markdown source files and generated math images.
+
+In an existing HTML note, select a run of text to apply bold, italic, underline, or strikethrough. Insert a table at the end of the note or select a cell in a regular table to add or remove rows and columns. Changes preserve the original HTML outside the edited range.
+
+Open **Revision history** in the note information panel to preview and restore versions listed by the NAS. Completed web saves publish a listable version. Restore applies the selected title and body as a new save using the current NAS version for conflict checks. Existing user attachments are kept. The app checks that the older revision's required files are available before saving.
+
 The following limitations apply to avoid data loss when handling unsupported changes:
 
-- Body editing for encrypted notes and notes in the trash. Existing attachments and complex HTML support text editing that preserves original bytes and attributes, while editing that freely restructures the original formatting is restricted.
-- Deleting general attachments already stored on the NAS, and arbitrary changes to source-preservation blocks.
-- Version history management and offline synchronization do not yet have feature parity with macOS. Permanent deletion is not provided in this scope.
+- Body editing for encrypted notes and notes in the trash.
+- Arbitrary changes to source-preservation blocks.
+- Offline synchronization and permanent note deletion.
 
 Your edits and their base version are temporarily stored in the current tab's sessionStorage, separated by user and NAS, and restored after a refresh. They may disappear when the tab closes. Successful logout clears that account's drafts; failed logout retains them. NAS passwords, SIDs, and authentication tokens are not kept in browser storage.
 

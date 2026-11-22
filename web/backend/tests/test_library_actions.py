@@ -83,6 +83,9 @@ class MockStation:
                 # Official set does not implement trash/restore. Model the live
                 # no-op so a mistaken set/recycle implementation cannot pass.
                 self.note.update({k: deepcopy(v) for k, v in params.items() if k in {"tag", "parent_id"}})
+                for entry in params.get("attachment", []):
+                    assert entry["action"] == "delete"
+                    self.note["attachment"].pop(entry["file_id"])
             self.note["ver"] = "v2"
             data = {"data": [{"object_id": "note1", "ver": "v2"}]}
         elif api == SHORTCUT:
@@ -92,6 +95,13 @@ class MockStation:
             if method == "create":
                 self.books.append({"object_id": "newbook", "title": params["title"], "stack": ""})
                 data = {"object_id": "newbook"}
+            elif method == "delete":
+                assert params["recursive"] is False
+                book_id = params["object_id"]
+                self.books = [book for book in self.books if book["object_id"] != book_id]
+                if self.note["parent_id"] == book_id:
+                    self.note.update(recycle=True, parent_id="recycle", old_parent_id=book_id)
+                data = None
             else:
                 ids = params["object_id"]
                 ids = ids if isinstance(ids, list) else [ids]
@@ -103,7 +113,7 @@ class MockStation:
             assert params["stack_id"] == "책장 & A#123"
             for book in self.books:
                 if book["stack"] == "책장 & A":
-                    book["stack"] = params["name"]
+                    book["stack"] = "" if method == "delete" else params["name"]
             data = None
         else:
             raise AssertionError((api, method))
@@ -150,6 +160,108 @@ def harness(tmp_path, monkeypatch):
         return client.post("/api/library/action", json=body,
                            headers={"Origin": "http://testserver", "X-CSRF-Token": csrf, **headers})
     return station, store, post, client
+
+
+@pytest.mark.parametrize("content,status", [
+    ("<p>본문</p>", 200),
+    ('<img ref="ref1">', 409),
+    ('<p>본문</p><a href="/download?content_id=source%2Emd">첨부</a>', 409),
+    ('<a href="/download?file_id=%22source%2Emd%22">첨부</a>', 409),
+])
+def test_remove_nas_attachment_preserves_note_and_blocks_body_references(harness, content, status):
+    station, store, _, client = harness
+    station.note["content"] = content
+    login = client.post("/api/auth/login", json={"username":"alice", "password":"password-private"},
+                        headers={"Origin":"http://testserver"})
+    response = client.put("/api/notes/note1", json={"notebook_id":"book1", "version":"v1",
+        "title":"기존 제목", "remove_attachment_id":"file1"},
+        headers={"Origin":"http://testserver", "X-CSRF-Token":login.json()["csrf_token"]})
+    assert response.status_code == status, response.text
+    assert station.note["content"] == content and not store.pending_writes(OWNER)
+    if status == 200:
+        assert response.json()["attachments"] == []
+        assert station.mutations[0][2]["attachment"] == [{"action":"delete", "file_id":"file1"}]
+        assert station.mutations[0][2]["check_conflict"] is True
+    else:
+        assert response.json()["error"] == "ATTACHMENT_IN_USE"
+        assert not station.mutations
+
+
+def test_removing_unused_bound_attachment_keeps_markdown_source(monkeypatch):
+    from synonote_web.compat.source_envelope import SourceEnvelope
+
+    uid = "edcd1d23-4a35-43d9-95ef-6dae81a0eb84"
+    doc = "8027ec03-7300-4288-ab01-afd31cabc98a"
+    before = dict(id="note1", notebook_id="book1", version="v1", title="Title", html="<p>본문</p>",
+                  markdown="본문", locked=False, trashed=False, source_file_id="src",
+                  source_document_id=doc, attachment_bindings={uid:"unused"}, blocks=[], math_attachments={},
+                  attachments=[dict(id="src", ref=None, name=f"synology-note-source-{doc}.md"),
+                               dict(id="unused", ref=None, name="photo.png")])
+    remote = before.copy()
+    writes = []
+
+    def mutate(self, base, login, **kwargs):
+        writes.append(kwargs)
+        filename, data = kwargs["upload"]
+        source = SourceEnvelope.decode(data)
+        assert source.matches(before["html"])
+        assert source.attachment_bindings == {} and source.document_id.lower() == doc
+        remote.update(version="v2", attachment_bindings={}, source_file_id="new-src",
+                      attachments=[dict(id="new-src", ref=None, name=filename)])
+        return "note1", "v2"
+
+    monkeypatch.setattr(NasClient, "fetch", lambda *args: remote.copy())
+    monkeypatch.setattr(NasClient, "_mutate_markdown", mutate)
+    monkeypatch.setattr(NasClient, "download", lambda *args: writes[0]["upload"][1])
+    result = NasClient().remove_attachment(BASE, NasLogin("sid", None), note_id="note1",
+        notebook_id="book1", version="v1", file_id="unused")
+    assert writes[0]["deleting"] == ["unused", "src"]
+    assert result["markdown"] == "본문" and result["html"] == before["html"]
+
+
+@pytest.mark.parametrize("recycle_type", [bool, int])
+def test_delete_notebook_keeps_notes_in_recycle_bin(harness, recycle_type):
+    station, store, post, _ = harness
+    station.note["recycle"] = recycle_type(False)
+    station.corrupt = lambda remote: remote.note.update(recycle=recycle_type(True))
+    response = post({"kind": "notebook", "action": "delete", "id": "book1"})
+    assert response.status_code == 200, response.text
+    assert station.mutations[0][:3] == (BOOK, "delete", {"object_id": "book1", "recursive": False})
+    assert station.note["recycle"] and station.note["old_parent_id"] == "book1"
+    assert [book["object_id"] for book in station.books] == ["book2"]
+    assert not store.pending_writes(OWNER)
+
+
+def test_delete_stack_keeps_notebooks_and_notes(harness):
+    station, store, post, _ = harness
+    previous_note = deepcopy(station.note)
+    response = post({"kind": "stack", "action": "delete", "id": "책장 & A"})
+    assert response.status_code == 200, response.text
+    assert station.mutations[0][:3] == (STACK, "delete", {"stack_id": "책장 & A#123"})
+    assert [book["object_id"] for book in station.books] == ["book1", "book2"]
+    assert not any(book["stack"] for book in station.books)
+    assert station.note == previous_note
+    assert not store.pending_writes(OWNER)
+
+
+def test_delete_notebook_requires_review_of_unconfirmed_account_writes(harness):
+    station, store, post, _ = harness
+    assert store.start_write("pending-note", OWNER, "note1", "note1", "Note", {})
+    response = post({"kind": "notebook", "action": "delete", "id": "book1"})
+    assert response.status_code == 409, response.text
+    assert not station.mutations
+
+
+def test_delete_notebook_unverified_recycle_result_is_not_replayed(harness):
+    station, store, post, _ = harness
+    station.corrupt = lambda remote: remote.note.update(recycle=False)
+    command = {"kind": "notebook", "action": "delete", "id": "book1"}
+    assert post(command).status_code == 409
+    assert store.pending_writes(OWNER)[0]["status"] == "uncertain"
+    assert post(command).status_code == 409
+    assert not store.start_write("another", OWNER, "note1", "note1", "Note", {})
+    assert store.start_write("different-account", "other-owner", "note1", "note1", "Note", {})
+    assert len(station.mutations) == 1
 
 
 @pytest.mark.parametrize("action,value,field,want", [
@@ -380,8 +492,8 @@ def test_trash_relocation_cannot_lose_original_notebook_binding(harness):
     {"kind": "note", "id": "note1", "action": "favorite", "version": "v1", "value": "true"},
     {"kind": "note", "id": "note1", "action": "tags", "version": "v1", "value": [1]},
     {"kind": "note", "id": "../bad", "action": "trash", "version": "v1"},
-    {"kind": "notebook", "id": "book1", "action": "delete"},
-    {"kind": "stack", "id": "old", "action": "delete"},
+    {"kind": "notebook", "id": "book1", "action": "delete", "value": True},
+    {"kind": "stack", "id": "old", "action": "delete", "name": "other"},
     {"kind": "note", "id": "note1", "action": "delete", "version": "v1"},
     {"kind": "stack", "action": "create", "name": "empty", "value": []},
     {"kind": "notebook", "action": "create", "name": " "},

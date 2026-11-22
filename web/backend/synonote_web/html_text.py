@@ -4,6 +4,7 @@ from html import escape, unescape
 from html.parser import HTMLParser
 import secrets
 import hashlib
+from .html_structure import replace_ranges, table_markers
 
 
 @dataclass(frozen=True)
@@ -65,9 +66,12 @@ def layout_identity(source: str) -> str:
 
 
 def annotate(source: str) -> dict:
-    blocks=text_blocks(source); token=secrets.token_hex(16); preview=source
-    for index,block in reversed(list(enumerate(blocks))):
-        preview=(preview[:block.start]+f'<span data-edit-token="{token}" data-text-index="{index}">'+escape(block.text,quote=False)+'</span>'+preview[block.end:])
+    blocks=text_blocks(source); token=secrets.token_hex(16)
+    patches = [(offset, offset, marker) for offset, marker in table_markers(source, token)]
+    patches.extend((block.start, block.end,
+                    f'<span data-edit-token="{token}" data-text-index="{index}">'+escape(block.text,quote=False)+'</span>')
+                   for index, block in enumerate(blocks))
+    preview = replace_ranges(source, patches)
     offsets=[0]
     for char in source: offsets.append(offsets[-1]+(2 if ord(char)>0xffff else 1))
     return {'html_text_preview':preview,'html_text_token':token,

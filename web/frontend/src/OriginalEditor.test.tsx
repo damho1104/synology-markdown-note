@@ -65,6 +65,24 @@ it.each(["first<div>last</div>", "first<br>last"])(
 );
 
 
+it("sends a formatting range and table coordinates for the original HTML", () => {
+  const edit = vi.fn();
+  render(<OriginalEditor html={'<table data-structure-token="token" data-table-index="1"><tr><td data-table-index="99" data-structure-token="token" data-table-row="0" data-table-column="0"><span data-edit-token="token" data-text-index="3">A &amp; B</span></td></tr></table>'}
+    token="token" blocks={[{index:3,text:"A & B"}]} changes={[]} editable dark={false}
+    onChange={vi.fn()} onStructureEdit={edit} />);
+  const span = screen.getByRole("textbox").querySelector("span")!;
+  const range = document.createRange();
+  range.setStart(span.firstChild!, 2); range.setEnd(span.firstChild!, 3);
+  const selection = window.getSelection()!;
+  selection.removeAllRanges(); selection.addRange(range);
+  fireEvent(document, new Event("selectionchange"));
+  fireEvent.click(screen.getByRole("button", {name:"굵게"}));
+  expect(edit).toHaveBeenLastCalledWith({kind:"bold", index:3, start:2, end:3});
+  fireEvent.click(span);
+  fireEvent.click(screen.getByRole("button", {name:"아래에 행 추가"}));
+  expect(edit).toHaveBeenLastCalledWith({kind:"row_after", index:1, row:0, column:0});
+});
+
 it("keeps the live text node and caret when an autosave updates its baseline token", () => {
   const props = {blocks:[{index:0,text:"old"}],changes:[],editable:true,dark:false,onChange:vi.fn()};
   const view = render(<OriginalEditor {...props} html={'<p><span data-edit-token="one" data-text-index="0">old</span></p>'} token="one" />);

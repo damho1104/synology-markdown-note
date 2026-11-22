@@ -39,6 +39,7 @@ class LibraryPlan:
     params: dict
     before: dict
     expected: dict
+    recycled_note_ids: frozenset[str] = frozenset()
 
 
 def _require(condition: bool, code: str = "NAS_API_ERROR") -> None:
@@ -97,6 +98,14 @@ class LibraryNasOperations:
         _require(all(isinstance(v.get("category"), str) for v in rows))
         return {v["id"] for v in rows if v["category"] == "note"}
 
+    def _library_notebook_members(self, client, base, login, notebook_id):
+        rows = self._list(client, base, login, NOTE, "notes", 3)
+        _require(all(isinstance(row.get("parent_id"), str)
+                     and type(row.get("recycle")) in (bool, int) and row["recycle"] in (0, 1)
+                     for row in rows))
+        return frozenset(row["object_id"] for row in rows
+                         if row["parent_id"] == notebook_id and not row["recycle"])
+
     def preflight_library_action(self, base: str, login: NasLogin, command: dict) -> LibraryPlan:
         """Read and prepare an already validated library_api.LibraryActionInput.
 
@@ -108,6 +117,7 @@ class LibraryNasOperations:
         command = deepcopy(command)
         kind, action = command["kind"], command["action"]
         object_id, name, value = command.get("id"), command.get("name"), command.get("value")
+        recycled_note_ids = frozenset()
         with self._client() as client:
             if kind == "note":
                 # fetch inspects SourceEnvelope staging attachments. Raw Note/get
@@ -165,6 +175,11 @@ class LibraryNasOperations:
                             raise LibraryPreflightError("DUPLICATE_NOTEBOOK_NAME")
                         params.update(object_id=object_id, title=name)
                         expected[object_id]["title"] = name
+                    elif action == "delete":
+                        method = "delete"
+                        params = {"object_id": object_id, "recursive": False}
+                        del expected[object_id]
+                        recycled_note_ids = self._library_notebook_members(client, base, login, object_id)
                     else:
                         if value and not any(v["stack"] == value for v in before.values()):
                             raise LibraryPreflightError("STACK_NOT_FOUND", 404)
@@ -182,17 +197,21 @@ class LibraryNasOperations:
                     members = [k for k, v in before.items() if v["stack"] == object_id]
                     if not members:
                         raise LibraryPreflightError("STACK_NOT_FOUND", 404)
-                    if name != object_id and any(v["stack"] == name for v in before.values()):
+                    if action == "rename" and name != object_id and any(v["stack"] == name for v in before.values()):
                         raise LibraryPreflightError("DUPLICATE_STACK_NAME")
                     info = self._call(client, base, login, INFO, "get", 2, 2)
                     uid = info.get("uid")
                     _require(type(uid) in (int, str) and bool(str(uid)))
                     api, cap, minimum = STACK, 1, 1
-                    params = {"stack_id": f"{object_id}#{uid}", "name": name}
+                    params = {"stack_id": f"{object_id}#{uid}"}
+                    if action == "delete":
+                        method = "delete"
+                    else:
+                        params["name"] = name
                     for member in members:
-                        expected[member]["stack"] = name
+                        expected[member]["stack"] = "" if action == "delete" else name
             routing = self._info(client, base, api, cap, minimum, login)
-        return LibraryPlan(base, command, api, method, routing, params, before, expected)
+        return LibraryPlan(base, command, api, method, routing, params, before, expected, recycled_note_ids)
 
     def _library_send(self, client, base: str, login: NasLogin, plan: LibraryPlan,
                       method: str, params: dict, *, empty: bool = True) -> dict:
@@ -285,5 +304,11 @@ class LibraryNasOperations:
                         wanted = wanted if isinstance(wanted, list) else [wanted]
                         _require(receipt["object_id"] in wanted)
                     _require(self._library_books(client, base, login) == expected)
+                    if plan.recycled_note_ids:
+                        rows = self._list(client, base, login, NOTE, "notes", 3)
+                        _require(plan.recycled_note_ids <= {
+                            row["object_id"] for row in rows if type(row.get("recycle")) in (bool, int)
+                            and row["recycle"] == 1
+                        })
         except Exception as exc:
             raise NasError("WRITE_UNCERTAIN") from exc

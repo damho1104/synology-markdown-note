@@ -314,6 +314,73 @@ def test_title_links_resolve_only_unique_plain_filenames(graph_http):
     assert client.get('/api/resolve-note',params={'target':'한글%20노트.md'}).status_code == 409
 
 
+def test_body_search_reuses_private_current_version_index(tmp_path):
+    from synonote_web.store import Store
+
+    notes = {
+        "n1": dict(id="n1", title="HTML", notebook_id="book", version="1", locked=False, trashed=False,
+                   tags=[], html="<p>깊은 <strong>본문</strong></p><script>숨긴 본문</script>"),
+        "n2": dict(id="n2", title="Markdown", notebook_id="book", version="1", locked=False, trashed=False,
+                   tags=[], html="", markdown="## 깊은 본문"),
+    }
+    class Nas:
+        calls = []
+
+        def notes(self, *_):
+            return list(notes.values())
+
+        def fetch(self, _base, _login, note_id):
+            self.calls.append(note_id)
+            return notes[note_id]
+
+    app = FastAPI()
+    nas = Nas()
+    store = Store(tmp_path)
+    store.save_graph_index("first", dict(id="n1", version="1", links=[]))
+    register_graph_routes(app, read_nas=lambda req, res, fn: fn("base", None), nas=nas, store=store,
+                          owner_for_request=lambda req, res: req.headers.get("x-account", "first"))
+    with TestClient(app) as web:
+        def search(q, **headers):
+            response = web.post("/api/search/body", json={"query": q}, headers=headers)
+            assert response.status_code == 200, response.text
+            assert response.headers["Cache-Control"] == "no-store"
+            return {entry["id"] for entry in response.json()["matches"]}
+
+        assert search("깊은 본문") == set()
+        assert web.get("/api/graph?summary=true").json()["pending"] == ["n1", "n2"]
+        indexed = web.get("/api/graph/entries", params={"ids": '["n1","n2"]'})
+        assert "깊은" not in indexed.text
+        assert "깊은" not in web.get("/api/graph?summary=true").text
+        assert search("깊은 본문") == {"n1", "n2"}
+        matches = web.post("/api/search/body", json={"query":"깊은 본문"}).json()["matches"]
+        assert {row["title"] for row in matches} == {"HTML", "Markdown"}
+        with store.connect() as db:
+            stored = db.execute("SELECT entry FROM graph_index WHERE owner='first'").fetchall()
+            assert all("body_text" not in json.loads(store.cipher.decrypt(row["entry"])) for row in stored)
+        assert search("숨긴 본문") == set()
+        assert search("깊은 본문", **{"x-account": "other"}) == set()
+        notes["n1"]["version"] = "2"
+        assert search("깊은 본문") == {"n2"}
+        notes["n2"]["locked"] = True
+        assert search("깊은 본문") == set()
+        assert sorted(nas.calls) == ["n1", "n2"]
+    assert "깊은 본문".encode() not in (tmp_path / "web.sqlite3").read_bytes()
+
+
+def test_migrates_existing_embedded_body_into_a_separate_encrypted_index(tmp_path):
+    from synonote_web.store import Store
+
+    store = Store(tmp_path)
+    legacy = dict(id="n1", version="1", links=[], body_text="찾을 수 있는 본문")
+    with store.connect() as db:
+        db.execute("DELETE FROM config WHERE name='separate_note_body_index_v1'")
+        db.execute("INSERT INTO graph_index VALUES(?,?,?,?)",
+                   ("owner", "n1", "1", store.cipher.encrypt(json.dumps(legacy).encode())))
+    reopened = Store(tmp_path)
+    assert reopened.load_graph_index("owner", {"n1":"1"}) == [dict(id="n1", version="1", links=[])]
+    assert reopened.search_note_bodies("owner", {"n1":"1"}, "본문") == ({"n1"}, 1)
+
+
 def test_batched_reads_keep_authentication_and_session_expiry(graph_http):
     client, add, errors, seen = graph_http
     add('a')

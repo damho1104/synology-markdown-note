@@ -32,7 +32,7 @@ class LibraryActionInput(BaseModel):
 
     kind: Literal["note", "notebook", "stack"]
     id: str | None = Field(default=None, max_length=256)
-    action: Literal["favorite", "tags", "trash", "restore", "move", "create", "rename"]
+    action: Literal["favorite", "tags", "trash", "restore", "move", "create", "rename", "delete"]
     version: str | None = Field(default=None, max_length=128)
     value: str | bool | list[str] | None = None
     name: str | None = Field(default=None, max_length=256)
@@ -64,6 +64,8 @@ class LibraryActionInput(BaseModel):
                     valid = valid and (self.value is None or _text(self.value, empty=True))
             elif self.action == "rename":
                 valid = _text(self.id) and _text(self.name) and self.value is None
+            elif self.action == "delete":
+                valid = _text(self.id) and self.name is None and self.value is None
             elif self.kind == "notebook" and self.action == "move":
                 valid = _text(self.id) and self.name is None and _text(self.value, empty=True)
         if not valid:
@@ -95,6 +97,8 @@ def install_library_routes(app, *, nas, read_nas, nas_access, csrf_guard, checke
         command = body.model_dump()
         operation_id = str(uuid.uuid4())
         target = body.id if body.kind == "note" else "library:catalog"
+        if body.kind == "notebook" and body.action == "delete":
+            target = store.NOTEBOOK_DELETE_TARGET
         note_id = body.id if body.kind == "note" else None
         title = body.name or body.id or body.action
         if not store.start_write(operation_id, owner, target, note_id, title, command):

@@ -15,6 +15,7 @@ import {
   BookOpenText,
   ChevronRight,
   FilePlus2,
+  FileUp,
   FileText,
   FolderOpen,
   LogOut,
@@ -42,6 +43,7 @@ import {
 import { AppIcon } from "./AppIcon";
 import {
   ApiFailure,
+  errorText,
   jsonRequest,
   readInSession,
   request,
@@ -49,7 +51,7 @@ import {
   type Status,
 } from "./api";
 import { requestId } from "./ids";
-import { GlobalSearchDialog } from "./GlobalSearchDialog";
+import { GlobalSearchDialog, type BodySearchResult } from "./GlobalSearchDialog";
 import { HttpNasWarning } from "./HttpNasWarning";
 import { NoteGraph } from "./NoteGraph";
 import { GraphIndexProvider, GraphIndexStatus } from "./GraphIndex";
@@ -62,6 +64,7 @@ import {
 } from "./LibraryDialog";
 import {
   OriginalEditor,
+  type StructureEdit,
   changedHtmlPreview,
   type TextChange,
 } from "./OriginalEditor";
@@ -74,7 +77,9 @@ import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { tags as syntaxTags } from "@lezer/highlight";
 import { markdown as markdownLanguage } from "@codemirror/lang-markdown";
 import { exportMath } from "./mathExport";
+import { readMarkdownFile } from "./markdownImport";
 import { NotePreview } from "./NotePreview";
+import { NoteRevisionDialog } from "./NoteRevisionDialog";
 import { AttachmentQueue } from "./AttachmentQueue";
 import {
   detachUploadReferences, MAX_ATTACHMENT_BYTES, MAX_QUEUED_ATTACHMENTS, recoveryUploadReferences, restoreUploads, uploadManifest,
@@ -114,6 +119,8 @@ type NoteDetail = NoteSummary & {
   html_text_token?: string;
   html_text_blocks?: (TextChange & { start?: number; end?: number })[];
   attachment_bindings?: Record<string, string>;
+  source_file_id?: string;
+  math_attachments?: Record<string, unknown>;
   markdown?: string;
   blocks?: { id: string; html: string; label: string }[];
   html: string;
@@ -130,6 +137,16 @@ type WriteOperation = {
   status: string;
   created: number;
 };
+type ImportProgress = {filename:string; completed:number; total:number};
+type CreateReceipt = {status:string; note?:NoteDetail; operation_id?:string};
+
+function confirmedImport({filename, completed, total}: ImportProgress): string {
+  const remaining = total - completed - 1;
+  return `${filename} · ${completed + 1}/${total}개 가져옴 · ${remaining > 0
+    ? `나머지 ${remaining}개 파일을 선택해 계속할 수 있습니다.`
+    : "가져오기를 확인했습니다."}`;
+}
+
 type Draft = {
   text_changes?: TextChange[];
   text_layout?: string;
@@ -138,6 +155,7 @@ type Draft = {
   attachments?: DraftUploads;
   pending_upload_ids?: string[];
   create_sent?: {title:string;html:string;markdown?:string};
+  importProgress?: ImportProgress;
   review_required?: boolean;
   recovery_acknowledged?: boolean;
   resume_paused?: boolean;
@@ -284,12 +302,6 @@ function draftDelete(key: string): void {
   }
 }
 
-function errorText(error: unknown): string {
-  return error instanceof Error
-    ? error.message
-    : "요청 처리 중 오류가 발생했습니다.";
-}
-
 export function Workspace({
   session,
   status,
@@ -314,7 +326,8 @@ export function Workspace({
   const [noteLoading, setNoteLoading] = useState(false);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [editing, setEditing] = useState(false);
-  const [savingAction, setSavingAction] = useState<"note" | "library" | null>(null);
+  const [savingAction, setSavingAction] = useState<"note" | "library" | "import" | "note-action" | null>(null);
+  const markdownImportInput = useRef<HTMLInputElement>(null);
   const saving = savingAction !== null;
   const [composing, setComposing] = useState(false);
   const [saveFailure, setSaveFailure] = useState<"safe" | "conflict" | "uncertain" | null>(null);
@@ -358,6 +371,7 @@ export function Workspace({
     y: number;
   } | null>(null);
   const [inspector, setInspector] = useState(false);
+  const [revisionNoteId, setRevisionNoteId] = useState<string | null>(null);
   const [preferences, setPreferences] = useState(loadPreferences);
   const [showSettings, setShowSettings] = useState(false);
   const [systemDark, setSystemDark] = useState(
@@ -684,6 +698,10 @@ export function Workspace({
     },
     [onSessionExpired],
   );
+  const searchNoteBody = useCallback((query: string, signal: AbortSignal) =>
+    request<BodySearchResult>("/api/search/body", {
+      ...jsonRequest({query}, {"X-CSRF-Token": session.csrf_token}), signal,
+    }), [session.csrf_token]);
 
   const loadLists = useCallback(async () => {
     setListLoading(true);
@@ -1223,7 +1241,7 @@ export function Workspace({
   async function recoverCreate(saved: Draft, storageKey: string, active = () => true) {
     if (!saved.client_request_id) return;
     try {
-      const receipt = await request<{status:string;note?:NoteDetail;operation_id?:string}>(
+      const receipt = await request<CreateReceipt>(
         `/api/creates/${encodeURIComponent(saved.client_request_id)}`);
       if (!active() || navigating.current.activeKey !== saved.key ||
           navigating.current.draft?.client_request_id !== saved.client_request_id ||
@@ -1248,6 +1266,7 @@ export function Workspace({
         ? notes.map(row => row.id === summary.id ? {...row, ...summary} : row) : [...notes, summary]);
       setSaveFailure(null);
       commitRoute({shelf:route.shelf,notebook:note.notebook_id,note:note.id,compose:false}, true);
+      if (saved.importProgress) setMessage(confirmedImport(saved.importProgress));
     } catch (error) { if (active()) handleError(error, setNoteError); }
   }
 
@@ -1442,10 +1461,116 @@ export function Workspace({
       handleError(error, setNoteError);
     }
   }
+  async function applyNoteAction(action: {structure_edit: StructureEdit; text_layout: string}
+      | {remove_attachment_id: string} | {restore_version: string}): Promise<string | undefined> {
+    if (!detail || !draft || dirty || saving || writeInFlight.current || hasStagedUploads ||
+        draft.review_required || draft.resume_paused || composingNow.current)
+      return "편집본과 진행 중인 저장을 먼저 확인하세요.";
+    writeInFlight.current = true;
+    setSavingAction("note-action");
+    setNoteError("");
+    try {
+      const next = await request<NoteDetail>(`/api/notes/${encodeURIComponent(detail.id)}`, jsonRequest({
+        title: detail.title, notebook_id: detail.notebook_id, version: detail.version,
+        ...action,
+      }, {"X-CSRF-Token":session.csrf_token}, "PUT"));
+      setDetail(next);
+      setDraft({...draft, title:next.title, html:next.html, markdown:next.markdown, version:next.version, notebook_id:next.notebook_id,
+        text_changes:next.html_text_preview ? [] : undefined,
+        text_layout:next.html_text_layout, text_blocks:next.html_text_blocks});
+      setNotes(current => current.map(note => note.id === next.id ? {...note, ...next} : note));
+      if (route.notebook && route.notebook !== next.notebook_id)
+        commitRoute({...route, shelf:null, notebook:next.notebook_id}, true);
+    } catch (error) {
+      handleError(error, setNoteError);
+      void loadPending();
+      return errorText(error);
+    } finally {
+      writeInFlight.current = false;
+      setSavingAction(null);
+    }
+  }
+
+  async function importMarkdown(files: File[]) {
+    if (!files.length || !selectedNotebook || route.compose || saving || writeInFlight.current) return;
+    const destination = selectedNotebook.id;
+    const key = `new:${destination}`;
+    const storageKey = draftPrefix + key;
+    if (dirty || hasStagedUploads || draft?.review_required || draft?.resume_paused || draftRead(storageKey)) {
+      setMessage("작성하거나 보관 중인 편집본을 먼저 확인한 뒤 가져오세요.");
+      return;
+    }
+    let imported = 0;
+    let latest: NoteDetail | undefined;
+    let held: Draft | undefined;
+    let filename = "";
+    writeInFlight.current = true;
+    setSavingAction("import");
+    setMessage("");
+    try {
+      for (const file of files) {
+        filename = file.name;
+        const {title, markdown} = await readMarkdownFile(file);
+        const client_request_id = requestId();
+        const math_images = await exportMath(markdown, session.csrf_token);
+        const source = {title, markdown, html:BLANK_HTML};
+        const sent: Draft = {...source, key, notebook_id:destination, client_request_id,
+          review_required:true, create_sent:source,
+          importProgress:{filename, completed:imported, total:files.length}};
+        draftStore(storageKey, sent);
+        if (draftRead(storageKey)?.client_request_id !== client_request_id) {
+          throw new Error("편집본을 이 탭에 보관할 수 없어 가져오기를 중단했습니다.");
+        }
+        held = sent;
+        latest = await request<NoteDetail>("/api/notes", jsonRequest({
+          title, markdown, notebook_id:destination, client_request_id,
+          ...(math_images.length ? {math_images} : {}),
+        }, {"X-CSRF-Token":session.csrf_token}));
+        draftDelete(storageKey);
+        held = undefined;
+        imported += 1;
+      }
+      if (latest) commitRoute({shelf: route.shelf, notebook: destination, note: latest.id, compose: false});
+      setMessage(`Markdown 노트 ${imported}개를 가져왔습니다.`);
+    } catch (error) {
+      const rejected = error instanceof ApiFailure && [400, 401, 403, 413, 422].includes(error.status);
+      if (held && rejected) {
+        draftDelete(storageKey);
+        held = undefined;
+      }
+      if (held) {
+        const receipt = await request<CreateReceipt>(`/api/creates/${encodeURIComponent(held.client_request_id!)}`)
+          .catch(() => null);
+        if (receipt?.status === "completed" && receipt.note) {
+          const recovered = receipt.note;
+          draftDelete(storageKey);
+          imported += 1;
+          createdDraft.current = {note:recovered, draft:{key:`note:${recovered.id}`, title:recovered.title,
+            html:recovered.html, markdown:recovered.markdown, notebook_id:recovered.notebook_id, version:recovered.version}};
+          commitRoute({shelf:route.shelf, notebook:recovered.notebook_id, note:recovered.id, compose:false});
+          setMessage(confirmedImport(held.importProgress!));
+          return;
+        }
+        setMessage(`${filename} · NAS 생성 결과를 확인하고 있습니다.`);
+        commitRoute({shelf: route.shelf, notebook: destination, note: null, compose: true});
+        void loadPending();
+      } else {
+        handleError(error, message => setMessage(`${filename} · ${imported}/${files.length}개 가져옴 · ${message}`));
+      }
+    } finally {
+      if (imported) await loadLists();
+      writeInFlight.current = false;
+      setSavingAction(null);
+    }
+  }
+
   async function libraryAction(action: LibraryAction) {
-    if (saving) return;
+    if (saving || writeInFlight.current) throw new Error("진행 중인 저장이 끝난 뒤 다시 시도하세요.");
     if (dirty)
       throw new Error("편집 내용을 저장하거나 취소한 다음 실행하세요.");
+    if (action.kind === "notebook" && action.action === "delete" &&
+        (hasStagedUploads || draft?.review_required || draft?.resume_paused))
+      throw new Error("보관된 편집본과 첨부파일을 먼저 확인하세요.");
     setSavingAction("library");
     setPendingError("");
     try {
@@ -1465,6 +1590,30 @@ export function Workspace({
           const next = [...new Set(current.map(name => name === action.id ? action.name! : name))];
           savePreference("expandedStacks", next); return next;
         });
+      }
+      if (action.action === "delete") {
+        const current = historyLocation.current.route;
+        if (action.kind === "stack") {
+          if (current.shelf === action.id) commitRoute({...current, shelf: ""}, true);
+          setExpandedStacks(previous => {
+            const next = previous.filter(name => name !== action.id);
+            savePreference("expandedStacks", next);
+            return next;
+          });
+        } else if (action.kind === "notebook") {
+          const removed = notebookById.get(action.id ?? "");
+          const notebookRemoved = current.notebook === action.id;
+          const shelfRemoved = current.shelf === removed?.stack && !notebooks.some(
+            book => book.id !== action.id && book.stack === current.shelf,
+          );
+          const noteRemoved = notes.some(note => note.id === current.note && note.notebook_id === action.id && !note.trashed);
+          if (notebookRemoved || shelfRemoved || noteRemoved) {
+            commitRoute({...current, shelf: shelfRemoved ? null : current.shelf,
+              notebook: notebookRemoved ? null : current.notebook,
+              note: noteRemoved || notebookRemoved ? null : current.note,
+              compose: !notebookRemoved && current.compose}, true);
+          }
+        }
       }
       await Promise.all([loadLists(), loadPending()]);
       if (action.kind === "note") setRevision((n) => n + 1);
@@ -1615,11 +1764,27 @@ export function Workspace({
             >
               <FilePlus2 size={19} />
             </button>
+            <button className="icon-button" aria-label="Markdown 가져오기"
+              title={selectedNotebook ? "Markdown 가져오기" : "메모장을 선택하세요"}
+              disabled={saving || !selectedNotebook || route.compose}
+              onClick={() => markdownImportInput.current?.click()}>
+              <FileUp size={18} />
+            </button>
+            <input hidden ref={markdownImportInput} type="file" multiple
+              accept=".md,.markdown,text/markdown" aria-label="가져올 Markdown 파일 선택"
+              onChange={event => {
+                const files = Array.from(event.currentTarget.files ?? []);
+                event.currentTarget.value = "";
+                void importMarkdown(files);
+              }} />
             <button
               className="icon-button"
               aria-label="전체 검색"
               title="전체 노트 검색"
-              onClick={() => setShowGlobalSearch(true)}
+              onClick={() => {
+                setShowGlobalSearch(true);
+                void loadLists();
+              }}
             >
               <Search size={19} />
             </button>
@@ -1973,7 +2138,8 @@ export function Workspace({
             <GraphIndexStatus />
           </footer>
         </section>
-        <main className="native-detail" aria-label="노트 본문">
+        <main className="native-detail" aria-label="노트 본문"
+          inert={savingAction === "import" || savingAction === "note-action"}>
           {route.filter === "graph" ? (
             <NoteGraph
               notebooks={notebooks}
@@ -2286,6 +2452,11 @@ export function Workspace({
                           changes={draft.text_changes}
                           editable={editing}
                           dark={dark}
+                          structureDisabled={saving || dirty || composing || draft.review_required || draft.resume_paused}
+                          onStructureEdit={(edit) => {
+                            if (detail.html_text_layout)
+                              void applyNoteAction({structure_edit:edit, text_layout:detail.html_text_layout});
+                          }}
                           onChange={(change) => {
                             const original = detail.html_text_blocks?.find(
                               (b) => b.index === change.index,
@@ -2429,19 +2600,28 @@ export function Workspace({
             <div className="inspector-card">
               {detail?.tags?.join(" · ") || "태그 없음"}
             </div>
+            {detail && !detail.locked && !detail.trashed && <button className="native-button"
+              onClick={() => setRevisionNoteId(detail.id)}>수정 이력 조회</button>}
             <h3>첨부파일</h3>
             <div className="inspector-card">
               {detail?.attachments.length
-                ? detail.attachments.map((file) => (
-                    <a
-                      key={file.id}
-                      href={`/api/notes/${encodeURIComponent(detail.id)}/attachments/${encodeURIComponent(file.id)}`}
-                      download={file.name}
-                    >
-                      <Paperclip size={14} />
-                      {file.name}
-                    </a>
-                  ))
+                ? detail.attachments.map((file) => {
+                    const protectedFile = file.id === detail.source_file_id ||
+                      /^synology-note-(source|math-|upload-)/i.test(file.name) ||
+                      Object.keys(detail.math_attachments ?? {}).some(uid => detail.attachment_bindings?.[uid] === file.id);
+                    return <div className="inspector-attachment" key={file.id}>
+                      <a href={`/api/notes/${encodeURIComponent(detail.id)}/attachments/${encodeURIComponent(file.id)}`}
+                        download={file.name}><Paperclip size={14} />{file.name}</a>
+                      {!protectedFile && !detail.locked && !detail.trashed && !writeInProgress(detail) &&
+                        (detail.editable || detail.html_text_preview) && <button className="icon-button"
+                          type="button" aria-label={`${file.name} 제거`} title="첨부파일 제거"
+                          disabled={saving || dirty || hasStagedUploads || draft?.review_required || draft?.resume_paused}
+                          onClick={() => {
+                            if (window.confirm(`‘${file.name}’ 파일을 NAS 노트에서 제거할까요?`))
+                              void applyNoteAction({remove_attachment_id:file.id});
+                          }}><Trash2 size={14}/></button>}
+                    </div>;
+                  })
                 : "첨부파일 없음"}
             </div>
             <h3>로컬 그래프 · 백링크</h3>
@@ -2530,6 +2710,20 @@ export function Workspace({
               책장으로 이동…
             </button>
           )}
+          <button
+            onClick={() => {
+              const label = contextMenu.kind === "stack" ? "책장" : "메모장";
+              const name = contextMenu.kind === "stack" ? contextMenu.id : notebookById.get(contextMenu.id)?.name;
+              setDialogAction({
+                request: {kind: contextMenu.kind, id: contextMenu.id, action: "delete"},
+                title: name ? `‘${name}’ ${label}을 삭제할까요?` : `${label}을 삭제할까요?`,
+                mode: "delete",
+              });
+              setContextMenu(null);
+            }}
+          >
+            {contextMenu.kind === "stack" ? "책장 삭제…" : "메모장 삭제…"}
+          </button>
           <button onClick={() => setContextMenu(null)}>닫기</button>
         </div>
       )}
@@ -2557,10 +2751,16 @@ export function Workspace({
           }}
         />
       )}
-      {showGlobalSearch && <GlobalSearchDialog notes={notes} notebooks={notebooks} loading={listLoading}
+      {showGlobalSearch && <GlobalSearchDialog notes={notes} notebooks={notebooks} loading={listLoading} searchBody={searchNoteBody}
         onSelect={(id)=>navigate({shelf:null,notebook:null,note:id,compose:false},false,'')}
         onClose={()=>setShowGlobalSearch(false)} />}
       {showSettings && <SettingsDialog preferences={preferences} onChange={setPreferences} onClose={() => setShowSettings(false)} />}
+      {detail && revisionNoteId === detail.id && <NoteRevisionDialog key={detail.id}
+        noteId={detail.id} currentVersion={detail.version} dark={dark}
+        canRestore={!saving && !dirty && !hasStagedUploads && !draft?.review_required &&
+          !draft?.resume_paused && !writeInProgress(detail)}
+        onRestore={version => applyNoteAction({restore_version:version})}
+        onClose={() => setRevisionNoteId(null)} />}
       {dialogAction && (
         <LibraryDialog
           key={JSON.stringify(dialogAction)}

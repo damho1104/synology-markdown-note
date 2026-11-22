@@ -39,6 +39,7 @@ def test_markdown_stages_body_and_publishes_verified_source(monkeypatch, lost_ph
     from email.parser import BytesParser
     from email.policy import default
     mutations=[];files={};row={};counter=0
+    listable = []
     if existing:
         original='<h1>Old</h1>\n'
         uid='11111111-1111-4111-8111-111111111111'
@@ -64,6 +65,7 @@ def test_markdown_stages_body_and_publishes_verified_source(monkeypatch, lost_ph
         else:
             method=form['method'];params={k:json.loads(v) for k,v in form.items() if k not in ('api','method','version','_sid')}
             if row:assert params['ver']==row['ver'] and params['check_conflict'] is True
+            listable.append(params["commit_msg"]["listable"])
             mutations.append(method);counter+=1
             if not row:row.update(object_id='new1',parent_id='book1',encrypt=False,recycle=False,attachment={})
             row.update({k:params[k] for k in ('title','content') if k in params});row['ver']=f'v{counter}'
@@ -95,6 +97,7 @@ def test_markdown_stages_body_and_publishes_verified_source(monkeypatch, lost_ph
         return
     result=NasClient().write_markdown('https://nas.example',NasLogin('sid',None),note_id='new1' if existing else None,notebook_id='book1',title='Web',markdown=markdown,version='v0' if existing else None, math_images=images)
     assert len(mutations) == 3 + len(images)
+    assert listable == [False] * (len(mutations) - 1) + [True]
     assert result['html'].startswith('<h1>Web</h1>\n<pre><code class="language-mermaid">flowchart LR\n A--&gt;B\n</code></pre>\n')
     if with_math: assert result['html'].count('<img ref=') == len(images)
     if existing=='referenced':

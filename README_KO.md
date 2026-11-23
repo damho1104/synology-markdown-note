@@ -1,8 +1,16 @@
 <h1 align="center">Synology Markdown Note</h1>
 
-<p align="center">
-  <a href="README.md">English</a> | <strong>한국어</strong>
-</p>
+<div align="center">
+
+**Synology Note Station의 노트를 Markdown으로 작성하고 관리하는 macOS 앱·웹·CLI입니다.**
+  
+[![Version](https://img.shields.io/github/v/release/damho1104/synology-markdown-note?style=for-the-badge&color=2563eb&label=Version)](https://github.com/damho1104/synology-markdown-note/releases)
+[![Docker](https://img.shields.io/badge/Docker-Web_Client-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://github.com/damho1104/synology-markdown-note/pkgs/container/synology-md-note-web)
+[![License](https://img.shields.io/badge/License-MIT-22c55e?style=for-the-badge)](LICENSE)
+
+![Platform](https://img.shields.io/badge/Client-Mac(Arm64),_Linux(Arm64,x86__64)-8b5cf6?style=for-the-badge)
+
+</div>
 
 <p align="center">
   <a href="https://buymeacoffee.com/damho1104q">
@@ -10,7 +18,11 @@
   </a>
 </p>
 
-**Synology Note Station의 노트를 Markdown으로 작성하고 관리하는 macOS 앱·웹·CLI입니다.**
+<p align="center">
+  <a href="README.md">English</a> | <strong>한국어</strong>
+</p>
+
+---
 
 기존 NAS의 책장·메모장·노트를 그대로 사용합니다. Mac에서는 전용 앱으로, 다른 기기에서는 웹 브라우저로, 터미널에서는 `synonote` 명령으로 사용할 수 있습니다.
 

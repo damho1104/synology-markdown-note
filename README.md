@@ -95,6 +95,7 @@ Explore connections between notes in the global graph.
 2. Open the DMG and drag **Synology Markdown Note.app** to **Applications**.
 3. Launch the app and sign in with your NAS address and account under **Settings → Note Station**.
 
+### ⚠️ Important
 The released app and CLI do not require source code or a separate Python installation. The macOS app uses a self-signed certificate and is not notarized by Apple. If macOS blocks it, verify the download source, then follow the instructions in **System Settings → Privacy & Security** to open it.
 
 For checksums and installation details, see the [installation and distribution guide](docs/distribution.md).

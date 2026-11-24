@@ -26,3 +26,6 @@ profile.json
 *.log
 .pytest_cache/
 __pycache__/
+.contexty
+web/frontend/.vite
+AGENTS.md

@@ -95,6 +95,7 @@ macOS 앱의 Markdown 분할 편집 화면입니다.
 2. DMG를 열고 **Synology Markdown Note.app**을 **Applications(응용 프로그램)** 폴더로 드래그합니다.
 3. 앱을 실행하고 **설정 → Note Station**에서 NAS 주소와 계정을 입력해 로그인합니다.
 
+### ⚠️ 중요 사항
 릴리스 앱·CLI를 사용할 때 소스 코드나 Python을 설치할 필요는 없습니다. macOS 앱은 자체 서명 인증서를 사용하며 Apple 공증을 받지 않았습니다. 실행이 차단되면 파일 출처를 확인한 뒤 **시스템 설정 → 개인정보 보호 및 보안**의 열기 안내를 따르세요.
 
 체크섬 확인과 자세한 설치 방법은 [설치·배포 안내](docs/distribution.ko.md)를 참고하세요.

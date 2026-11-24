@@ -1,8 +1,16 @@
 <h1 align="center">Synology Markdown Note</h1>
 
-<p align="center">
-  <strong>English</strong> | <a href="README_KO.md">한국어</a>
-</p>
+<div align="center">
+
+**A macOS app, web client, and CLI for writing and managing Synology Note Station notes in Markdown.**
+  
+[![Version](https://img.shields.io/github/v/release/damho1104/synology-markdown-note?style=for-the-badge&color=2563eb&label=Version)](https://github.com/damho1104/synology-markdown-note/releases)
+[![Docker](https://img.shields.io/badge/Docker-Web_Client-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://github.com/damho1104/synology-markdown-note/pkgs/container/synology-md-note-web)
+[![License](https://img.shields.io/badge/License-MIT-22c55e?style=for-the-badge)](LICENSE)
+
+![Platform](https://img.shields.io/badge/Client-Mac(Arm64),_Linux(Arm64,x86__64)-8b5cf6?style=for-the-badge)
+
+</div>
 
 <p align="center">
   <a href="https://buymeacoffee.com/damho1104q">
@@ -10,7 +18,11 @@
   </a>
 </p>
 
-**A macOS app, web client, and CLI for writing and managing Synology Note Station notes in Markdown.**
+<p align="center">
+  <strong>English</strong> | <a href="README_KO.md">한국어</a>
+</p>
+
+---
 
 Use the shelves, notebooks, and notes already on your NAS. Work in the dedicated Mac app, access your notes from a browser on other devices, or use the `synonote` command in your terminal.
 

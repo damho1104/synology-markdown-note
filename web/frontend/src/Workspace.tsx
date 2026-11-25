@@ -391,6 +391,8 @@ export function Workspace({
   const [notebooks, setNotebooks] = useState<Notebook[]>([]);
   const [notes, setNotes] = useState<NoteSummary[]>([]);
   const [listLoading, setListLoading] = useState(true);
+  const listRequestVersion = useRef(0);
+  const listMutationVersion = useRef(0);
   const [libraryReady, setLibraryReady] = useState(false);
   const graphRevision = useMemo(() => JSON.stringify(notes.map(note => [note.id, note.version, note.locked, note.trashed])), [notes]);
   const [listError, setListError] = useState("");
@@ -794,21 +796,27 @@ export function Workspace({
       ...jsonRequest({query}, {"X-CSRF-Token": session.csrf_token}), signal,
     }), [session.csrf_token]);
 
-  const loadLists = useCallback(async () => {
-    setListLoading(true);
+  const loadLists = useCallback(async (signal?: AbortSignal) => {
+    const version = signal ? listRequestVersion.current : ++listRequestVersion.current;
+    const mutation = listMutationVersion.current;
+    // A background snapshot must not replace a newer foreground load or local write.
+    const isCurrent = () => version === listRequestVersion.current &&
+      (!signal || (!signal.aborted && !writeInFlight.current && mutation === listMutationVersion.current));
+    if (!signal) setListLoading(true);
     try {
       const [books, all] = await Promise.all([
-        request<{ notebooks: Notebook[] }>("/api/notebooks"),
-        request<{ notes: NoteSummary[] }>("/api/notes"),
+        request<{ notebooks: Notebook[] }>("/api/notebooks", { signal }),
+        request<{ notes: NoteSummary[] }>("/api/notes", { signal }),
       ]);
+      if (!isCurrent()) return;
       setNotebooks(books.notebooks);
       setNotes(all.notes);
       setLibraryReady(true);
       setListError("");
     } catch (error) {
-      handleError(error, setListError);
+      if (isCurrent()) handleError(error, setListError);
     } finally {
-      setListLoading(false);
+      if (!signal && version === listRequestVersion.current) setListLoading(false);
     }
   }, [handleError]);
 
@@ -828,6 +836,45 @@ export function Workspace({
     void loadLists();
     void loadPending();
   }, [loadLists, loadPending]);
+
+  const refreshListsInBackground = useEffectEvent(async (signal: AbortSignal) => {
+    if (listLoading || saving || writeInFlight.current) return;
+    await loadLists(signal);
+  });
+  useEffect(() => {
+    const interval = preferences.listRefreshMinutes * 60_000;
+    let nextRefresh = performance.now() + interval;
+    let timer: number;
+    let stopped = false;
+    let inFlight: AbortController | undefined;
+    function schedule() {
+      const remaining = Math.ceil(nextRefresh - performance.now());
+      // Browsers limit any single timer to a signed 32-bit delay.
+      timer = window.setTimeout(refreshWhenDue, Math.min(2_147_483_647, Math.max(0, remaining)));
+    }
+    async function refreshWhenDue() {
+      if (stopped) return;
+      if (performance.now() >= nextRefresh) {
+        const controller = new AbortController();
+        inFlight = controller;
+        const timeout = window.setTimeout(() => controller.abort(), 60_000);
+        try {
+          await refreshListsInBackground(controller.signal);
+        } finally {
+          window.clearTimeout(timeout);
+          inFlight = undefined;
+        }
+        nextRefresh = performance.now() + interval;
+      }
+      if (!stopped) schedule();
+    }
+    schedule();
+    return () => {
+      stopped = true;
+      window.clearTimeout(timer);
+      inFlight?.abort();
+    };
+  }, [preferences.listRefreshMinutes]);
   useEffect(() => {
     writeRoute(route, 0, true, historyLocation.current, historyScope.current);
     const pop = (event: PopStateEvent) => {
@@ -1343,6 +1390,7 @@ export function Workspace({
       }
       setDetail(next); setDraft(rebased);
       const summary = {...next, is_markdown: typeof next.markdown === "string"};
+      listMutationVersion.current += 1;
       setNotes(notes => notes.some(note => note.id === summary.id)
         ? notes.map(note => note.id === summary.id ? {...note, ...summary} : note) : [...notes, summary]);
       if (isNew) {
@@ -1438,6 +1486,7 @@ export function Workspace({
       draftStore(draftPrefix + next.key, next);
       createdDraft.current = {note, draft:next};
       const summary = {...note, is_markdown: typeof note.markdown === "string"};
+      listMutationVersion.current += 1;
       setNotes(notes => notes.some(row => row.id === summary.id)
         ? notes.map(row => row.id === summary.id ? {...row, ...summary} : row) : [...notes, summary]);
       setSaveFailure(null);
@@ -1676,6 +1725,7 @@ export function Workspace({
       setDraft({...draft, title:next.title, html:next.html, markdown:next.markdown, version:next.version, notebook_id:next.notebook_id,
         text_changes:next.html_text_preview ? [] : undefined,
         text_layout:next.html_text_layout, text_blocks:next.html_text_blocks});
+      listMutationVersion.current += 1;
       setNotes(current => current.map(note => note.id === next.id ? {...note, ...next} : note));
       if (route.notebook && route.notebook !== next.notebook_id)
         commitRoute({...route, shelf:null, notebook:next.notebook_id}, true);
@@ -1815,6 +1865,7 @@ export function Workspace({
     if (action.kind === "notebook" && action.action === "delete" &&
         (hasStagedUploads || draft?.review_required || draft?.resume_paused))
       throw new Error("보관된 편집본과 첨부파일을 먼저 확인하세요.");
+    listMutationVersion.current += 1;
     setSavingAction("library");
     setPendingError("");
     try {

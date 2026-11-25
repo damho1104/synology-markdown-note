@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { Workspace } from './Workspace'
 import type { Status } from './api'
 import { exportMath } from './mathExport'
@@ -28,6 +28,120 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 function mount(onLogout = async () => {}, workspaceStatus: Status = status) { return render(<Workspace session={session} status={workspaceStatus} onLogout={onLogout} onSessionExpired={() => {}} />) }
 async function edit() { await screen.findByLabelText('노트 제목'); const split = screen.queryByRole('button', {name: '분할'}); if (split) fireEvent.click(split); fireEvent.change(screen.getByLabelText('노트 제목'), {target: {value: '수정 제목'}}) }
+
+it('refreshes the full library after five minutes without reloading the open editor', async () => {
+  const fetcher = vi.mocked(fetch).getMockImplementation()!
+  let remoteChanged = false
+  vi.mocked(fetch).mockImplementation((path, init) => {
+    if (remoteChanged && path === '/api/notebooks') return Promise.resolve(Response.json({notebooks: [
+      {id: 'book1', name: '업무', stack: '프로젝트'}, {id: 'book2', name: '다른 기기의 메모장', stack: ''},
+    ]}))
+    if (remoteChanged && path === '/api/notes') return Promise.resolve(Response.json({notes: [
+      note, {...note, id: 'note2', title: '다른 기기의 메모'},
+    ]}))
+    return fetcher(path, init)
+  })
+  vi.useFakeTimers()
+  try {
+    await act(async () => { mount() })
+    const title = screen.getByLabelText('노트 제목')
+    remoteChanged = true
+    await act(() => vi.advanceTimersByTimeAsync(299_999))
+    expect(screen.queryByText('다른 기기의 메모')).toBeNull()
+    await act(() => vi.advanceTimersByTimeAsync(1))
+    expect(screen.getByText('다른 기기의 메모')).toBeTruthy()
+    expect(screen.getByRole('button', {name: '다른 기기의 메모장'})).toBeTruthy()
+    expect(screen.getByLabelText('노트 제목')).toBe(title)
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
+it('keeps a saved change when an earlier background list request finishes late', async () => {
+  const fetcher = vi.mocked(fetch).getMockImplementation()!
+  let delayNotes = false
+  let resolveNotes: (response: Response) => void = () => {}
+  vi.mocked(fetch).mockImplementation((path, init) => delayNotes && path === '/api/notes'
+    ? new Promise(resolve => { resolveNotes = resolve }) : fetcher(path, init))
+  vi.useFakeTimers()
+  try {
+    await act(async () => { mount() })
+    delayNotes = true
+    await act(() => vi.advanceTimersByTimeAsync(300_000))
+    expect(vi.mocked(fetch).mock.calls.filter(([path]) => path === '/api/notes')).toHaveLength(2)
+    expect(screen.getByText('기존 제목')).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('노트 제목'), {target: {value: '수정 제목'}})
+    await act(() => vi.advanceTimersByTimeAsync(1_000))
+    expect(writes).toHaveLength(1)
+    await act(async () => {
+      resolveSave(Response.json({...note, title: '수정 제목', version: 'v2'}))
+    })
+    expect(screen.getByText('✓ NAS에 자동 저장됨')).toBeTruthy()
+    await act(async () => { resolveNotes(Response.json({notes: [note]})) })
+    expect(screen.getByText('수정 제목')).toBeTruthy()
+    expect(screen.queryByText('기존 제목')).toBeNull()
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
+it.each(['/api/auth/me', '/api/notes'])('resumes background refresh after an unresponsive %s request', async (unresponsivePath) => {
+  const fetcher = vi.mocked(fetch).getMockImplementation()!
+  let hangNextRequest = false
+  let remoteChanged = false
+  let releaseRequest = () => {}
+  vi.mocked(fetch).mockImplementation((path, init) => {
+    if (path === unresponsivePath && hangNextRequest) {
+      hangNextRequest = false
+      return new Promise((_, reject) => {
+        releaseRequest = () => reject(new Error('test connection closed'))
+        init?.signal?.addEventListener('abort', releaseRequest)
+      })
+    }
+    if (path === '/api/notes' && remoteChanged) return Promise.resolve(Response.json({notes: [
+      note, {...note, id: 'note2', title: '응답 복구 후 메모'},
+    ]}))
+    return fetcher(path, init)
+  })
+  vi.useFakeTimers()
+  try {
+    await act(async () => { mount() })
+    hangNextRequest = true
+    remoteChanged = true
+    await act(() => vi.advanceTimersByTimeAsync(300_000))
+    expect(screen.queryByText('응답 복구 후 메모')).toBeNull()
+    await act(() => vi.advanceTimersByTimeAsync(360_000))
+    expect(screen.getByText('응답 복구 후 메모')).toBeTruthy()
+  } finally {
+    await act(async () => { releaseRequest() })
+    vi.useRealTimers()
+  }
+})
+
+it('uses the saved refresh interval immediately and enforces a one minute minimum', async () => {
+  vi.useFakeTimers()
+  try {
+    await act(async () => { mount() })
+    const listRequests = () => vi.mocked(fetch).mock.calls.filter(([path]) => path === '/api/notes').length
+    fireEvent.click(screen.getByRole('button', {name: /^설정$/}))
+    const interval = screen.getByRole('spinbutton', {name: /목록 갱신 주기/}) as HTMLInputElement
+    expect(interval.value).toBe('5')
+    fireEvent.change(interval, {target: {value: '0'}})
+    expect(loadPreferences().listRefreshMinutes).toBe(5)
+    fireEvent.blur(interval)
+    expect(interval.value).toBe('1')
+    expect(loadPreferences().listRefreshMinutes).toBe(1)
+    await act(() => vi.advanceTimersByTimeAsync(59_999))
+    expect(listRequests()).toBe(1)
+    await act(() => vi.advanceTimersByTimeAsync(1))
+    expect(listRequests()).toBe(2)
+    cleanup()
+    await act(() => vi.advanceTimersByTimeAsync(60_000))
+    expect(listRequests()).toBe(2)
+  } finally {
+    vi.useRealTimers()
+  }
+})
 
 it('follows the mobile bookshelf, notebook, note and editor hierarchy through browser history', async () => {
   window.history.replaceState({}, '', '/')
@@ -176,7 +290,7 @@ it('opens a settings popup from the gear and applies local preferences without w
   expect(container.querySelector('.native-app')!.classList.contains('native-dark')).toBe(true)
   expect((container.querySelector('.native-app') as HTMLElement).style.getPropertyValue('--editor-font-size')).toBe('20px')
   expect(loadPreferences()).toEqual({ appearance: 'dark', editorFontSize: 20, lineNumbers: true,
-    lineWrapping: true, mermaidStyle: 'classic', mermaidTheme: 'forest' })
+    lineWrapping: true, mermaidStyle: 'classic', mermaidTheme: 'forest', listRefreshMinutes: 5 })
   expect(sessionStorage.getItem(sessionStorage.key(0)!)).toBe(storedDraft)
   expect(writes).toHaveLength(0)
   expect(vi.mocked(fetch).mock.calls.some(([, init]) => init?.method && !['GET', 'HEAD'].includes(init.method))).toBe(false)

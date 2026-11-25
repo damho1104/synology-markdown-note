@@ -8,13 +8,15 @@ This web client is based on the macOS app's `LibraryView` and `EditorView`. It p
 
 Right-click a notebook or bookshelf in the sidebar to delete it. Deleting a notebook moves its notes to the trash. Deleting a bookshelf clears the grouping and keeps its notebooks and notes.
 
-## Appearance and editor settings
+## Settings
 
 You can check the current app version under **About → Version** at the bottom of Settings.
 
 The gear at the bottom of the sidebar opens a settings popover separate from the note information panel. You can configure appearance (system, light, or dark), editor font size (11–22px), Markdown line numbers and line wrapping, and Mermaid's default/sketch style and color theme (match appearance, light, dark, monochrome, or forest). Changes take effect immediately and are saved in this browser's localStorage. System mode follows OS appearance changes. Changing settings preserves the text being edited and its base version and does not save them to the NAS.
 
 Mermaid SVGs retain the fonts used for text placement and their alignment and color styles. Only presentation properties are allowed, and their scope is restricted to each SVG. External resource and style loading, scripts, and foreignObject are not allowed.
+
+While signed in, the web client automatically refreshes the notebook and note lists from the NAS. Set the interval in minutes under **Settings → Sync → List refresh interval**. The default is 5 minutes and the minimum is 1 minute.
 
 ## Panels and graphs
 

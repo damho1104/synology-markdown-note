@@ -1,6 +1,6 @@
-import { useId, useLayoutEffect, useRef } from 'react'
+import { useId, useLayoutEffect, useRef, useState } from 'react'
 import { SlidersHorizontal, X } from 'lucide-react'
-import { DEFAULT_PREFERENCES, type PreviewPreferences } from './preferences'
+import { DEFAULT_PREFERENCES, MIN_LIST_REFRESH_MINUTES, normalizeListRefreshMinutes, type PreviewPreferences } from './preferences'
 
 export function SettingsDialog({ preferences, onChange, onClose }: {
   preferences: PreviewPreferences
@@ -10,6 +10,7 @@ export function SettingsDialog({ preferences, onChange, onClose }: {
   const dialogRef = useRef<HTMLDialogElement>(null)
   const titleId = useId()
   const descriptionId = useId()
+  const [refreshInput, setRefreshInput] = useState(() => String(preferences.listRefreshMinutes))
 
   useLayoutEffect(() => {
     const dialog = dialogRef.current!
@@ -61,6 +62,26 @@ export function SettingsDialog({ preferences, onChange, onClose }: {
       </header>
       <div className="settings-content">
         <p id={descriptionId} className="settings-description">변경한 설정은 바로 적용되며 이 브라우저에 저장됩니다.</p>
+        <section aria-labelledby={`${titleId}-sync`}>
+          <h3 id={`${titleId}-sync`}>동기화</h3>
+          <div className="settings-group">
+            <label className="settings-row">목록 갱신 주기 (분)
+              <input type="number" min={MIN_LIST_REFRESH_MINUTES} step="1" value={refreshInput}
+                onChange={({ currentTarget: input }) => {
+                  setRefreshInput(input.value)
+                  if (input.validity.valid && Number.isSafeInteger(input.valueAsNumber)) {
+                    update('listRefreshMinutes', input.valueAsNumber)
+                  }
+                }}
+                onBlur={({ currentTarget: input }) => {
+                  const minutes = normalizeListRefreshMinutes(input.valueAsNumber, preferences.listRefreshMinutes)
+                  setRefreshInput(String(minutes))
+                  if (minutes !== preferences.listRefreshMinutes) update('listRefreshMinutes', minutes)
+                }} />
+            </label>
+          </div>
+          <p className="settings-help">메모장과 메모 목록의 NAS 변경을 자동으로 확인합니다. 기본 5분, 최소 1분입니다.</p>
+        </section>
         <section aria-labelledby={`${titleId}-editor`}>
           <h3 id={`${titleId}-editor`}>편집기</h3>
           <div className="settings-group">
@@ -103,7 +124,10 @@ export function SettingsDialog({ preferences, onChange, onClose }: {
         </section>
       </div>
       <footer className="settings-footer">
-        <button type="button" className="native-button" onClick={() => onChange({ ...DEFAULT_PREFERENCES })}>기본값 복원</button>
+        <button type="button" className="native-button" onClick={() => {
+          setRefreshInput(String(DEFAULT_PREFERENCES.listRefreshMinutes))
+          onChange({ ...DEFAULT_PREFERENCES })
+        }}>기본값 복원</button>
         <button type="button" className="native-button primary" onClick={onClose}>완료</button>
       </footer>
     </div>

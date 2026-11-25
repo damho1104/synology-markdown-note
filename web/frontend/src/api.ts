@@ -139,10 +139,14 @@ export async function request<T>(
     // A rotated cookie must reach the browser before parallel NAS reads begin.
     // Share this boundary so concurrent list/pending/graph requests cannot revoke
     // each other's still-in-flight cookie. Only reads are repeated here.
-    if (!sessionCheck)
-      sessionCheck = rawRequest("/api/auth/me").finally(() => {
+    if (!sessionCheck) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 60_000);
+      sessionCheck = rawRequest("/api/auth/me", { signal: controller.signal }).finally(() => {
+        clearTimeout(timeout);
         sessionCheck = null;
       });
+    }
     await sessionCheck;
     if (init.signal?.aborted) throw new DOMException("Aborted", "AbortError");
   }

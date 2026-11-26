@@ -7,6 +7,24 @@ from fastapi.testclient import TestClient
 from test_api import app_at, post
 
 
+@pytest.mark.parametrize('remember', [False, True])
+def test_background_reads_do_not_extend_idle_session(tmp_path, remember, monkeypatch):
+    app = app_at(tmp_path, nas_url='https://nas.example')
+    monkeypatch.setattr(app.state.nas, 'notebooks', lambda *_: [], raising=False)
+    monkeypatch.setattr(app.state.nas, 'notes', lambda *_: [], raising=False)
+    client = TestClient(app)
+    now = time.time()
+    monkeypatch.setattr('synonote_web.main.time.time', lambda: now)
+    assert post(client, '/api/auth/login', dict(username='alice', password='correct', remember=remember)).status_code == 200
+    idle = (7 * 24 if remember else 12) * 3600
+    now += idle - 30
+    headers = {'X-Synonote-Background': '1'}
+    for path in ['/api/notebooks', '/api/notes', '/api/graph?summary=true']:
+        assert client.get(path, headers=headers).status_code == 200
+    now += 31
+    assert client.get('/api/notes', headers=headers).status_code == 401
+
+
 def rotated_clients(tmp_path):
     app = app_at(tmp_path, nas_url='https://nas.example')
     current = TestClient(app)

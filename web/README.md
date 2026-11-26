@@ -16,7 +16,7 @@ The gear at the bottom of the sidebar opens a settings popover separate from the
 
 Mermaid SVGs retain the fonts used for text placement and their alignment and color styles. Only presentation properties are allowed, and their scope is restricted to each SVG. External resource and style loading, scripts, and foreignObject are not allowed.
 
-While signed in, the web client automatically refreshes the notebook and note lists from the NAS. Set the interval in minutes under **Settings → Sync → List refresh interval**. The default is 5 minutes and the minimum is 1 minute.
+The web client automatically refreshes the notebook and note lists from the NAS while the signed-in tab is visible. When you return to the tab after the interval has elapsed, the lists refresh once. Automatic reads do not extend the idle session timeout. Set the interval in minutes under **Settings → Sync → List refresh interval**. The default is 5 minutes and the minimum is 1 minute.
 
 ## Panels and graphs
 

@@ -408,6 +408,11 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
         return {"username": body.username, "remember": body.remember, "csrf_token": csrf}
 
     def _current_session_locked(request: Request, response: Response) -> tuple[str, str, str, bool]:
+        background_read = (
+            request.method == "GET"
+            and request.headers.get("x-synonote-background") == "1"
+            and request.url.path in {"/api/notebooks", "/api/notes", "/api/note-formats", "/api/graph", "/api/graph/entries"}
+        )
         token = getattr(request.state, "session_token_override", None) or request.cookies.get(cookie_name(request))
         if not token or len(token) > 256:
             raise HTTPException(401, detail="LOGIN_REQUIRED")
@@ -419,7 +424,8 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
                     transient.touched + settings.idle_seconds <= now):
                 invalidate_session(request, response, token, "web_session_expired")
                 raise HTTPException(401, detail="LOGIN_REQUIRED")
-            transient.touched = now
+            if not background_read:
+                transient.touched = now
             return token, transient.username, transient.csrf, False
         url, _ = configured()
         if not url:
@@ -429,7 +435,7 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
             token, digest = alias, token_hash(alias)
             request.state.session_token_override = token
             set_cookie(request, response, token, True)
-        session = store.session(token, url, now, settings.remember_idle_seconds)
+        session = store.session(token, url, now, settings.remember_idle_seconds, touch=not background_read)
         if session is None:
             app.state.live_nas.pop(digest, None)
             # A stale token may belong to a request sent before cookie rotation.
@@ -450,7 +456,7 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
             if active.device_id and active.device_id != credential["device_id"]:
                 store.update_credential(token, store.encrypt_credential(
                     credential["password"], active.device_id, credential["trust_device"]))
-        if now - session.rotated >= settings.rotate_seconds:
+        if not background_read and now - session.rotated >= settings.rotate_seconds:
             replacement = secrets.token_urlsafe(48)
             if store.rotate_session(token, replacement, now):
                 app.state.live_nas[token_hash(replacement)] = app.state.live_nas.pop(digest)

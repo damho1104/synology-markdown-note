@@ -42,9 +42,9 @@ import {
 import { AppIcon } from "./AppIcon";
 import {
   ApiFailure,
+  backgroundRead,
   errorText,
   jsonRequest,
-  readInSession,
   request,
   type Session,
   type Status,
@@ -796,17 +796,23 @@ export function Workspace({
       ...jsonRequest({query}, {"X-CSRF-Token": session.csrf_token}), signal,
     }), [session.csrf_token]);
 
-  const loadLists = useCallback(async (signal?: AbortSignal) => {
-    const version = signal ? listRequestVersion.current : ++listRequestVersion.current;
+  const loadLists = useCallback(async (background?: AbortSignal) => {
+    const version = background ? listRequestVersion.current : ++listRequestVersion.current;
     const mutation = listMutationVersion.current;
     // A background snapshot must not replace a newer foreground load or local write.
     const isCurrent = () => version === listRequestVersion.current &&
-      (!signal || (!signal.aborted && !writeInFlight.current && mutation === listMutationVersion.current));
-    if (!signal) setListLoading(true);
+      (!background || (!background.aborted && !writeInFlight.current && mutation === listMutationVersion.current));
+    const controller = new AbortController();
+    const {signal} = controller;
+    const abort = () => controller.abort();
+    const timeout = window.setTimeout(abort, 60_000);
+    background?.addEventListener("abort", abort);
+    if (!background) setListLoading(true);
+    const read = <T,>(path: string) => background ? backgroundRead<T>(path, signal) : request<T>(path, {signal});
     try {
       const [books, all] = await Promise.all([
-        request<{ notebooks: Notebook[] }>("/api/notebooks", { signal }),
-        request<{ notes: NoteSummary[] }>("/api/notes", { signal }),
+        read<{ notebooks: Notebook[] }>("/api/notebooks"),
+        read<{ notes: NoteSummary[] }>("/api/notes"),
       ]);
       if (!isCurrent()) return;
       setNotebooks(books.notebooks);
@@ -814,9 +820,12 @@ export function Workspace({
       setLibraryReady(true);
       setListError("");
     } catch (error) {
-      if (isCurrent()) handleError(error, setListError);
+      if (isCurrent()) handleError(signal.aborted ? new Error("NAS 목록 조회 시간이 초과되었습니다.") : error, setListError);
     } finally {
-      if (!signal && version === listRequestVersion.current) setListLoading(false);
+      window.clearTimeout(timeout);
+      background?.removeEventListener("abort", abort);
+      abort();
+      if (!background && version === listRequestVersion.current) setListLoading(false);
     }
   }, [handleError]);
 
@@ -838,8 +847,9 @@ export function Workspace({
   }, [loadLists, loadPending]);
 
   const refreshListsInBackground = useEffectEvent(async (signal: AbortSignal) => {
-    if (listLoading || saving || writeInFlight.current) return;
+    if (listLoading || saving || writeInFlight.current) return false;
     await loadLists(signal);
+    return true;
   });
   useEffect(() => {
     const interval = preferences.listRefreshMinutes * 60_000;
@@ -847,30 +857,39 @@ export function Workspace({
     let timer: number;
     let stopped = false;
     let inFlight: AbortController | undefined;
-    function schedule() {
+    function schedule(minimumDelay = 0) {
+      window.clearTimeout(timer);
+      if (stopped || document.hidden || inFlight) return;
       const remaining = Math.ceil(nextRefresh - performance.now());
       // Browsers limit any single timer to a signed 32-bit delay.
-      timer = window.setTimeout(refreshWhenDue, Math.min(2_147_483_647, Math.max(0, remaining)));
+      timer = window.setTimeout(refreshWhenDue, Math.min(2_147_483_647, Math.max(minimumDelay, remaining)));
     }
     async function refreshWhenDue() {
-      if (stopped) return;
+      if (stopped || document.hidden) return;
       if (performance.now() >= nextRefresh) {
         const controller = new AbortController();
         inFlight = controller;
-        const timeout = window.setTimeout(() => controller.abort(), 60_000);
+        let attempted = false;
         try {
-          await refreshListsInBackground(controller.signal);
+          attempted = await refreshListsInBackground(controller.signal);
         } finally {
-          window.clearTimeout(timeout);
           inFlight = undefined;
+          if (attempted && !controller.signal.aborted) nextRefresh = performance.now() + interval;
+          schedule(attempted ? 0 : 1_000);
         }
-        nextRefresh = performance.now() + interval;
+        return;
       }
-      if (!stopped) schedule();
+      schedule();
     }
+    function updateVisibility() {
+      if (document.hidden) inFlight?.abort();
+      schedule();
+    }
+    document.addEventListener("visibilitychange", updateVisibility);
     schedule();
     return () => {
       stopped = true;
+      document.removeEventListener("visibilitychange", updateVisibility);
       window.clearTimeout(timer);
       inFlight?.abort();
     };
@@ -1135,8 +1154,7 @@ export function Workspace({
         if (signal.aborted) return;
         const pairs = pending.slice(offset, offset + 8).map(note => [note.id, note.version]);
         const path = "/api/note-formats?" + new URLSearchParams({notes: JSON.stringify(pairs)});
-        const read = offset === 0 ? request : readInSession;
-        const {formats} = await read<{formats: NoteFormat[]}>(path, {signal});
+        const {formats} = await backgroundRead<{formats: NoteFormat[]}>(path, signal);
         if (signal.aborted || !formats.length) continue;
         setNoteFormats(current => {
           const next = new Map(current);
@@ -1304,18 +1322,6 @@ export function Workspace({
       sent = {...writing, review_required:true, recovery_acknowledged:false, pending_upload_ids: sentUploads,
         ...(isNew ? {client_request_id:writing.client_request_id ?? requestId(),
           create_sent:{title:writing.title,html:writing.html,markdown:writing.markdown}} : {})};
-      const held = navigating.current.draft === writing ? sent : {
-        ...navigating.current.draft!, review_required:true, recovery_acknowledged:false,
-        client_request_id:sent.client_request_id, create_sent:sent.create_sent, pending_upload_ids: sentUploads,
-      };
-      draftStore(sentStorageKey, held);
-      const persisted = draftRead(sentStorageKey);
-      if (!persisted?.review_required || (isNew && persisted.client_request_id !== sent.client_request_id) ||
-          (head && (persisted.formattedWrites?.[0]?.id !== head.id ||
-            persisted.formattedWrites?.at(-1)?.id !== held.formattedWrites?.at(-1)?.id)))
-        throw new Error("편집본을 이 탭에 보관할 수 없어 저장을 중단했습니다. 브라우저 저장소 설정을 확인하세요.");
-      changeActiveDraft(() => held);
-      mutationStarted = true;
       const next = await request<NoteDetail>(
         url,
         jsonRequest(
@@ -1342,6 +1348,21 @@ export function Workspace({
           { "X-CSRF-Token": session.csrf_token },
           isNew ? "POST" : "PUT",
         ),
+        () => {
+          const latest = navigating.current.draft;
+          const held = !latest || latest === writing ? sent : {
+            ...latest, review_required:true, recovery_acknowledged:false,
+            client_request_id:sent.client_request_id, create_sent:sent.create_sent, pending_upload_ids: sentUploads,
+          };
+          draftStore(sentStorageKey, held);
+          const persisted = draftRead(sentStorageKey);
+          if (!persisted?.review_required || (isNew && persisted.client_request_id !== sent.client_request_id) ||
+              (head && (persisted.formattedWrites?.[0]?.id !== head.id ||
+                persisted.formattedWrites?.at(-1)?.id !== held.formattedWrites?.at(-1)?.id)))
+            throw new Error("편집본을 이 탭에 보관할 수 없어 저장을 중단했습니다. 브라우저 저장소 설정을 확인하세요.");
+          changeActiveDraft(() => held);
+          mutationStarted = true;
+        },
       );
       const latest = navigating.current.draft;
       if (navigating.current.activeKey !== sentKey || !latest) return true;
@@ -1811,15 +1832,16 @@ export function Workspace({
         const sent: Draft = {...source, key, notebook_id:destination, client_request_id,
           review_required:true, create_sent:source,
           importProgress:{filename, completed:imported, total:files.length}};
-        draftStore(storageKey, sent);
-        if (draftRead(storageKey)?.client_request_id !== client_request_id) {
-          throw new Error("편집본을 이 탭에 보관할 수 없어 가져오기를 중단했습니다.");
-        }
-        held = sent;
         latest = await request<NoteDetail>("/api/notes", jsonRequest({
           title, markdown, notebook_id:destination, client_request_id,
           ...(math_images.length ? {math_images} : {}),
-        }, {"X-CSRF-Token":session.csrf_token}));
+        }, {"X-CSRF-Token":session.csrf_token}), () => {
+          draftStore(storageKey, sent);
+          if (draftRead(storageKey)?.client_request_id !== client_request_id) {
+            throw new Error("편집본을 이 탭에 보관할 수 없어 가져오기를 중단했습니다.");
+          }
+          held = sent;
+        });
         draftDelete(storageKey);
         held = undefined;
         imported += 1;

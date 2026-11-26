@@ -47,9 +47,13 @@ it('shows a background error and only retries when requested',async () => {
   vi.stubGlobal('fetch',vi.fn(async (url:string)=> url === '/api/auth/me' ? reply({username:'test'}) : new Response(JSON.stringify({error:'NAS_UNAVAILABLE'}),{status:502})))
   render(<GraphIndexProvider><GraphIndexStatus /></GraphIndexProvider>)
   await screen.findByText('링크 인덱싱 중단')
-  expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2)
+  expect(vi.mocked(fetch)).toHaveBeenCalledExactlyOnceWith('/api/graph?summary=true', expect.objectContaining({
+    headers: {'X-Synonote-Background': '1'},
+  }))
   fireEvent.click(screen.getByRole('button',{name:'다시 시도'}))
-  await waitFor(()=>expect(vi.mocked(fetch)).toHaveBeenCalledTimes(4))
+  await waitFor(()=>expect(vi.mocked(fetch).mock.calls.map(([url])=>url)).toEqual([
+    '/api/graph?summary=true', '/api/auth/me', '/api/graph?summary=true',
+  ]))
 })
 
 it('waits for the library and starts one scan when its first version arrives',async () => {

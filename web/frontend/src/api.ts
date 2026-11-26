@@ -89,7 +89,7 @@ export function notifySessionExpired(): void {
   if (typeof window !== "undefined") window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
 }
 
-async function rawRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function rawRequest<T>(path: string, init: RequestInit = {}, notifyOnUnauthorized = true): Promise<T> {
   let response: Response;
   try {
     response = await fetch(path, {
@@ -101,7 +101,8 @@ async function rawRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new Error("웹 서버에 연결할 수 없습니다. 네트워크를 확인하세요.");
   }
   if (!response.ok) {
-    if (response.status === 401 && !["/api/auth/login", "/api/auth/logout"].includes(path))
+    if (notifyOnUnauthorized && !init.signal?.aborted && response.status === 401 &&
+        !["/api/auth/login", "/api/auth/logout"].includes(path))
       notifySessionExpired();
     const data = (await response.json().catch(() => ({}))) as {
       error?: string;
@@ -131,6 +132,7 @@ let sessionCheck: Promise<unknown> | null = null;
 export async function request<T>(
   path: string,
   init: RequestInit = {},
+  beforeSend?: () => void,
 ): Promise<T> {
   if (
     !path.startsWith("/api/auth/") &&
@@ -150,13 +152,19 @@ export async function request<T>(
     await sessionCheck;
     if (init.signal?.aborted) throw new DOMException("Aborted", "AbortError");
   }
+  beforeSend?.();
   return rawRequest<T>(path, init);
 }
 
 
-/** Continue a sequential read after request() has completed the session boundary.
- * The server still authenticates every request; avoid a redundant /auth/me per
- * graph indexing batch. Do not use for independent or concurrent mutations. */
-export function readInSession<T>(path: string, init: RequestInit = {}): Promise<T> {
-  return rawRequest<T>(path, {...init, method: "GET"});
+// The server authenticates and expires the session, but does not renew its idle deadline.
+export async function backgroundRead<T>(path: string, signal: AbortSignal): Promise<T> {
+  const init = {method: "GET", signal, headers: {"X-Synonote-Background": "1"}};
+  try {
+    return await rawRequest<T>(path, init, false);
+  } catch (error) {
+    if (!(error instanceof ApiFailure) || error.status !== 401 || signal.aborted) throw error;
+    // An active request may have rotated the cookie while this read was in flight.
+    return rawRequest<T>(path, init);
+  }
 }

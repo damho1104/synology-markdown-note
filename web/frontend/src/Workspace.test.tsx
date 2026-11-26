@@ -29,6 +29,48 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 function mount(onLogout = async () => {}, workspaceStatus: Status = status) { return render(<Workspace session={session} status={workspaceStatus} onLogout={onLogout} onSessionExpired={() => {}} />) }
 async function edit() { await screen.findByLabelText('노트 제목'); const split = screen.queryByRole('button', {name: '분할'}); if (split) fireEvent.click(split); fireEvent.change(screen.getByLabelText('노트 제목'), {target: {value: '수정 제목'}}) }
 
+it('refreshes once when returning to a hidden tab after the interval', async () => {
+  const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(false)
+  vi.useFakeTimers()
+  try {
+    await act(async () => { mount() })
+    const listRequests = () => vi.mocked(fetch).mock.calls.filter(([path]) => path === '/api/notes').length
+    act(() => { hidden.mockReturnValue(true); document.dispatchEvent(new Event('visibilitychange')) })
+    await act(() => vi.advanceTimersByTimeAsync(900_000))
+    expect(listRequests()).toBe(1)
+    hidden.mockReturnValue(false)
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); await vi.advanceTimersByTimeAsync(1) })
+    expect(listRequests()).toBe(2)
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
+it('cancels an in-flight automatic refresh when the tab is hidden', async () => {
+  const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(false)
+  const fetcher = vi.mocked(fetch).getMockImplementation()!
+  let delayedSignal: AbortSignal | undefined
+  vi.mocked(fetch).mockImplementation((path, init) => {
+    if (path === '/api/notes' && new Headers(init?.headers).has('X-Synonote-Background')) {
+      return new Promise((_, reject) => {
+        delayedSignal = init?.signal ?? undefined
+        delayedSignal?.addEventListener('abort', () => reject(delayedSignal?.reason))
+      })
+    }
+    return fetcher(path, init)
+  })
+  vi.useFakeTimers()
+  try {
+    await act(async () => { mount() })
+    await act(() => vi.advanceTimersByTimeAsync(300_000))
+    expect(delayedSignal?.aborted).toBe(false)
+    await act(async () => { hidden.mockReturnValue(true); document.dispatchEvent(new Event('visibilitychange')) })
+    expect(delayedSignal?.aborted).toBe(true)
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
 it('refreshes the full library after five minutes without reloading the open editor', async () => {
   const fetcher = vi.mocked(fetch).getMockImplementation()!
   let remoteChanged = false
@@ -85,13 +127,13 @@ it('keeps a saved change when an earlier background list request finishes late',
   }
 })
 
-it.each(['/api/auth/me', '/api/notes'])('resumes background refresh after an unresponsive %s request', async (unresponsivePath) => {
+it.each([true, false])('resumes automatic refresh after an unresponsive list request (initial: %s)', async (initial) => {
   const fetcher = vi.mocked(fetch).getMockImplementation()!
-  let hangNextRequest = false
+  let hangNextRequest = initial
   let remoteChanged = false
   let releaseRequest = () => {}
   vi.mocked(fetch).mockImplementation((path, init) => {
-    if (path === unresponsivePath && hangNextRequest) {
+    if (path === '/api/notes' && hangNextRequest) {
       hangNextRequest = false
       return new Promise((_, reject) => {
         releaseRequest = () => reject(new Error('test connection closed'))
@@ -106,14 +148,57 @@ it.each(['/api/auth/me', '/api/notes'])('resumes background refresh after an unr
   vi.useFakeTimers()
   try {
     await act(async () => { mount() })
-    hangNextRequest = true
+    hangNextRequest = !initial
     remoteChanged = true
-    await act(() => vi.advanceTimersByTimeAsync(300_000))
+    await act(() => vi.advanceTimersByTimeAsync(initial ? 60_000 : 300_000))
     expect(screen.queryByText('응답 복구 후 메모')).toBeNull()
-    await act(() => vi.advanceTimersByTimeAsync(360_000))
+    await act(() => vi.advanceTimersByTimeAsync(initial ? 240_000 : 360_000))
     expect(screen.getByText('응답 복구 후 메모')).toBeTruthy()
   } finally {
     await act(async () => { releaseRequest() })
+    vi.useRealTimers()
+  }
+})
+
+it('aborts the other list request when one fails', async () => {
+  const fetcher = vi.mocked(fetch).getMockImplementation()!
+  let aborted = false
+  vi.mocked(fetch).mockImplementation((path, init) => {
+    if (path === '/api/notebooks') return Promise.resolve(Response.json({error: 'NAS_UNAVAILABLE'}, {status: 503}))
+    if (path === '/api/notes') return new Promise((_, reject) => {
+      init?.signal?.addEventListener('abort', () => { aborted = true; reject(init.signal?.reason) })
+    })
+    return fetcher(path, init)
+  })
+  await act(async () => { mount() })
+  expect(aborted).toBe(true)
+  expect(screen.getByRole('button', {name: '재시도'})).toBeTruthy()
+})
+
+it('keeps a draft retryable when authentication times out before the save is sent', async () => {
+  const fetcher = vi.mocked(fetch).getMockImplementation()!
+  let hangAuth = false
+  vi.mocked(fetch).mockImplementation((path, init) => {
+    if (path === '/api/auth/me' && hangAuth) return new Promise((_, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal?.reason))
+    })
+    return fetcher(path, init)
+  })
+  vi.useFakeTimers()
+  try {
+    await act(async () => { mount() })
+    hangAuth = true
+    fireEvent.change(screen.getByLabelText('노트 제목'), {target: {value: '재시도할 제목'}})
+    await act(() => vi.advanceTimersByTimeAsync(61_000))
+    expect(writes).toHaveLength(0)
+    expect(screen.queryByRole('button', {name: 'NAS 확인본 다시 불러오기'})).toBeNull()
+    expect(JSON.parse(sessionStorage.getItem(sessionStorage.key(0)!)!).review_required).toBeFalsy()
+    hangAuth = false
+    await act(async () => { fireEvent.click(screen.getByRole('button', {name: '자동 저장 다시 시도'})) })
+    await act(() => vi.advanceTimersByTimeAsync(1_000))
+    expect(writes[0]).toMatchObject({title: '재시도할 제목', version: 'v1'})
+    await act(async () => { resolveSave(Response.json({...note, title: '재시도할 제목', version: 'v2'})) })
+  } finally {
     vi.useRealTimers()
   }
 })

@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { request, readInSession } from './api'
+import { backgroundRead, request } from './api'
 export type Node = { id: string; title: string; notebook_id: string; tags?: string[]; version?: string }
 export type Edge = { source: string; target: string }
 export type Graph = { nodes: Node[]; edges: Edge[]; failures: { id: string; error: string }[] }
@@ -44,6 +44,7 @@ function useGraphLoader(enabled: boolean, revision = ''): GraphIndexState {
   const latestRevision = useRef(revision)
   const running = useRef(false)
   const started = useRef(false)
+  const userRetry = useRef(false)
   useEffect(() => {
     if (latestRevision.current === revision) return
     latestRevision.current = revision
@@ -54,15 +55,19 @@ function useGraphLoader(enabled: boolean, revision = ''): GraphIndexState {
     started.current = true;
     running.current = true;
     const controller = new AbortController()
+    let activeRead = userRetry.current
+    userRetry.current = false
     setLoading(true)
     setError('')
     setProgress({done:0,total:0});
-    const read = async <T,>(url: string, sequential = false): Promise<T> => {
+    const read = async <T,>(url: string): Promise<T> => {
       const page = new AbortController();
       const abort = () => page.abort();
       controller.signal.addEventListener('abort', abort);
       const timer = setTimeout(abort, 60000);
-      try { return await (sequential ? readInSession<T>(url, {signal:page.signal}) : request<T>(url, {signal:page.signal})); }
+      const active = activeRead;
+      activeRead = false;
+      try { return await (active ? request<T>(url, {signal: page.signal}) : backgroundRead<T>(url, page.signal)); }
       catch (failure) {
         if (page.signal.aborted && !controller.signal.aborted) throw new Error('NAS 그래프 조회 시간이 초과되었습니다. 확인된 노트는 표시하며 다시 시도할 수 있습니다.');
         throw failure;
@@ -84,7 +89,7 @@ function useGraphLoader(enabled: boolean, revision = ''): GraphIndexState {
         for (let offset=0; offset<first.pending.length; offset+=8) {
           if (controller.signal.aborted) return;
           const ids = first.pending.slice(offset,offset+8);
-          const batch = await read<{entries:Entry[]}>(`/api/graph/entries?ids=${encodeURIComponent(JSON.stringify(ids))}`, true);
+          const batch = await read<{entries:Entry[]}>(`/api/graph/entries?ids=${encodeURIComponent(JSON.stringify(ids))}`);
           if (controller.signal.aborted) return;
           entries.push(...batch.entries);
           setGraph(mergeGraph(first.nodes,entries));
@@ -97,7 +102,10 @@ function useGraphLoader(enabled: boolean, revision = ''): GraphIndexState {
     return () => { running.current = false; controller.abort() }
   }, [attempt, enabled])
 
-  return useMemo(() => ({graph,loading,error,progress,retry: () => setAttempt(value => value + 1)}), [graph,loading,error,progress])
+  return useMemo(() => ({graph,loading,error,progress,retry: () => {
+    userRetry.current = true;
+    setAttempt(value => value + 1);
+  }}), [graph,loading,error,progress])
 }
 export function GraphIndexProvider({children, enabled = true, revision = ''}: {children: ReactNode; enabled?: boolean; revision?: string}) {
   const index = useGraphLoader(enabled, revision)

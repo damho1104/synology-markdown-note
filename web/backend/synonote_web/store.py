@@ -297,7 +297,7 @@ class Store:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (token_hash(token), username, nas_url, credential, csrf, now, now, now, expires))
 
-    def session(self, token: str, nas_url: str, now: float, idle_seconds: int) -> PersistedSession | None:
+    def session(self, token: str, nas_url: str, now: float, idle_seconds: int, *, touch: bool = True) -> PersistedSession | None:
         digest = token_hash(token)
         with self.connect() as db:
             row = db.execute("SELECT * FROM sessions WHERE token_hash=?", (digest,)).fetchone()
@@ -307,7 +307,8 @@ class Store:
                     or row["last_seen"] + idle_seconds <= now):
                 db.execute("DELETE FROM sessions WHERE token_hash=?", (digest,))
                 return None
-            db.execute("UPDATE sessions SET last_seen=? WHERE token_hash=?", (now, digest))
+            if touch:
+                db.execute("UPDATE sessions SET last_seen=? WHERE token_hash=?", (now, digest))
             return PersistedSession(**dict(row))
 
     def rotate_session(self, old_token: str, new_token: str, now: float) -> bool:

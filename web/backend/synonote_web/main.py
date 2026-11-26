@@ -324,6 +324,10 @@ def create_app(settings: Settings | None = None, nas_client: NasClient | None = 
     def health():
         return {"ok": True}
 
+    @app.get("/api/public-config")
+    def public_config():
+        return {"default_language": settings.default_language}
+
     @app.get("/api/ready")
     def ready():
         try:

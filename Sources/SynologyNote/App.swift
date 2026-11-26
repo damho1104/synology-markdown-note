@@ -9,6 +9,13 @@ enum AppVersion {
 }
 
 @main
+enum SynologyNoteMain {
+    @MainActor static func main() {
+        AppLocalization.applyProcessLanguagePreference()
+        SynologyNoteApp.main()
+    }
+}
+
 struct SynologyNoteApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @State private var launch = LibraryLaunchState()
@@ -26,13 +33,14 @@ struct SynologyNoteApp: App {
                 }
             }
             .frame(minWidth: 900, minHeight: 600)
+            .environment(\.locale, AppLocalization.locale)
             .preferredColorScheme(appearance == "dark" ? .dark : appearance == "light" ? .light : nil)
         }
         .defaultSize(width: 1360, height: 880)
         .commands {
             NoteCommands()
             CommandGroup(replacing: .appInfo) {
-                Button("Synology Markdown Note 정보") {
+                Button(appText("About Synology Markdown Note")) {
                     if let version = AppVersion.display {
                         NSApp.orderFrontStandardAboutPanel(options: [.version: version])
                     } else {
@@ -42,8 +50,8 @@ struct SynologyNoteApp: App {
             }
         }
         Settings {
-            if let library = launch.library { SettingsView().environment(library) }
-            else { ContentUnavailableView("로컬 저장소 복구 필요", systemImage: "externaldrive.badge.exclamationmark", description: Text("기본 창에서 데이터베이스를 복구한 다음 설정을 사용하세요.")) }
+            if let library = launch.library { SettingsView().environment(library).environment(\.locale, AppLocalization.locale) }
+            else { ContentUnavailableView(appText("Local Storage Recovery Required"), systemImage: "externaldrive.badge.exclamationmark", description: Text(appText("Recover the database in the main window to use Settings."))) }
         }
     }
 }
@@ -57,9 +65,7 @@ final class LibraryLaunchState {
 
     init() {
         let root = LibraryStore.storageRoot()
-        let defaults = ProcessInfo.processInfo.environment["SYNOLOGY_NOTE_DATA_DIR"] == nil
-            ? UserDefaults.standard
-            : UserDefaults(suiteName: "com.damho.SynologyMarkdown.verify." + root.lastPathComponent) ?? .standard
+        let defaults = NoteLocalization.preferences
         recoveryLog = DiagnosticLog(root: root, policy: DiagnosticLogPolicy.load(from: defaults))
         directory = root.appendingPathComponent(ConnectionProfile.load(from: defaults).storageKey)
         do { library = try LibraryStore() }
@@ -78,11 +84,11 @@ final class LibraryLaunchState {
             let initialError = error
             do { try DatabaseMaintenance.rollbackRestore(in: directory, from: quarantine, observer: observer) }
             catch {
-                failure = "복구본을 열지 못했고 원본 파일 복원도 실패했습니다: \(error.localizedDescription). recovery 폴더를 확인하세요."
+                failure = appText("Could not open the recovered copy or restore the original files: %@. Check the recovery folder.", "\(error.localizedDescription)")
                 throw RepositoryError(message: failure)
             }
             failure = error.localizedDescription
-            throw RepositoryError(message: "복구본을 열지 못해 원본 DB를 되돌렸습니다: \(initialError.localizedDescription)")
+            throw RepositoryError(message: appText("Could not open the recovered copy. The original database was restored: %@", "\(initialError.localizedDescription)"))
         }
     }
 }
@@ -124,9 +130,9 @@ final class LibraryLaunchState {
             let failed = library.sessions.values.contains(where: { $0.saveError != nil })
             if failed {
                 let alert = NSAlert()
-                alert.messageText = "일부 변경을 저장하지 못했습니다"
-                alert.informativeText = "저장 오류를 확인한 다음 다시 종료하세요."
-                alert.addButton(withTitle: "돌아가기")
+                alert.messageText = appText("Some Changes Could Not Be Saved")
+                alert.informativeText = appText("Check the save errors and try quitting again.")
+                alert.addButton(withTitle: appText("Go Back"))
                 alert.runModal()
             }
             sender.reply(toApplicationShouldTerminate: !failed)

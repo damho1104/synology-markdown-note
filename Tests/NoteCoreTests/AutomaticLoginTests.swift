@@ -21,7 +21,7 @@ import NoteCore
         #expect(scheduled != nil)
         await scheduled?.value
         #expect(fixture.store.recoveryExpired)
-        #expect(fixture.store.connectionStatus.contains("30분"))
+        #expect(fixture.store.connectionStatus == appText("Automatic reconnection stopped after 30 minutes"))
         fixture.store.connectionBecameAvailable()
         #expect(fixture.store.recoveryTask == nil)
         #expect(fixture.server.logins().isEmpty)
@@ -79,8 +79,8 @@ import NoteCore
         defer { fixture.cleanup() }
         fixture.store.credentialAccess.load = { _ in throw CredentialStoreError.keychain(status: -25308) }
         await fixture.store.restoreConnectionIfNeeded()
-        #expect(fixture.store.connectionStatus == "키체인 접근 확인 필요")
-        #expect(fixture.store.loginStorageMessage?.contains("항상 허용") == true)
+        #expect(fixture.store.connectionStatus == appText("Keychain Access Required"))
+        #expect(fixture.store.loginStorageMessage == appText("Click “Reconnect” and choose Always Allow for SynologyCredentialHelper in the macOS Keychain prompt. This step does not require a NAS verification code."))
         #expect(fixture.server.logins().isEmpty)
     }
 
@@ -172,7 +172,7 @@ import NoteCore
         await fixture.store.connect(profile: fixture.store.profile, password: "test-password", otp: "123456")
         #expect(fixture.store.isConnected)
         #expect(!fixture.store.trustedDeviceRemembered)
-        #expect(fixture.store.loginStorageMessage?.contains("저장하지 못했습니다") == true)
+        #expect(fixture.store.loginStorageIssue == .couldNotSave)
     }
 
     @MainActor private final class Fixture {

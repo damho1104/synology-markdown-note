@@ -23,33 +23,33 @@ struct NoteCommands: Commands {
     @FocusedValue(\.noteActions) var actions
     var body: some Commands {
         CommandGroup(replacing: .undoRedo) {
-            Button("실행 취소") { actions?.undo() }.keyboardShortcut("z")
-            Button("다시 실행") { actions?.redo() }.keyboardShortcut("z", modifiers: [.command, .shift])
+            Button(appText("Undo")) { actions?.undo() }.keyboardShortcut("z")
+            Button(appText("Redo")) { actions?.redo() }.keyboardShortcut("z", modifiers: [.command, .shift])
         }
         CommandGroup(replacing: .newItem) {
-            Button("새 노트") { actions?.newNote() }.keyboardShortcut("n").disabled(actions == nil)
-            Button("Markdown 가져오기…") { actions?.importNote() }.keyboardShortcut("o").disabled(actions == nil)
+            Button(appText("New Note")) { actions?.newNote() }.keyboardShortcut("n").disabled(actions == nil)
+            Button(appText("Import Markdown…")) { actions?.importNote() }.keyboardShortcut("o").disabled(actions == nil)
         }
         CommandGroup(replacing: .saveItem) {
-            Button("지금 저장") { actions?.save() }.keyboardShortcut("s").disabled(actions == nil)
-            Button("내보내기…") { actions?.exportNote() }.keyboardShortcut("e", modifiers: [.command, .shift]).disabled(actions == nil)
+            Button(appText("Save Now")) { actions?.save() }.keyboardShortcut("s").disabled(actions == nil)
+            Button(appText("Export…")) { actions?.exportNote() }.keyboardShortcut("e", modifiers: [.command, .shift]).disabled(actions == nil)
         }
         CommandGroup(after: .textEditing) {
-            Button("문서에서 찾기") { NSApp.sendAction(#selector(NSTextView.performFindPanelAction(_:)), to: nil, from: FindSender.shared) }.keyboardShortcut("f")
-            Button("전체 노트 검색") { actions?.search() }.keyboardShortcut("f", modifiers: [.command, .shift])
+            Button(appText("Find in Document")) { NSApp.sendAction(#selector(NSTextView.performFindPanelAction(_:)), to: nil, from: FindSender.shared) }.keyboardShortcut("f")
+            Button(appText("Search All Notes")) { actions?.search() }.keyboardShortcut("f", modifiers: [.command, .shift])
         }
         CommandMenu("Markdown") {
-            Button("굵게") { send(#selector(SourceTextView.markdownBold(_:))) }.keyboardShortcut("b")
-            Button("기울임") { send(#selector(SourceTextView.markdownItalic(_:))) }.keyboardShortcut("i")
-            Button("링크 삽입") { send(#selector(SourceTextView.markdownLink(_:))) }.keyboardShortcut("k")
-            Button("다른 노트 링크 삽입…") { actions?.insertNoteLink() }
+            Button(appText("Bold")) { send(#selector(SourceTextView.markdownBold(_:))) }.keyboardShortcut("b")
+            Button(appText("Italic")) { send(#selector(SourceTextView.markdownItalic(_:))) }.keyboardShortcut("i")
+            Button(appText("Insert Link")) { send(#selector(SourceTextView.markdownLink(_:))) }.keyboardShortcut("k")
+            Button(appText("Insert Link to Another Note…")) { actions?.insertNoteLink() }
                 .keyboardShortcut("k", modifiers: [.command, .shift])
                 .disabled(actions?.canInsertNoteLink != true)
-            Button("인라인 코드") { send(#selector(SourceTextView.markdownCode(_:))) }.keyboardShortcut("`", modifiers: [.command])
-            Button("표 삽입") { send(#selector(SourceTextView.markdownTable(_:))) }
+            Button(appText("Inline Code")) { send(#selector(SourceTextView.markdownCode(_:))) }.keyboardShortcut("`", modifiers: [.command])
+            Button(appText("Insert Table")) { send(#selector(SourceTextView.markdownTable(_:))) }
         }
         CommandGroup(after: .sidebar) {
-            Button("미리보기 켜기·끄기") { actions?.togglePreview() }.keyboardShortcut("p", modifiers: [.command, .shift])
+            Button(appText("Toggle Preview")) { actions?.togglePreview() }.keyboardShortcut("p", modifiers: [.command, .shift])
         }
     }
     private func send(_ selector: Selector) { NSApp.sendAction(selector, to: nil, from: nil) }

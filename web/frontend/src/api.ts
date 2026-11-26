@@ -1,3 +1,4 @@
+import { t, UiError, type Message } from "./i18n";
 export type Status = {
   configured: boolean;
   nas_url: string | null;
@@ -10,7 +11,7 @@ export type Session = {
   csrf_token: string;
 };
 
-const messages: Record<string, string> = {
+const messages: Record<string, Message> = {
   DUPLICATE_NOTEBOOK_NAME: "같은 이름의 메모장이 이미 있습니다.",
   DUPLICATE_STACK_NAME: "같은 이름의 책장이 이미 있습니다.",
   NOTEBOOK_NOT_FOUND: "메모장을 찾을 수 없습니다. 목록을 새로고침하세요.",
@@ -68,20 +69,36 @@ const messages: Record<string, string> = {
   REVISION_ATTACHMENTS_UNAVAILABLE: "이전 버전에 필요한 첨부파일을 확인할 수 없어 현재 노트를 유지했습니다.",
   UPLOAD_NOT_READY: "임시 파일을 아직 저장에 사용할 수 없습니다. 업로드 상태를 확인하세요.",
   JSON_REQUIRED: "요청 형식이 올바르지 않습니다.",
+  INVALID_ID: "항목 ID가 올바르지 않습니다.",
+  INVALID_NOTE: "노트 데이터가 올바르지 않습니다.",
+  INVALID_UPLOAD: "첨부 요청이 올바르지 않습니다.",
+  NAS_NOT_CONFIGURED: "NAS 주소가 아직 설정되지 않았습니다.",
+  NAS_SESSION_EXPIRED: "NAS 세션이 만료되었습니다. 다시 로그인하세요.",
+  OPERATION_NOT_FOUND: "저장 작업을 찾을 수 없습니다.",
+  SETUP_REQUIRED: "로그인하기 전에 NAS 초기 설정을 완료하세요.",
+  UPLOAD_BODY_REQUIRED: "업로드할 파일이 필요합니다.",
+  UPLOAD_INCOMPLETE: "파일 전송이 완료되지 않았습니다. 업로드 상태를 확인하세요.",
+  UPLOAD_NOT_FOUND: "임시 첨부파일을 찾을 수 없습니다.",
+  VERSION_REQUIRED: "노트 버전이 필요합니다. 최신 노트를 다시 열어 주세요.",
 };
+
+export function apiErrorMessage(code: string): string | undefined {
+  return Object.hasOwn(messages, code) ? t(messages[code]) : undefined;
+}
 
 export class ApiFailure extends Error {
   constructor(
     public code: string,
     public status: number,
   ) {
-    super(messages[code] ?? `요청에 실패했습니다 (${status}).`);
+    super(apiErrorMessage(code) ?? t("요청에 실패했습니다 ({0}).", status));
     this.name = "ApiFailure";
   }
 }
 
-export function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : "요청 처리 중 오류가 발생했습니다.";
+export function errorText(error: unknown, fallback: Message = "요청 처리 중 오류가 발생했습니다."): string {
+  if (error instanceof ApiFailure) return apiErrorMessage(error.code) ?? t("요청에 실패했습니다 ({0}).", error.status);
+  return error instanceof UiError ? error.message : t(fallback);
 }
 
 export const SESSION_EXPIRED_EVENT = "synonote:session-expired";
@@ -98,20 +115,15 @@ async function rawRequest<T>(path: string, init: RequestInit = {}, notifyOnUnaut
       ...init,
     });
   } catch {
-    throw new Error("웹 서버에 연결할 수 없습니다. 네트워크를 확인하세요.");
+    throw new UiError("웹 서버에 연결할 수 없습니다. 네트워크를 확인하세요.");
   }
   if (!response.ok) {
     if (notifyOnUnauthorized && !init.signal?.aborted && response.status === 401 &&
         !["/api/auth/login", "/api/auth/logout"].includes(path))
       notifySessionExpired();
-    const data = (await response.json().catch(() => ({}))) as {
-      error?: string;
-      detail?: string;
-    };
-    throw new ApiFailure(
-      data.error ?? data.detail ?? "REQUEST_FAILED",
-      response.status,
-    );
+    const data = await response.json().catch(() => null);
+    const code = typeof data?.error === "string" ? data.error : data?.detail;
+    throw new ApiFailure(typeof code === "string" ? code : "REQUEST_FAILED", response.status);
   }
   return response.json() as Promise<T>;
 }

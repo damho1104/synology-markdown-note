@@ -50,7 +50,7 @@ final class DiagnosticLog: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         self.policy = policy
         do { try enforceLimits(); lastWriteError = nil }
-        catch { lastWriteError = "로그 보관 한도를 적용하지 못했습니다. 저장 공간과 폴더 권한을 확인하세요." }
+        catch { lastWriteError = appText("Could not apply log retention limits. Check available disk space and folder permissions.") }
     }
 
     func rotateNow() {
@@ -68,7 +68,7 @@ final class DiagnosticLog: @unchecked Sendable {
                 throw CocoaError(.fileWriteUnknown)
             }
             lastWriteError = nil
-        } catch { lastWriteError = "로그를 회전하지 못했습니다. 저장 공간과 폴더 권한을 확인하세요." }
+        } catch { lastWriteError = appText("Could not rotate the log. Check available disk space and folder permissions.") }
     }
 
     private func ownedLogs() throws -> [(index: Int, url: URL)] {
@@ -144,7 +144,7 @@ final class DiagnosticLog: @unchecked Sendable {
             var bytes = try JSONSerialization.data(withJSONObject: entry, options: [.sortedKeys])
             bytes.append(0x0a)
             guard bytes.count <= policy.effectiveFileBytes else {
-                lastWriteError = "로그 한 건이 파일 용량 한도를 넘어 파일 기록을 생략했습니다."
+                lastWriteError = appText("A log entry exceeded the file size limit and was skipped.")
                 logger.error("diagnostic_entry_exceeds_limit")
                 return
             }
@@ -162,7 +162,7 @@ final class DiagnosticLog: @unchecked Sendable {
             try file.write(contentsOf: bytes)
             lastWriteError = nil
         } catch {
-            lastWriteError = "로그 파일을 기록할 수 없습니다. 저장 공간과 폴더 권한을 확인하세요."
+            lastWriteError = appText("Could not write the log file. Check available disk space and folder permissions.")
             logger.error("diagnostic_file_write_failed")
         }
     }
@@ -247,6 +247,6 @@ extension LibraryStore {
         do {
             try FileManager.default.createDirectory(at: logDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             NSWorkspace.shared.open(logDirectory)
-        } catch { errorMessage = "로그 폴더를 열지 못했습니다: " + error.localizedDescription }
+        } catch { errorMessage = appText("Could not open the log folder: ") + error.localizedDescription }
     }
 }

@@ -1,3 +1,4 @@
+import { currentLanguage, t } from "./i18n";
 import { useMemo, useState } from "react";
 export function NoteLinkPicker({
   notes,
@@ -32,7 +33,7 @@ export function NoteLinkPicker({
             n.title.toLowerCase().includes(query.toLowerCase()),
         )
         .sort((a, b) =>
-          a.title.localeCompare(b.title, "ko", { numeric: true }),
+          a.title.localeCompare(b.title, currentLanguage(), { numeric: true }),
         ),
     [notes, query, current, book],
   );
@@ -42,24 +43,24 @@ export function NoteLinkPicker({
         className="native-modal"
         role="dialog"
         aria-modal="true"
-        aria-label="노트 연결"
+        aria-label={t("노트 연결")}
       >
-        <h2>노트 연결</h2>
+        <h2>{t("노트 연결")}</h2>
         <label>
-          검색
+          {t("검색")}
           <input
             autoFocus
-            aria-label="연결할 노트 검색"
+            aria-label={t("연결할 노트 검색")}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
         </label>
         <select
-          aria-label="연결할 메모장"
+          aria-label={t("연결할 메모장")}
           value={book}
           onChange={(e) => setBook(e.target.value)}
         >
-          <option value="">모든 메모장</option>
+          <option value="">{t("모든 메모장")}</option>
           {notebooks.map((b) => (
             <option value={b.id} key={b.id}>
               {b.name}
@@ -74,16 +75,16 @@ export function NoteLinkPicker({
                 key={n.id}
                 onClick={() => onSelect(n)}
               >
-                {n.title || "제목 없음"}
+                {n.title || t("제목 없음")}
               </button>
             ))
           ) : (
-            <p>검색 결과 없음</p>
+            <p>{t("검색 결과 없음")}</p>
           )}
         </div>
         <div className="native-dialog-buttons">
           <button className="native-button" onClick={onClose}>
-            취소
+            {t("취소")}
           </button>
         </div>
       </section>

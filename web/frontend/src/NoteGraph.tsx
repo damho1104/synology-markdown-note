@@ -1,3 +1,5 @@
+import { currentLanguage, formatNumber, t } from "./i18n";
+import { apiErrorMessage } from "./api";
 import { useId, useMemo, useRef, useState } from 'react'
 import { useGraphIndex, type Node } from './GraphIndex'
 import { useGraphNavigation, useGraphModel, graphNotebookColor, graphTitle as label, GraphNavigationContent } from './GraphNavigation'
@@ -87,51 +89,51 @@ export function NoteGraph({ onOpenNote, focusId, notebooks = [], compact = false
   const radius = (id: string) => Math.min(14,5+Math.sqrt(visible.degree.get(id) ?? 0)*1.8)
   const fullDetails = !shared && !compact
 
-  return <section aria-label="노트 그래프" className={`note-graph${compact ? ' note-graph-compact' : ''}`}>
+  return <section aria-label={t("노트 그래프")} className={`note-graph${compact ? ' note-graph-compact' : ''}`}>
     {!compact && <div className="graph-filters">
-      <input type="search" aria-label="그래프 노트 검색" placeholder="노트 제목 검색" value={query}
+      <input type="search" aria-label={t("그래프 노트 검색")} placeholder={t("노트 제목 검색")} value={query}
         onChange={e => update({query:e.target.value})} />
-      <select aria-label="그래프 메모장 필터" value={notebook} onChange={e => update({notebook:e.target.value})}>
-        <option value="">모든 메모장</option>
+      <select aria-label={t("그래프 메모장 필터")} value={notebook} onChange={e => update({notebook:e.target.value})}>
+        <option value="">{t("모든 메모장")}</option>
         {[...new Set([...notebooks.map(n => n.id),...graph.nodes.map(n => n.notebook_id)])].map(id =>
           <option key={id} value={id}>{notebookNames.get(id) ?? id}</option>)}
       </select>
-      <select aria-label="그래프 태그 필터" value={tag} onChange={e => update({tag:e.target.value})}>
-        <option value="">모든 태그</option>
+      <select aria-label={t("그래프 태그 필터")} value={tag} onChange={e => update({tag:e.target.value})}>
+        <option value="">{t("모든 태그")}</option>
         {[...new Set(graph.nodes.flatMap(n => n.tags ?? []))].sort().map(t => <option key={t} value={t}>#{t}</option>)}
       </select>
     </div>}
     <header className="graph-summary">
-      <strong>{visible.focus ? '로컬 그래프' : '전체 그래프'}</strong>
+      <strong>{visible.focus ? t("로컬 그래프") : t("전체 그래프")}</strong>
       {visible.focus && <>
-        <select aria-label="연결 깊이" value={depth} onChange={e => update({depth:Number(e.target.value)})}>
-          {[1,2,3].map(n => <option key={n} value={n}>{n}단계</option>)}
+        <select aria-label={t("연결 깊이")} value={depth} onChange={e => update({depth:Number(e.target.value)})}>
+          {[1,2,3].map(n => <option key={n} value={n}>{n === 1 ? t("1단계") : t("{0}단계", n)}</option>)}
         </select>
-        {!compact && <button onClick={() => focus()}>전체 그래프</button>}
+        {!compact && <button onClick={() => focus()}>{t("전체 그래프")}</button>}
       </>}
       {!compact && !visible.focus && <label className="graph-isolates"><input type="checkbox" checked={includeIsolated}
-        onChange={e => update({includeIsolated:e.target.checked})} />연결 없는 노트</label>}
-      <span className="graph-muted">노트 {visible.nodes.length} · 연결 {visible.edges.length}</span>
-      {visible.hiddenCount > 0 && <small className="graph-muted">(미연결 {visible.hiddenCount}개 숨김)</small>}
+        onChange={e => update({includeIsolated:e.target.checked})} />{t("연결 없는 노트")}</label>}
+      <span className="graph-muted">{t("노트 {0} · 연결 {1}", visible.nodes.length, visible.edges.length)}</span>
+      {visible.hiddenCount > 0 && <small className="graph-muted">{t("(미연결 {0}개 숨김)", visible.hiddenCount)}</small>}
     </header>
-    {loading && <div role="status" aria-label="그래프 인덱싱 상태" className="graph-muted">
-      {progress.total ? `노트 링크 인덱싱 중… ${progress.done}/${progress.total}` : '노트 관계를 불러오는 중…'}
-      {progress.total > 0 && <progress aria-label="그래프 조회 진행률" max={progress.total} value={progress.done} />}
+    {loading && <div role="status" aria-label={t("그래프 인덱싱 상태")} className="graph-muted">
+      {progress.total ? t("노트 링크 인덱싱 중… {0}/{1}", progress.done, progress.total) : t("노트 관계를 불러오는 중…")}
+      {progress.total > 0 && <progress aria-label={t("그래프 조회 진행률")} max={progress.total} value={progress.done} />}
     </div>}
-    {error && <div role="alert" className="graph-warning"><p>{error}</p><button onClick={retry}>다시 시도</button></div>}
+    {error && <div role="alert" className="graph-warning"><p>{error}</p><button onClick={retry}>{t("다시 시도")}</button></div>}
     {graph.failures.length > 0 && <div role="alert" className="graph-warning">
-      <strong>일부 노트의 연결을 확인하지 못했습니다 ({graph.failures.length}개)</strong>
-      <details><summary>연결 확인 실패 내역</summary><ul>{graph.failures.map((failure,i) =>
-        <li key={`${failure.id}:${i}`}>{allNodes.get(failure.id)?.title || failure.id} ({failure.id}) · {failure.error}</li>)}</ul></details>
-      <button onClick={retry}>다시 시도</button>
+      <strong>{t("일부 노트의 연결을 확인하지 못했습니다 ({0}개)", graph.failures.length)}</strong>
+      <details><summary>{t("연결 확인 실패 내역")}</summary><ul>{graph.failures.map((failure,i) =>
+        <li key={`${failure.id}:${i}`}>{allNodes.get(failure.id)?.title || failure.id} ({failure.id}) · {apiErrorMessage(failure.error) ?? t("연결을 확인할 수 없습니다.")}</li>)}</ul></details>
+      <button onClick={retry}>{t("다시 시도")}</button>
     </div>}
     {(!loading || graph.nodes.length > 0) && <>
       <div className="graph-stage">
-        {visible.nodes.length === 0 ? <div className="graph-empty"><p>표시할 노트가 없습니다</p>
-          <p>필터를 변경하거나 노트 간 링크를 추가해 보세요.</p>
+        {visible.nodes.length === 0 ? <div className="graph-empty"><p>{t("표시할 노트가 없습니다")}</p>
+          <p>{t("필터를 변경하거나 노트 간 링크를 추가해 보세요.")}</p>
           {!includeIsolated && !visible.focus && graph.nodes.length > 0 && <button onClick={() => update({includeIsolated:true})}>
-            연결 없는 노트 보기 ({visible.hiddenCount}개)</button>}
-        </div> : <svg role="group" aria-label="노트 관계 그래프"
+            {t("연결 없는 노트 보기 ({0}개)", visible.hiddenCount)}</button>}
+        </div> : <svg role="group" aria-label={t("노트 관계 그래프")}
           viewBox={`${(positions.width-viewWidth)/2+pan.x} ${(positions.height-viewHeight)/2+pan.y} ${viewWidth} ${viewHeight}`}
           onClick={event => {
             if (!(event.target as Element).closest('[role="button"]') && !dragged.current) select()
@@ -196,27 +198,27 @@ export function NoteGraph({ onOpenNote, focusId, notebooks = [], compact = false
             </g>
           })}
         </svg>}
-        <div className="graph-zoom" role="group" aria-label="그래프 확대 도구">
-          <button aria-label="축소" onClick={() => zoomTo(zoom-0.25)} disabled={zoom <= 0.25}>−</button>
-          <output aria-label="확대 비율">{Math.round(zoom*100)}%</output>
-          <button aria-label="확대" onClick={() => zoomTo(zoom+0.25)} disabled={zoom >= 3}>+</button>
-          <button onClick={reset}>초기화</button>
+        <div className="graph-zoom" role="group" aria-label={t("그래프 확대 도구")}>
+          <button aria-label={t("축소")} onClick={() => zoomTo(zoom-0.25)} disabled={zoom <= 0.25}>−</button>
+          <output aria-label={t("확대 비율")}>{zoom.toLocaleString(currentLanguage(), {style: "percent"})}</output>
+          <button aria-label={t("확대")} onClick={() => zoomTo(zoom+0.25)} disabled={zoom >= 3}>+</button>
+          <button onClick={reset}>{t("초기화")}</button>
         </div>
       </div>
       {selected ? <div className="graph-selection"><strong>{label(selected)}</strong>
-        <button onClick={() => onOpenNote(selected.id)}>노트 열기</button>
-        {!compact && <button onClick={() => focus(selected.id)}>연결만 보기</button>}
-      </div> : !compact && <p className="graph-hint">노드 선택 · 두 번 클릭해 노트 열기 · 드래그로 이동 · +/−로 확대</p>}
+        <button onClick={() => onOpenNote(selected.id)}>{t("노트 열기")}</button>
+        {!compact && <button onClick={() => focus(selected.id)}>{t("연결만 보기")}</button>}
+      </div> : !compact && <p className="graph-hint">{t("노드 선택 · 두 번 클릭해 노트 열기 · 드래그로 이동 · +/−로 확대")}</p>}
       {fullDetails && <div className="graph-standalone-details">
-        {query.trim() ? <section aria-label="검색 결과">{matches.length ? matches.slice(0,100).map(node =>
-          <button key={node.id} onClick={() => select(node.id)}>{label(node)}</button>) : <p>검색 결과가 없습니다</p>}</section>
+        {query.trim() ? <section aria-label={t("검색 결과")}>{matches.length ? matches.slice(0,100).map(node =>
+          <button key={node.id} onClick={() => select(node.id)}>{label(node)}</button>) : <p>{t("검색 결과가 없습니다")}</p>}</section>
           : selected && <div className="graph-connections">{(['incoming','outgoing'] as const).map(direction => <section
-            key={direction} aria-label={direction === 'incoming' ? '백링크' : '나가는 링크'}>
-            <h3 className={`graph-${direction}`}>{direction === 'incoming' ? '백링크' : '나가는 링크'} ({connections(direction).length})</h3>
+            key={direction} aria-label={direction === 'incoming' ? t("백링크") : t("나가는 링크")}>
+            <h3 className={`graph-${direction}`}>{direction === 'incoming' ? t("백링크") : t("나가는 링크")} ({formatNumber(connections(direction).length)})</h3>
             {connections(direction).map(node => <button key={node.id} onClick={() => onOpenNote(node.id)}>{label(node)}</button>)}
           </section>)}</div>}
       </div>}
-      {shared && !compact && <details className="graph-mobile-navigation"><summary>그래프 탐색</summary>
+      {shared && !compact && <details className="graph-mobile-navigation"><summary>{t("그래프 탐색")}</summary>
         <GraphNavigationContent notebooks={notebooks} onOpenNote={onOpenNote} navigation={navigation} model={model} />
       </details>}
     </>}

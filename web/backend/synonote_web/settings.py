@@ -30,8 +30,11 @@ class Settings:
     remember_seconds: int = 30 * 24 * 3600
     remember_idle_seconds: int = 7 * 24 * 3600
     rotate_seconds: int = 7 * 24 * 3600
+    default_language: str = "auto"
 
     def __post_init__(self) -> None:
+        if self.default_language not in {"auto", "en", "ko"}:
+            raise ValueError("WEB_DEFAULT_LANGUAGE must be auto, en or ko")
         if self.public_origin:
             parsed = urlsplit(self.public_origin)
             if (parsed.scheme not in {"https", "http"} or not parsed.netloc
@@ -56,4 +59,5 @@ class Settings:
             public_origin=os.getenv("WEB_PUBLIC_ORIGIN") or None,
             secure_cookies=(None if os.getenv("WEB_COOKIE_SECURE", "auto").lower() in {"", "auto"}
                             else _bool_env("WEB_COOKIE_SECURE", True)),
+            default_language=os.getenv("WEB_DEFAULT_LANGUAGE", "").strip().lower() or "auto",
         )

@@ -110,18 +110,18 @@ extension LibraryStore {
     func promptRenameStack(_ oldName: String) {
         let account = accountGeneration
         let alert = NSAlert()
-        alert.messageText = "책장 이름 변경"
-        alert.informativeText = "NAS에 있는 책장 이름을 변경합니다."
+        alert.messageText = appText("Rename Stack")
+        alert.informativeText = appText("Change the stack’s name on the NAS.")
         let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
         input.stringValue = oldName; alert.accessoryView = input
-        alert.addButton(withTitle: "변경"); alert.addButton(withTitle: "취소")
+        alert.addButton(withTitle: appText("Rename")); alert.addButton(withTitle: appText("Cancel"))
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         let newName = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         Task {
             guard account == accountGeneration else { return }
             do {
                 try await renameStack(oldName: oldName, name: newName)
-                if account == accountGeneration { stackSuccessMessage = "‘\(newName)’ 책장 이름이 NAS 목록에서 확인되었습니다." }
+                if account == accountGeneration { stackSuccessMessage = appText("The NAS list confirms the stack name “%@”.", "\(newName)") }
             }
             catch { if account == accountGeneration { errorMessage = error.localizedDescription } }
         }
@@ -130,10 +130,10 @@ extension LibraryStore {
     func promptDeleteStack(_ name: String) {
         let account = accountGeneration
         let alert = NSAlert()
-        alert.messageText = "‘\(name)’ 책장을 삭제할까요?"
-        alert.informativeText = "책장 분류만 해제합니다. 포함된 메모장과 노트는 삭제되지 않습니다."
+        alert.messageText = appText("Delete the “%@” stack?", "\(name)")
+        alert.informativeText = appText("This removes the stack grouping. Its notebooks and notes are kept.")
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "책장 삭제"); alert.addButton(withTitle: "취소")
+        alert.addButton(withTitle: appText("Delete Stack")); alert.addButton(withTitle: appText("Cancel"))
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         Task {
             guard account == accountGeneration else { return }

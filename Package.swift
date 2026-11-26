@@ -3,6 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "SynologyNote",
+    defaultLocalization: "en",
     platforms: [.macOS(.v14)],
     products: [.library(name: "NoteCore", targets: ["NoteCore"]), .executable(name: "SynologyNote", targets: ["SynologyNote"]),
                .executable(name: "CLIContractFixtures", targets: ["CLIContractFixtures"])],
@@ -12,7 +13,8 @@ let package = Package(
     ],
     targets: [
         .systemLibrary(name: "CSQLite"),
-        .target(name: "NoteCore", dependencies: ["CSQLite", .product(name: "Markdown", package: "swift-markdown"), .product(name: "SwiftSoup", package: "SwiftSoup")]),
+        .target(name: "NoteCore", dependencies: ["CSQLite", .product(name: "Markdown", package: "swift-markdown"), .product(name: "SwiftSoup", package: "SwiftSoup")],
+                resources: [.process("Resources")]),
         .executableTarget(name: "CLIContractFixtures", dependencies: ["NoteCore"]),
         .executableTarget(
             name: "SynologyNote",

@@ -82,20 +82,20 @@ def _read_credentials_file() -> str:
                 raise OSError("credential file ownership or permissions are unsafe")
             return stream.read(65537)
     except FileNotFoundError as ex:
-        raise CLIError("AUTH_REQUIRED", "저장된 로그인 비밀번호가 없습니다.") from ex
+        raise CLIError("AUTH_REQUIRED", "No saved login password was found.") from ex
     except (OSError, UnicodeError) as ex:
-        raise CLIError("CREDENTIAL_STORE_UNAVAILABLE", "로컬 인증 정보 파일을 안전하게 읽을 수 없습니다.") from ex
+        raise CLIError("CREDENTIAL_STORE_UNAVAILABLE", "Could not safely read the local credentials file.") from ex
 
 
 def load_profile() -> dict:
     path = profile_path()
     if not path.exists():
-        raise CLIError("AUTH_REQUIRED", "먼저 synonote login --remember 를 실행하세요.")
+        raise CLIError("AUTH_REQUIRED", "Run synonote login --remember first.")
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         return {"server": checked_server(data["server"]), "username": data["username"]}
     except (KeyError, ValueError, OSError, TypeError) as ex:
-        raise CLIError("AUTH_REQUIRED", "저장된 로그인 프로필을 읽을 수 없습니다.") from ex
+        raise CLIError("AUTH_REQUIRED", "Could not read the saved login profile.") from ex
 
 
 def _service(profile: dict) -> str:
@@ -109,9 +109,9 @@ def _get(profile: dict) -> dict:
         try:
             raw = keyring.get_password(_service(profile), profile["username"])
         except (KeyringError, RuntimeError) as ex:
-            raise CLIError("CREDENTIAL_STORE_UNAVAILABLE", "운영체제 보안 저장소를 사용할 수 없습니다.") from ex
+            raise CLIError("CREDENTIAL_STORE_UNAVAILABLE", "The operating system's secure credential store is unavailable.") from ex
     if not raw:
-        raise CLIError("AUTH_REQUIRED", "저장된 로그인 비밀번호가 없습니다.")
+        raise CLIError("AUTH_REQUIRED", "No saved login password was found.")
     try:
         data = json.loads(raw)
         if not isinstance(data, dict) or not isinstance(data.get("password"), str) or not data["password"]:
@@ -120,7 +120,7 @@ def _get(profile: dict) -> dict:
             raise ValueError()
         return data
     except (ValueError, TypeError) as ex:
-        raise CLIError("AUTH_REQUIRED", "저장된 로그인 자격 증명이 손상되었습니다.") from ex
+        raise CLIError("AUTH_REQUIRED", "The saved login credentials are invalid.") from ex
 
 
 def authenticate(api: NoteStationAPI) -> dict:
@@ -143,7 +143,7 @@ def login(server: str, username: str, password: str, otp: str | None, remember: 
         try:
             _atomic_write_json(profile_path(), profile)
         except OSError as ex:
-            raise CLIError("CREDENTIAL_STORE_UNAVAILABLE", "로그인 프로필을 저장하지 못했습니다.") from ex
+            raise CLIError("CREDENTIAL_STORE_UNAVAILABLE", "Could not save the login profile.") from ex
     return {"server": server, "username": username, "remembered": remember}
 
 
@@ -174,14 +174,14 @@ def set_server(server: str) -> dict:
                 _atomic_write_json(credentials_path(), {**credential, **previous})
                 raise
         except OSError as ex:
-            raise CLIError("CREDENTIAL_STORE_UNAVAILABLE", "서버 주소를 저장하지 못했습니다. 인증 정보 파일을 확인하세요.") from ex
+            raise CLIError("CREDENTIAL_STORE_UNAVAILABLE", "Could not save the server URL. Check the credentials file.") from ex
     else:
         # Native keyrings use the server URL as part of the entry key.
         _save_credentials(updated, stored["password"], stored.get("device_id"))
         try:
             _atomic_write_json(profile_path(), updated)
         except OSError as ex:
-            raise CLIError("CREDENTIAL_STORE_UNAVAILABLE", "서버 주소를 저장하지 못했습니다.") from ex
+            raise CLIError("CREDENTIAL_STORE_UNAVAILABLE", "Could not save the server URL.") from ex
     return {"status": "updated", **updated}
 
 
@@ -190,12 +190,12 @@ def _save_credentials(profile: dict, password: str, device_id: str | None) -> No
         try:
             _atomic_write_json(credentials_path(), {**profile, "password": password, "device_id": device_id})
         except OSError as ex:
-            raise CLIError("CREDENTIAL_STORE_UNAVAILABLE", "로컬 인증 정보 파일을 저장하지 못했습니다.") from ex
+            raise CLIError("CREDENTIAL_STORE_UNAVAILABLE", "Could not save the local credentials file.") from ex
     else:
         try:
             keyring.set_password(_service(profile), profile["username"], json.dumps({"password": password, "device_id": device_id}))
         except (KeyringError, RuntimeError) as ex:
-            raise CLIError("CREDENTIAL_STORE_UNAVAILABLE", "보안 저장소에 인증 정보를 저장하지 못했습니다.") from ex
+            raise CLIError("CREDENTIAL_STORE_UNAVAILABLE", "Could not save the credentials in the secure store.") from ex
 
 
 def logout() -> None:
@@ -207,13 +207,13 @@ def logout() -> None:
                 raise OSError("credential path is a symlink")
             path.unlink(missing_ok=True)
         except OSError as ex:
-            raise CLIError("CREDENTIAL_STORE_UNAVAILABLE", "로컬 인증 정보 파일을 지우지 못했습니다.") from ex
+            raise CLIError("CREDENTIAL_STORE_UNAVAILABLE", "Could not remove the local credentials file.") from ex
     else:
         try:
             keyring.delete_password(_service(profile), profile["username"])
         except (KeyringError, RuntimeError) as ex:
-            raise CLIError("CREDENTIAL_STORE_UNAVAILABLE", "저장된 인증 정보를 지우지 못했습니다.") from ex
+            raise CLIError("CREDENTIAL_STORE_UNAVAILABLE", "Could not remove the saved credentials.") from ex
     try:
         profile_path().unlink(missing_ok=True)
     except OSError as ex:
-        raise CLIError("CREDENTIAL_STORE_UNAVAILABLE", "로그인 프로필을 지우지 못했습니다.") from ex
+        raise CLIError("CREDENTIAL_STORE_UNAVAILABLE", "Could not remove the login profile.") from ex

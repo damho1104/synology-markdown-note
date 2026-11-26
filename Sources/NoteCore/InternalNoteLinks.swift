@@ -111,7 +111,7 @@ public enum InternalNoteLinks {
         // Fail closed for malformed/duplicated markers rather than rewriting user content.
         guard !markdown.contains(managedStart), !markdown.contains(managedEnd) else { return nil }
         let separator = markdown.isEmpty ? "" : (markdown.hasSuffix("\n") ? "\n" : "\n\n")
-        return markdown + separator + managedStart + "\n## 관련 노트 (앱에서 관리)\n" + item + "\n" + managedEnd + "\n"
+        return markdown + separator + managedStart + coreText("\n## Related Notes (Managed by the App)\n") + item + "\n" + managedEnd + "\n"
     }
 
     public static func removeManagedLink(_ markdown: String, documentID: UUID) -> String? {

@@ -24,6 +24,8 @@ struct SettingsView: View {
     @State private var attachmentValidationReport: NoteAttachmentValidationReport?
     @State private var showAutomaticUploadValidation = false
     @State private var automaticUploadMessage: String?
+    @AppStorage(DisplayLanguagePreference.key, store: NoteLocalization.preferences)
+    private var displayLanguage: DisplayLanguagePreference = .system
     @AppStorage("editorFontSize") private var fontSize = 14.0
     @AppStorage("appearance") private var appearance = "system"
     @AppStorage("mermaidStyle") private var mermaidStyle: MermaidStyle = .sketch
@@ -47,7 +49,7 @@ struct SettingsView: View {
         guard !connectionBusy else { return }
         isConnecting = true
         library.connectionError = nil
-        library.connectionStatus = "연결 준비 중…"
+        library.connectionStatus = appText("Preparing to Connect…")
         let submittedProfile = profile
         let submittedPassword = password
         let submittedOTP = otp
@@ -59,7 +61,7 @@ struct SettingsView: View {
                 password = ""
                 otp = ""
                 savedLoginAvailability = submittedProfile.rememberPassword
-                    && !(library.loginStorageMessage?.contains("키체인에 저장하지 못했습니다") ?? false)
+                    && library.loginStorageIssue != .couldNotSave
                     ? .available : .missing
                 isEditingAccount = false
             }
@@ -70,7 +72,7 @@ struct SettingsView: View {
         guard !connectionBusy else { return }
         Task {
             await library.connectUsingSavedAccount()
-            if library.loginStorageMessage?.contains("저장된 비밀번호가 없습니다") == true {
+            if library.loginStorageIssue == .missingPassword {
                 savedLoginAvailability = .missing
             }
         }
@@ -84,14 +86,14 @@ struct SettingsView: View {
     }
 
     private var connectionSection: some View {
-        Section("연결 상태") {
+        Section(appText("Connection Status")) {
             HStack(spacing: 12) {
                 Image(systemName: library.isConnected ? "checkmark.circle.fill" : "externaldrive")
                     .font(.title2)
                     .foregroundStyle(library.isConnected ? Color.green : Color.secondary)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(library.isConnected ? "NAS에 연결됨" : library.isRefreshing || isConnecting ? "연결 중…" : "연결 안 됨")
+                    Text(library.isConnected ? appText("Connected to NAS") : library.isRefreshing || isConnecting ? appText("Connecting…") : appText("Disconnected"))
                         .font(.headline)
                     Text(library.connectionStatus)
                         .font(.caption)
@@ -103,10 +105,10 @@ struct SettingsView: View {
                     ProgressView().controlSize(.small)
                 }
                 if library.isConnected {
-                    Button("연결 해제") { Task { await library.disconnect() } }
+                    Button(appText("Disconnect")) { Task { await library.disconnect() } }
                         .disabled(connectionBusy)
                 } else if canUseSavedLogin && !isEditingAccount {
-                    Button(savedLoginAvailability == .checking ? "계정 확인 중…" : "다시 연결", action: reconnectSavedAccount)
+                    Button(savedLoginAvailability == .checking ? appText("Checking Account…") : appText("Reconnect"), action: reconnectSavedAccount)
                         .buttonStyle(.borderedProminent)
                         .disabled(connectionBusy || savedLoginAvailability == .checking)
                 }
@@ -123,45 +125,45 @@ struct SettingsView: View {
     }
 
     private var accountSection: some View {
-        Section("NAS 계정") {
+        Section(appText("NAS Account")) {
             if showsAccountEditor {
-                TextField("NAS 주소", text: $profile.server, prompt: Text("https://nas.example.com:5001"))
+                TextField(appText("NAS Address"), text: $profile.server, prompt: Text("https://nas.example.com:5001"))
                     .textContentType(.URL)
                     .disabled(connectionBusy)
-                TextField("사용자 이름", text: $profile.username).textContentType(.username)
+                TextField(appText("Username"), text: $profile.username).textContentType(.username)
                     .disabled(connectionBusy)
-                SecureField("비밀번호", text: $password).textContentType(.password)
+                SecureField(appText("Password"), text: $password).textContentType(.password)
                     .disabled(connectionBusy)
-                TextField("2단계 인증 코드", text: $otp, prompt: Text("필요할 때만 입력"))
+                TextField(appText("Two-Factor Authentication Code"), text: $otp, prompt: Text(appText("Enter when required")))
                     .disabled(connectionBusy)
                 HStack(spacing: 10) {
-                    Button(library.isConnected ? "이 계정으로 전환" : "로그인", action: connectWithEnteredAccount)
+                    Button(library.isConnected ? appText("Switch to This Account") : appText("Sign In"), action: connectWithEnteredAccount)
                         .buttonStyle(.borderedProminent)
                         .disabled(connectionBusy || profile.server.isEmpty || profile.username.isEmpty || password.isEmpty)
                     if isEditingAccount {
-                        Button("취소", action: cancelAccountEditing)
+                        Button(appText("Cancel"), action: cancelAccountEditing)
                             .disabled(connectionBusy)
                     }
                 }
             } else {
-                LabeledContent("NAS 주소", value: profile.server)
-                LabeledContent("사용자", value: profile.username)
-                Button("계정 정보 수정…") { isEditingAccount = true }
+                LabeledContent(appText("NAS Address"), value: profile.server)
+                LabeledContent(appText("User"), value: profile.username)
+                Button(appText("Edit Account Details…")) { isEditingAccount = true }
                     .disabled(connectionBusy)
             }
         }
     }
 
     private var loginOptionsSection: some View {
-        Section("로그인 옵션") {
-            Toggle("비밀번호를 키체인에 보관", isOn: $profile.rememberPassword)
-            Toggle("앱을 열면 자동 연결", isOn: $profile.autoConnect)
+        Section(appText("Sign-in Options")) {
+            Toggle(appText("Save Password in Keychain"), isOn: $profile.rememberPassword)
+            Toggle(appText("Connect Automatically on Launch"), isOn: $profile.autoConnect)
                 .disabled(!profile.rememberPassword)
-            Toggle("이 Mac 기억하기", isOn: $profile.rememberDevice)
-            Text("기기 기억을 사용하면 NAS에서 지원하는 경우 2단계 인증 코드 입력을 줄일 수 있습니다.")
+            Toggle(appText("Remember This Mac"), isOn: $profile.rememberDevice)
+            Text(appText("Remembering this Mac can reduce two-factor prompts if the NAS supports it."))
                 .font(.caption).foregroundStyle(.secondary)
             if library.trustedDeviceRemembered {
-                Label("기기 기억 토큰이 키체인에 저장됨", systemImage: "checkmark.shield")
+                Label(appText("Trusted Device Token Saved in Keychain"), systemImage: "checkmark.shield")
                     .font(.caption)
             }
         }
@@ -173,37 +175,37 @@ struct SettingsView: View {
                 connectionSection
                 accountSection
                 loginOptionsSection
-                Section("오프라인 보관") {
-                    Toggle("전체 노트 본문·첨부를 이 Mac에 보관", isOn: Binding(
+                Section(appText("Offline Access")) {
+                    Toggle(appText("Keep All Note Content and Attachments on This Mac"), isOn: Binding(
                         get: { library.profile.keepOffline },
                         set: { profile.keepOffline = $0; library.setOfflineStorage($0) }))
-                    Text("아직 열지 않은 노트도 내려받아 본문 검색과 오프라인 열기를 지원합니다. 암호화된 노트는 제외합니다.")
+                    Text(appText("Download unopened notes for body search and offline access. Encrypted notes are excluded."))
                         .font(.caption).foregroundStyle(.secondary)
                     if library.isCachingOffline {
                         ProgressView(value: Double(library.offlineCompleted), total: Double(max(1, library.offlineTotal)))
                     }
                     Text(library.offlineStatus).font(.caption).foregroundStyle(.secondary)
                     if !library.offlineFailures.isEmpty {
-                        Text("\(library.offlineFailures.count)개 노트의 본문 또는 첨부를 받지 못했습니다. 받은 노트는 계속 사용할 수 있습니다.")
+                        Text(appText("Notes with missing content or attachments: %@. Downloaded notes remain available.", AppLocalization.number(library.offlineFailures.count)))
                             .font(.caption).foregroundStyle(.orange)
                     }
-                    Button("미완료 항목 다시 받기") { library.startOfflineDownload() }
+                    Button(appText("Retry Incomplete Downloads")) { library.startOfflineDownload() }
                         .disabled(!library.isConnected || library.isCachingOffline || !library.profile.keepOffline)
                 }
-                Section("동기화") {
-                    Label("편집 내용은 NAS에 자동 동기화됩니다", systemImage: "arrow.triangle.2.circlepath")
-                    Text("연결이 끊겨도 이 Mac에 보관하며, 재연결 후 전송합니다. 충돌이 있으면 변경 내용을 보존합니다.")
+                Section(appText("Sync")) {
+                    Label(appText("Edits Sync with the NAS Automatically"), systemImage: "arrow.triangle.2.circlepath")
+                    Text(appText("Edits are kept on this Mac while offline and uploaded after reconnection. Conflicting changes are preserved."))
                         .font(.caption).foregroundStyle(.secondary)
                     Text(library.uploadStatus).font(.caption).foregroundStyle(.secondary)
-                    Button("지금 동기화 · 반영 확인") { Task { await library.pushPendingUploads() } }
+                    Button(appText("Sync Now and Verify")) { Task { await library.pushPendingUploads() } }
                         .disabled(!library.isConnected || !library.automaticUploadReady || library.isPushing || isValidatingWrite)
                 }
             }.formStyle(.grouped).tabItem { Label("Note Station", systemImage: "externaldrive.connected.to.line.below") }
             Form {
                 DiagnosticLogSettingsSection()
-                Section("진단 로그") {
-                    Button("로그 폴더 열기") { library.openLogDirectory() }
-                    Text("연결·저장·자동 동기화·DB 관리 작업을 기록합니다. 비밀번호·OTP·인증 토큰·노트 본문은 기록하지 않습니다. 위의 회전·보관 한도에 따라 로그를 관리합니다.")
+                Section(appText("Diagnostic Logs")) {
+                    Button(appText("Open Log Folder")) { library.openLogDirectory() }
+                    Text(appText("Logs record connection, save, automatic sync, and database maintenance operations. Passwords, verification codes, tokens, and note bodies are excluded. Rotation and retention limits apply."))
                         .font(.caption).foregroundStyle(.secondary)
                     Text(library.logDirectory.path).font(.caption).textSelection(.enabled)
                     if let error = library.diagnosticLog?.writeError { Text(error).font(.caption).foregroundStyle(.orange) }
@@ -212,22 +214,22 @@ struct SettingsView: View {
                 if library.isConnected {
                     Section {
                         DisclosureGroup(isExpanded: $isValidationExpanded) {
-                            Text("NAS에 SynologyNote 검사 전용 메모장을 처음 한 번 만들고 이후 재사용합니다. 기존 메모장과 노트는 검사하지 않으며, 검증 노트는 결과 확인을 위해 남깁니다.")
+                            Text(appText("The first check creates a dedicated SynologyNote test notebook on the NAS. Later checks reuse it. Existing notebooks and notes are skipped, and test notes are kept for review."))
                                 .foregroundStyle(.secondary)
                             Button {
                                 showWriteValidationConfirmation = true
                             } label: {
                                 HStack(spacing: 7) {
                                     if isValidatingWrite { ProgressView().controlSize(.small) }
-                                    Text(isValidatingWrite ? "검증 중…" : "검증용 노트 생성")
+                                    Text(isValidatingWrite ? appText("Checking…") : appText("Create Test Note"))
                                 }
                             }
                             .disabled(isValidatingWrite || library.isRefreshing)
-                            Button("수정·충돌 검사…") { showEditingValidationConfirmation = true }
+                            Button(appText("Check Updates and Conflicts…")) { showEditingValidationConfirmation = true }
                                 .disabled(isValidatingWrite || library.isRefreshing)
-                            Button("이미지·Markdown 왕복 검사…") { showAttachmentValidationConfirmation = true }
+                            Button(appText("Check Image and Markdown Round-trip…")) { showAttachmentValidationConfirmation = true }
                                 .disabled(isValidatingWrite || library.isRefreshing)
-                            Button("자동 업로드 검증…") { showAutomaticUploadValidation = true }
+                            Button(appText("Verify Automatic Upload…")) { showAutomaticUploadValidation = true }
                                 .disabled(isValidatingWrite || library.isRefreshing || library.isPushing || !library.automaticUploadReady)
                             if let writeValidationMessage {
                                 Text(writeValidationMessage).font(.caption).textSelection(.enabled)
@@ -241,7 +243,7 @@ struct SettingsView: View {
                             if let automaticUploadMessage { Text(automaticUploadMessage).font(.caption).textSelection(.enabled) }
                         } label: {
                             HStack {
-                                Text("NAS 쓰기 호환성 검사")
+                                Text(appText("NAS Write Compatibility Check"))
                                 Spacer()
                                 if isValidatingWrite { ProgressView().controlSize(.small) }
                                 if let validationStatus {
@@ -251,43 +253,54 @@ struct SettingsView: View {
                         }
                     }
                 }
-            }.formStyle(.grouped).tabItem { Label("진단", systemImage: "stethoscope") }
+            }.formStyle(.grouped).tabItem { Label(appText("Diagnostics"), systemImage: "stethoscope") }
             Form {
-                Section("편집기") {
-                    Slider(value: $fontSize, in: 11...22, step: 1) { Text("글꼴 크기") }
-                    Text("\(Int(fontSize))pt · Markdown 고정폭 글꼴").foregroundStyle(.secondary)
-                    Picker("화면 모드", selection: $appearance) {
-                        Text("시스템 설정").tag("system"); Text("라이트").tag("light"); Text("다크").tag("dark")
+                Section(appText("Language")) {
+                    Picker(appText("Display Language"), selection: $displayLanguage) {
+                        Text(appText("System Default")).tag(DisplayLanguagePreference.system)
+                        Text(verbatim: "English").tag(DisplayLanguagePreference.english)
+                        Text(verbatim: "한국어").tag(DisplayLanguagePreference.korean)
+                    }
+                    if displayLanguage != NoteLocalization.launchPreference {
+                        Text(appText("Quit and reopen the app to apply the language change."))
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                Section("Mermaid 다이어그램") {
-                    Picker("그리기 스타일", selection: $mermaidStyle) {
+                Section(appText("Editor")) {
+                    Slider(value: $fontSize, in: 11...22, step: 1) { Text(appText("Font Size")) }
+                    Text(appText("%@ pt · Monospaced Markdown Font", AppLocalization.number(Int(fontSize)))).foregroundStyle(.secondary)
+                    Picker(appText("Appearance"), selection: $appearance) {
+                        Text(appText("System Setting")).tag("system"); Text(appText("Light")).tag("light"); Text(appText("Dark")).tag("dark")
+                    }
+                }
+                Section(appText("Mermaid Diagrams")) {
+                    Picker(appText("Drawing Style"), selection: $mermaidStyle) {
                         ForEach(MermaidStyle.allCases) { style in
                             Text(style.title).tag(style)
                         }
                     }
-                    Picker("색상 테마", selection: $mermaidTheme) {
+                    Picker(appText("Color Theme"), selection: $mermaidTheme) {
                         ForEach(MermaidTheme.allCases) { theme in
                             Text(theme.title).tag(theme)
                         }
                     }
-                    Text("변경하면 미리보기에 바로 적용됩니다. 스케치는 지원되는 다이어그램의 도형과 선을 손으로 그린 듯 표시합니다.")
+                    Text(appText("Changes apply to the preview immediately. Sketch gives shapes and lines a hand-drawn look in supported diagrams."))
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                Section("저장") {
-                    Text("본문·수정 이력·전송 대기는 SQLite 트랜잭션으로 함께 저장합니다. 첨부파일은 앱 전용 저장소에 복사됩니다.").foregroundStyle(.secondary)
-                    Button("로컬 저장소 보기") { NSWorkspace.shared.open(LibraryStore.storageRoot()) }
+                Section(appText("Save")) {
+                    Text(appText("Note bodies, revisions, and pending uploads are saved together in SQLite transactions. Attachments are copied to app storage.")).foregroundStyle(.secondary)
+                    Button(appText("Show Local Storage")) { NSWorkspace.shared.open(LibraryStore.storageRoot()) }
                 }
                 if let version = AppVersion.display {
-                    Section("앱 정보") {
-                        LabeledContent("버전", value: version)
+                    Section(appText("About the App")) {
+                        LabeledContent(appText("Version"), value: version)
                     }
                 }
-            }.formStyle(.grouped).tabItem { Label("일반", systemImage: "slider.horizontal.3") }
+            }.formStyle(.grouped).tabItem { Label(appText("General"), systemImage: "slider.horizontal.3") }
         }.frame(width: 590, height: 570)
-        .alert("NAS에 검증용 노트를 생성할까요?", isPresented: $showWriteValidationConfirmation) {
-            Button("취소", role: .cancel) {}
-            Button("생성") {
+        .alert(appText("Create a Test Note on the NAS?"), isPresented: $showWriteValidationConfirmation) {
+            Button(appText("Cancel"), role: .cancel) {}
+            Button(appText("Create")) {
                 isValidatingWrite = true
                 writeValidationMessage = nil
                 validationStatus = nil
@@ -297,36 +310,36 @@ struct SettingsView: View {
                         let notebook = try await library.ensureNASValidationNotebook()
                         let result = try await library.createNASWriteValidationNote(notebookID: notebook.id)
                         writeValidationMessage = result.confirmedInList
-                            ? "성공: \(result.receipt.title) 생성 및 목록 재조회 확인 완료"
-                            : "생성 응답은 성공했지만 목록 재조회로 확인하지 못했습니다. 같은 검사를 반복하지 말고 NAS에서 '\(result.receipt.title)'을 먼저 확인하세요."
+                            ? appText("Created “%@” and verified it in the refreshed list.", result.receipt.title)
+                            : appText("The creation request succeeded, but the note could not be verified in the refreshed list. Check for “%@” on the NAS before repeating the test.", result.receipt.title)
                         finishValidation(passed: result.confirmedInList)
                     } catch {
-                        writeValidationMessage = "검증 실패: \(error.localizedDescription)"
-                        validationStatus = "검사 오류"
+                        writeValidationMessage = appText("Check failed: %@", error.localizedDescription)
+                        validationStatus = appText("Check Error")
                         isValidationExpanded = true
                     }
                 }
             }
         } message: {
-            Text("첫 검사에서 NAS에 전용 검사 메모장을 만들고 이후 재사용합니다. 이 메모장에 검증 노트 1개를 생성하며 기존 메모장과 노트는 수정하지 않습니다.")
+            Text(appText("The first check creates a dedicated notebook on the NAS. Each check creates one test note in that notebook. Existing notebooks and notes are left alone."))
         }
-        .alert("NAS 수정·충돌 검사를 실행할까요?", isPresented: $showEditingValidationConfirmation) {
-            Button("취소", role: .cancel) {}
-            Button("검사 실행") { runEditingValidation() }
+        .alert(appText("Run the NAS Update and Conflict Check?"), isPresented: $showEditingValidationConfirmation) {
+            Button(appText("Cancel"), role: .cancel) {}
+            Button(appText("Run Check")) { runEditingValidation() }
         } message: {
-            Text("검사 전용 메모장에 '[SynologyNote 검증] 수정·충돌' 노트 1개를 만든 뒤 본문 수정과 이전 버전 저장 거절을 검사합니다. 처음에는 검사 메모장도 생성하며 결과 노트는 남깁니다.")
+            Text(appText("This creates a test note, updates its body, and checks that the NAS rejects saves using an older version. The first check also creates the test notebook. The test note is kept."))
         }
-        .alert("이미지·Markdown 왕복 검사를 실행할까요?", isPresented: $showAttachmentValidationConfirmation) {
-            Button("취소", role: .cancel) {}
-            Button("검사 실행") { runAttachmentValidation() }
+        .alert(appText("Run the Image and Markdown Round-trip Check?"), isPresented: $showAttachmentValidationConfirmation) {
+            Button(appText("Cancel"), role: .cancel) {}
+            Button(appText("Run Check")) { runAttachmentValidation() }
         } message: {
-            Text("검사 전용 메모장에 검증 노트를 만들고 작은 PNG와 Markdown 원문을 첨부한 뒤 다운로드해 확인합니다. 처음에는 검사 메모장도 생성하며 결과 노트는 남깁니다.")
+            Text(appText("This creates a test note, uploads a small PNG and the Markdown source, and downloads them for verification. The first check also creates the test notebook. The test note is kept."))
         }
-        .alert("자동 업로드 진단을 실행할까요?", isPresented: $showAutomaticUploadValidation) {
-            Button("취소", role: .cancel) {}
-            Button("검증 실행") { runAutomaticUploadValidation() }
+        .alert(appText("Run Automatic Upload Diagnostics?"), isPresented: $showAutomaticUploadValidation) {
+            Button(appText("Cancel"), role: .cancel) {}
+            Button(appText("Run Verification")) { runAutomaticUploadValidation() }
         } message: {
-            Text("검사 전용 메모장에 검증 노트를 만들고 본문·첨부·수정·태그·응답 유실 복구를 검사합니다. 처음에는 검사 메모장도 생성합니다. 자동 업로드는 항상 활성화됩니다.")
+            Text(appText("This creates a test note and checks content, attachments, edits, tags, and recovery from a lost response. The first check also creates the test notebook. Automatic upload is always enabled."))
         }
         .task {
             profile = library.profile
@@ -370,7 +383,7 @@ struct SettingsView: View {
     }
 
     private func finishValidation(passed: Bool) {
-        validationStatus = passed ? "검사 완료" : "확인 필요"
+        validationStatus = passed ? appText("Check Complete") : appText("Needs Review")
         isValidationExpanded = false
     }
 
@@ -380,14 +393,14 @@ struct SettingsView: View {
         let uploadReport = library.lastAutomaticUploadValidation()
         automaticUploadMessage = uploadReport.map(automaticResult)
         let outcomes = [editingValidationReport?.passed, attachmentValidationReport?.passed, uploadReport?.passed].compactMap { $0 }
-        validationStatus = outcomes.isEmpty ? nil : (outcomes.allSatisfy { $0 } ? "검사 완료" : "확인 필요")
+        validationStatus = outcomes.isEmpty ? nil : (outcomes.allSatisfy { $0 } ? appText("Check Complete") : appText("Needs Review"))
         isValidationExpanded = outcomes.isEmpty
     }
 
     private func runEditingValidation() {
         guard !isValidatingWrite else { return }
         isValidatingWrite = true
-        writeValidationMessage = "수정 저장·재조회 → 이전 버전 저장 시도 → 최신 본문 확인 중…"
+        writeValidationMessage = appText("Saving and fetching the update, trying an older version, and checking the latest content…")
         editingValidationReport = nil
         validationStatus = nil
         Task { @MainActor in
@@ -397,12 +410,12 @@ struct SettingsView: View {
                 let report = try await library.validateNASNoteEditing(notebookID: notebook.id)
                 editingValidationReport = report
                 writeValidationMessage = report.passed
-                    ? "수정·충돌 검사 통과. 첨부파일 왕복 검증은 다음 단계입니다."
-                    : "검사를 통과하지 못했습니다. 아래 노트를 NAS에서 확인한 뒤 다시 진행하세요."
+                    ? appText("The update and conflict check passed. The next step is the attachment round-trip check.")
+                    : appText("The check failed. Review the note below on the NAS before trying again.")
                 finishValidation(passed: report.passed)
             } catch {
-                writeValidationMessage = "검사 중단: \(error.localizedDescription) 검증 노트가 이미 생성되었을 수 있으니 NAS에서 확인한 뒤 다시 진행하세요."
-                validationStatus = "검사 오류"
+                writeValidationMessage = appText("Check stopped: %@. A test note may already exist. Check the NAS before trying again.", error.localizedDescription)
+                validationStatus = appText("Check Error")
                 isValidationExpanded = true
             }
         }
@@ -412,7 +425,7 @@ struct SettingsView: View {
         guard !isValidatingWrite else { return }
         isValidatingWrite = true
         attachmentValidationReport = nil
-        writeValidationMessage = "이미지 업로드·다운로드 → Markdown 원문 저장 → 본문·첨부 연결 복원 확인 중…"
+        writeValidationMessage = appText("Uploading and downloading the image, saving Markdown, and checking restored attachment links…")
         validationStatus = nil
         Task { @MainActor in
             defer { isValidatingWrite = false }
@@ -420,18 +433,18 @@ struct SettingsView: View {
                 let notebook = try await library.ensureNASValidationNotebook()
                 let report = try await library.validateNASNoteAttachments(notebookID: notebook.id)
                 attachmentValidationReport = report
-                writeValidationMessage = report.passed ? "이미지·Markdown 왕복 검사 통과" : "첨부 검사를 통과하지 못했습니다. 아래 결과를 확인하세요."
+                writeValidationMessage = report.passed ? appText("Image and Markdown Round-trip Check Passed") : appText("The attachment check failed. Review the results below.")
                 finishValidation(passed: report.passed)
             } catch {
-                writeValidationMessage = "첨부 검사 중단: \(error.localizedDescription) NAS의 검증 노트를 확인한 뒤 다시 진행하세요."
-                validationStatus = "검사 오류"
+                writeValidationMessage = appText("Attachment check stopped: %@. Check the test note on the NAS before trying again.", error.localizedDescription)
+                validationStatus = appText("Check Error")
                 isValidationExpanded = true
             }
         }
     }
     private func runAutomaticUploadValidation() {
         guard !isValidatingWrite else { return }
-        isValidatingWrite = true; automaticUploadMessage = "생성·수정·응답 유실 복구 검증 중…"
+        isValidatingWrite = true; automaticUploadMessage = appText("Checking creation, edits, and recovery from a lost response…")
         validationStatus = nil
         Task { @MainActor in
             defer { isValidatingWrite = false }
@@ -441,14 +454,14 @@ struct SettingsView: View {
                 automaticUploadMessage = automaticResult(report)
                 finishValidation(passed: report.passed)
             } catch {
-                automaticUploadMessage = "검사 중단: \(error.localizedDescription)"
-                validationStatus = "검사 오류"
+                automaticUploadMessage = appText("Check stopped: %@", error.localizedDescription)
+                validationStatus = appText("Check Error")
                 isValidationExpanded = true
             }
         }
     }
     private func automaticResult(_ report: AutomaticUploadValidation) -> String {
-        "자동 업로드: \(report.passed ? "검증 통과" : "확인 필요") · 생성 \(report.createVerified ? "확인" : "미확인") · 수정 \(report.updateVerified ? "확인" : "미확인") · 중복 없는 복구 \(report.lostResponseRecovered ? "확인" : "미확인")\n노트 ID: \(report.remoteID ?? "미확인")\n\(report.failure ?? "")"
+        appText("Automatic Upload: %1$@ · Creation: %2$@ · Update: %3$@ · Duplicate-free recovery: %4$@\nNote ID: %5$@\n%6$@", "\(report.passed ? appText("Passed") : appText("Needs Review"))", "\(report.createVerified ? appText("OK") : appText("Unverified"))", "\(report.updateVerified ? appText("OK") : appText("Unverified"))", "\(report.lostResponseRecovered ? appText("OK") : appText("Unverified"))", "\(report.remoteID ?? appText("Unverified"))", "\(report.failure ?? "")")
     }
 }
 
@@ -456,12 +469,12 @@ private struct NASAttachmentValidationReportView: View {
     let report: NoteAttachmentValidationReport
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("첨부 검사 · " + report.checkedAt.formatted(date: .abbreviated, time: .shortened)).foregroundStyle(.secondary)
-            Label("이미지 바이트: \(report.imageBytesVerified ? "확인" : "미확인")", systemImage: report.imageBytesVerified ? "checkmark.circle.fill" : "questionmark.circle")
-            Label("Markdown 원문 바이트: \(report.sourceBytesVerified ? "확인" : "미확인")", systemImage: report.sourceBytesVerified ? "checkmark.circle.fill" : "questionmark.circle")
-            Label("Markdown·이미지 연결 복원: \(report.markdownRestored ? "확인" : "미확인")", systemImage: report.markdownRestored ? "checkmark.circle.fill" : "questionmark.circle")
+            Text(appText("Attachment Check · ") + AppLocalization.date(report.checkedAt)).foregroundStyle(.secondary)
+            Label(appText("Image bytes: %@", "\(report.imageBytesVerified ? appText("OK") : appText("Unverified"))"), systemImage: report.imageBytesVerified ? "checkmark.circle.fill" : "questionmark.circle")
+            Label(appText("Markdown source bytes: %@", "\(report.sourceBytesVerified ? appText("OK") : appText("Unverified"))"), systemImage: report.sourceBytesVerified ? "checkmark.circle.fill" : "questionmark.circle")
+            Label(appText("Markdown and image link restored: %@", "\(report.markdownRestored ? appText("OK") : appText("Unverified"))"), systemImage: report.markdownRestored ? "checkmark.circle.fill" : "questionmark.circle")
             Text(report.receipt.title).textSelection(.enabled)
-            Text("노트 ID: \(report.receipt.objectID)").textSelection(.enabled).foregroundStyle(.secondary)
+            Text(appText("Note ID: %@", "\(report.receipt.objectID)")).textSelection(.enabled).foregroundStyle(.secondary)
             if let failure = report.failure { Text(failure).foregroundStyle(.orange).textSelection(.enabled) }
         }.font(.caption)
     }
@@ -471,17 +484,17 @@ private struct NASValidationReportView: View {
     let report: NoteEditingValidationReport
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(report.checkedAt.formatted(date: .abbreviated, time: .shortened)).foregroundStyle(.secondary)
-            status("수정 저장·재조회", confirmed: report.updateConfirmed)
-            status("이전 버전 저장 거절 (1064)", confirmed: report.conflictRejected)
-            status("최신 본문·버전 유지", confirmed: report.latestContentPreserved)
+            Text(AppLocalization.date(report.checkedAt)).foregroundStyle(.secondary)
+            status(appText("Save and Fetch Update"), confirmed: report.updateConfirmed)
+            status(appText("Older Version Rejected (1064)"), confirmed: report.conflictRejected)
+            status(appText("Latest Content and Version Kept"), confirmed: report.latestContentPreserved)
             Text(report.receipt.title).textSelection(.enabled)
-            Text("노트 ID: \(report.receipt.objectID)").textSelection(.enabled).foregroundStyle(.secondary)
+            Text(appText("Note ID: %@", "\(report.receipt.objectID)")).textSelection(.enabled).foregroundStyle(.secondary)
             if let failure = report.failure { Text(failure).foregroundStyle(.orange).textSelection(.enabled) }
         }.font(.caption)
     }
     private func status(_ title: String, confirmed: Bool) -> some View {
-        Label("\(title): \(confirmed ? "확인" : "미확인")", systemImage: confirmed ? "checkmark.circle.fill" : "questionmark.circle")
+        Label("\(title): \(confirmed ? appText("OK") : appText("Unverified"))", systemImage: confirmed ? "checkmark.circle.fill" : "questionmark.circle")
             .foregroundStyle(confirmed ? Color.green : Color.secondary)
     }
 }

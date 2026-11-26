@@ -38,7 +38,7 @@ def destination(title: str, index_notebook: str) -> str:
         return PROJECT_BOOK
     if title.startswith("주제-"):
         return TOPIC_BOOK
-    raise CLIError("INVALID_SOURCE", "인덱스 제목의 분류를 알 수 없습니다.", title=title)
+    raise CLIError("INVALID_SOURCE", "Could not determine the category of the index title.", title=title)
 
 # Explicit, reviewable vocabulary: topic membership has a matching source term.
 TOPICS: dict[str, str] = {
@@ -113,7 +113,7 @@ def unique_title(value: str, prefix: str) -> str:
 def link(title: str, label: str | None = None) -> str:
     # Swift InternalNoteLinks accepts a single .md basename, without query/fragment.
     if not title or any(c in title for c in "/\\:?#\r\n\x00"):
-        raise CLIError("INVALID_SOURCE", "내부 링크 대상 제목을 표현할 수 없습니다.", title=title)
+        raise CLIError("INVALID_SOURCE", "Could not encode the target title for an internal link.", title=title)
     label = (label or title).replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
     # Quote literal percent signs, angle brackets, and other URI metacharacters.
     # Swift's InternalNoteLinks.title(for:) percent-decodes the destination.
@@ -131,7 +131,7 @@ def validate_links(pages: dict[str, str], source_titles: set[str]) -> None:
                 destination = unquote(child.attrGet("href") or "")
                 if (not destination.lower().endswith(".md") or
                     unicodedata.normalize("NFC", destination[:-3]) not in allowed):
-                    raise CLIError("INVALID_SOURCE", "인덱스 내부 링크의 대상이 없습니다.",
+                    raise CLIError("INVALID_SOURCE", "An internal index link has no target.",
                                    index_title=page, destination=destination)
 
 
@@ -162,7 +162,7 @@ def read_daily(api: NoteStationAPI, *, stack: str, index_notebook: str) -> tuple
     indexes = [b for b in books if b["name"] == index_notebook]
     if len(indexes) != 1:
         raise CLIError("NOT_FOUND" if not indexes else "AMBIGUOUS_TARGET",
-                       "인덱스 메모장이 없거나 이름이 중복됩니다.", notebook=index_notebook)
+                       "The index notebook is missing or its name is shared by multiple notebooks.", notebook=index_notebook)
     # The source set is strictly the observed monthly daily notebooks. Index
     # notebooks must never be fed into a subsequent indexing pass.
     allowed = {b["id"]: b["name"] for b in books if MONTH_BOOK.fullmatch(b["name"])}
@@ -173,11 +173,11 @@ def read_daily(api: NoteStationAPI, *, stack: str, index_notebook: str) -> tuple
     # Title-based link lookup is global in the macOS app. Fail before publishing.
     conflicts = [r["title"] for r in rows if duplicates[unicodedata.normalize("NFC", r["title"])] > 1]
     if conflicts:
-        raise CLIError("AMBIGUOUS_TARGET", "원본 제목이 전체 NAS에서 중복됩니다.", titles=sorted(set(conflicts)))
+        raise CLIError("AMBIGUOUS_TARGET", "One or more source note titles are duplicated on the NAS.", titles=sorted(set(conflicts)))
     notes = []
     for row in sorted(rows, key=lambda n: n["title"]):
         if row.get("locked"):
-            raise CLIError("UNSUPPORTED_DOCUMENT_TYPE", "잠긴 원본 노트를 인덱싱할 수 없습니다.", title=row["title"])
+            raise CLIError("UNSUPPORTED_DOCUMENT_TYPE", "Locked source notes cannot be indexed.", title=row["title"])
         link(row["title"])  # Check the source filename before generating any index.
         detail = api.fetch(row["id"])
         body_html = re.sub(r"<h2>type:\s*daily\b.*?</h2>", "", detail.html, count=1, flags=re.S | re.I)
@@ -246,7 +246,7 @@ def _section_header(title: str, description: str) -> list[str]:
 
 def build_pages(notes: list[Daily], *, project_min_days: int = 3) -> tuple[dict[str, str], dict]:
     if project_min_days < 2:
-        raise CLIError("INVALID_ARGUMENT", "상세 프로젝트 최소 기록일은 2일 이상이어야 합니다.")
+        raise CLIError("INVALID_ARGUMENT", "Detailed project indexes require a minimum of two days.")
     pages: dict[str, str] = {}
     by_project: dict[str, list[Daily]] = defaultdict(list)
     by_topic: dict[str, list[Daily]] = defaultdict(list)
@@ -324,7 +324,7 @@ def build_pages(notes: list[Daily], *, project_min_days: int = 3) -> tuple[dict[
 
     # Link resolution is title-based across ALL notebooks; avoid name collisions.
     if any(n.title in pages for n in notes):
-        raise CLIError("AMBIGUOUS_TARGET", "생성된 인덱스 제목이 원본 노트와 충돌합니다.")
+        raise CLIError("AMBIGUOUS_TARGET", "A generated index title conflicts with a source note.")
     for title, markdown in pages.items():
         render(markdown)  # fail before writing anything if Markdown cannot be preserved
     validate_links(pages, {n.title for n in notes})
@@ -363,7 +363,7 @@ def _index_journal(api: NoteStationAPI, stack: str) -> None:
         if confirmed:
             done(record)
             continue
-        raise CLIError("WRITE_UNCERTAIN", "이전 인덱스 변경 결과가 불확실합니다. 저널과 NAS를 확인하세요.",
+        raise CLIError("WRITE_UNCERTAIN", "The result of a previous index change is uncertain. Check the journal and NAS.",
                        operation_id=operation_id, mutation=kind, title=record.get("title"))
 
 
@@ -381,7 +381,7 @@ def _mutate(api: NoteStationAPI, stack: str, mutation: str, **fields):
             result = api.move_note(fields["note"], fields["target_id"])
             source, _, _ = verified_source(api, result)
             if not source.markdown.startswith(MANAGED + "\n"):
-                raise CLIError("WRITE_UNCERTAIN", "이동 후 관리 원문 검증에 실패했습니다.")
+                raise CLIError("WRITE_UNCERTAIN", "Could not verify the managed source after the move.")
     except CLIError as exc:
         # A version conflict or rejected request is definite only before a write.
         if exc.code in ("REMOTE_CHANGED", "INVALID_ARGUMENT", "TITLE_CONFLICT", "NOT_FOUND"):
@@ -396,10 +396,10 @@ def _mutate(api: NoteStationAPI, stack: str, mutation: str, **fields):
 def build(api: NoteStationAPI, *, stack: str, index_notebook: str, apply: bool = False,
           project_min_days: int = 3) -> dict:
     if len({index_notebook, PROJECT_BOOK, TOPIC_BOOK}) != 3:
-        raise CLIError("INVALID_ARGUMENT", "허브와 상세 인덱스 노트북 이름이 중복됩니다.")
+        raise CLIError("INVALID_ARGUMENT", "Hub and detail index notebooks must have distinct names.")
     notes, index_book, all_notes = read_daily(api, stack=stack, index_notebook=index_notebook)
     if not notes:
-        raise CLIError("NOT_FOUND", "인덱싱할 원본 노트가 없습니다.")
+        raise CLIError("NOT_FOUND", "No source notes were found to index.")
     pages, stats = build_pages(notes, project_min_days=project_min_days)
     books = api.notebooks()
     destinations = (index_notebook, PROJECT_BOOK, TOPIC_BOOK)
@@ -407,7 +407,7 @@ def build(api: NoteStationAPI, *, stack: str, index_notebook: str, apply: bool =
     for name in destinations[1:]:
         same = [b for b in books if b["name"] == name]
         if len(same) > 1 or (same and same[0]["stack"] != stack):
-            raise CLIError("TITLE_CONFLICT", "상세 노트북 이름이 다른 책장과 충돌합니다.", notebook=name)
+            raise CLIError("TITLE_CONFLICT", "A detail notebook name conflicts with an existing notebook.", notebook=name)
         if same:
             selected[name] = same[0]
     managed_books = {b["id"] for b in selected.values()}
@@ -425,11 +425,11 @@ def build(api: NoteStationAPI, *, stack: str, index_notebook: str, apply: bool =
             actions[title] = "create"
             continue
         if len(candidates) != 1 or candidates[0]["notebook_id"] not in managed_books:
-            raise CLIError("TITLE_CONFLICT", "인덱스 제목이 다른 노트와 충돌합니다.", title=title)
+            raise CLIError("TITLE_CONFLICT", "An index title conflicts with another note.", title=title)
         note = api.fetch(candidates[0]["id"])
         source, _, _ = verified_source(api, note)
         if not source.markdown.startswith(MANAGED + "\n"):
-            raise CLIError("TITLE_CONFLICT", "사용자가 작성한 노트를 덮어쓸 수 없습니다.", title=title)
+            raise CLIError("TITLE_CONFLICT", "User-authored notes cannot be overwritten.", title=title)
         target = destination(title, index_notebook)
         moved = target not in selected or note.notebook_id != selected[target]["id"]
         changed = source.markdown != content
@@ -488,6 +488,6 @@ def build(api: NoteStationAPI, *, stack: str, index_notebook: str, apply: bool =
                                    updated=result["updated"], moved=result["moved"])
                 raise
             if response["status"] != "uploaded":
-                raise CLIError("REMOTE_ERROR", "인덱스 게시 후 상태가 예상과 다릅니다.", title=title)
+                raise CLIError("REMOTE_ERROR", "The index status after publishing differs from the expected status.", title=title)
             result["created" if action == "create" else "updated"] += 1
     return result

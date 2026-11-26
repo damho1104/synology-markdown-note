@@ -1,13 +1,47 @@
 import json
 from importlib.metadata import version as package_version
+import os
 from pathlib import Path
 import re
+import subprocess
 import sys
 
 import pytest
 
 from synonote_cli import main
 from synonote_cli.build_version import build_version
+
+
+@pytest.mark.parametrize("locale", ["en_US.UTF-8", "ko_KR.UTF-8"])
+def test_cli_help_and_errors_are_english_in_each_locale(locale):
+    def invoke(*args):
+        return subprocess.run(
+            [sys.executable, "-m", "synonote_cli.main", *args],
+            env={**os.environ, "LANG": locale, "LC_ALL": locale, "LANGUAGE": locale},
+            input="", capture_output=True, encoding="utf-8",
+        )
+
+    for args, description in (
+        (("version",), "Show the CLI version and Git commit."),
+        (("auth", "set-server"), "Change the URL for the same NAS"),
+        (("index", "build"), "Build indexes for daily notes"),
+    ):
+        help_result = invoke(*args, "--help")
+        assert help_result.returncode == 0
+        assert description in help_result.stdout
+        assert not re.search(r"[가-힣]", help_result.stdout + help_result.stderr)
+
+    args = ("login", "--server", "https://nas.example", "--username", "test", "--non-interactive")
+    message = "Non-interactive login requires --password-stdin."
+    plain = invoke(*args)
+    assert (plain.returncode, plain.stdout, plain.stderr) == (5, "", f"AUTH_REQUIRED: {message}\n")
+
+    structured = invoke(*args, "--json")
+    assert (structured.returncode, structured.stderr) == (5, "")
+    assert json.loads(structured.stdout) == {
+        "schema_version": 1, "action": "error", "status": "error", "uploaded": False,
+        "error": {"code": "AUTH_REQUIRED", "message": message},
+    }
 
 
 def test_version_command_matches_package_and_current_git_commit(monkeypatch, capsys):

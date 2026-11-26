@@ -38,7 +38,7 @@ struct EditorView: View {
               editor.sourceText == linkSourceSnapshot,
               NSMaxRange(linkSelection) <= editor.attributedString().length else { return }
         let range = linkSelection
-        let label = range.length > 0 ? linkLabel : (target.title.isEmpty ? "제목 없음" : target.title)
+        let label = range.length > 0 ? linkLabel : (target.title.isEmpty ? appText("Untitled") : target.title)
         if editor.insertNoteLink(target, replacing: range, label: label) {
             editor.window?.makeFirstResponder(editor)
         }
@@ -50,25 +50,25 @@ struct EditorView: View {
             if session.note.syncState == .conflict {
                 HStack {
                     Image(systemName: "arrow.triangle.branch").foregroundStyle(.orange)
-                    Text("이 Mac과 서버에 서로 다른 변경이 있습니다.").font(.callout)
+                    Text(appText("This Mac and the server have different changes.")).font(.callout)
                     Spacer()
-                    Button("비교하기") { comparing = true }
+                    Button(appText("Compare")) { comparing = true }
                 }.padding(12).background(.orange.opacity(0.08))
             }
             if session.note.isTrashed {
                 HStack {
-                    Label("휴지통에 있는 노트입니다", systemImage: "trash"); Spacer()
-                    Button("복원") { library.toggleTrash(session) }
-                    Button("영구 삭제…", role: .destructive) { library.promptPermanentlyDelete(session) }
+                    Label(appText("This note is in the Trash"), systemImage: "trash"); Spacer()
+                    Button(appText("Restore")) { library.toggleTrash(session) }
+                    Button(appText("Delete Permanently…"), role: .destructive) { library.promptPermanentlyDelete(session) }
                         .disabled(!library.canPermanentlyDelete(session.note))
-                        .help("NAS 연결과 휴지통 동기화가 완료되면 영구 삭제할 수 있습니다.")
+                        .help(appText("Connect to the NAS and sync the Trash to permanently delete this note."))
                 }.padding(12).background(.quaternary)
             }
             if session.note.syncState == .failed {
                 HStack {
-                    Label("NAS 저장 결과 확인 중", systemImage: "arrow.triangle.2.circlepath")
+                    Label(appText("Verifying NAS Save"), systemImage: "arrow.triangle.2.circlepath")
                     Spacer()
-                    Button("다시 확인") { Task { await library.pushPendingUploads() } }.disabled(!library.isConnected || library.isPushing)
+                    Button(appText("Check Again")) { Task { await library.pushPendingUploads() } }.disabled(!library.isConnected || library.isPushing)
                 }.padding(12).foregroundStyle(.secondary).background(.quaternary)
             }
             Divider()
@@ -76,7 +76,7 @@ struct EditorView: View {
             Divider()
             statusBar
         }
-        .navigationTitle(session.note.title.isEmpty ? "제목 없음" : session.note.title)
+        .navigationTitle(session.note.title.isEmpty ? appText("Untitled") : session.note.title)
         .sheet(isPresented: $comparing) { ConflictView(session: session) }
         .sheet(isPresented: $showingLinkPicker) {
             NoteLinkPickerSheet(candidates: library.summaries.filter { $0.id != session.id && $0.mode != .locked }, notebooks: library.notebooks,
@@ -89,45 +89,45 @@ struct EditorView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .center, spacing: 12) {
-                TextField("제목", text: Binding(get: { session.note.title }, set: { value in library.edit(session) { $0.title = value } }))
-                    .textFieldStyle(.plain).font(.system(size: 24, weight: .semibold)).accessibilityLabel("노트 제목")
+                TextField(appText("Title"), text: Binding(get: { session.note.title }, set: { value in library.edit(session) { $0.title = value } }))
+                    .textFieldStyle(.plain).font(.system(size: 24, weight: .semibold)).accessibilityLabel(appText("Note Title"))
                     .frame(maxWidth: .infinity).clipped().layoutPriority(1)
                     .disabled(session.note.mode == .locked || session.note.isTrashed)
                 HStack(spacing: 4) {
                 if canInsertLink {
                     Button(action: openLinkPicker) {
-                        IconButtonLabel(title: "노트 연결", systemImage: "link.badge.plus")
+                        IconButtonLabel(title: appText("Link Notes"), systemImage: "link.badge.plus")
                     }
                     .buttonStyle(.borderless)
-                    .help("내부 노트 연결 (⇧⌘K)")
+                    .help(appText("Link to a Note (⇧⌘K)"))
                     .accessibilityIdentifier("editor-insert-note-link")
                 }
                 Button { library.toggleFavorite(session) } label: {
-                    IconButtonLabel(title: session.note.isFavorite ? "즐겨찾기 해제" : "즐겨찾기", systemImage: session.note.isFavorite ? "star.fill" : "star")
+                    IconButtonLabel(title: session.note.isFavorite ? appText("Remove from Favorites") : appText("Favorites"), systemImage: session.note.isFavorite ? "star.fill" : "star")
                 }
                     .buttonStyle(.borderless).foregroundStyle(session.note.isFavorite ? .orange : .secondary)
-                    .accessibilityLabel(session.note.isFavorite ? "즐겨찾기 해제" : "즐겨찾기")
-                    .help(session.note.isFavorite ? "즐겨찾기 해제" : "즐겨찾기")
+                    .accessibilityLabel(session.note.isFavorite ? appText("Remove from Favorites") : appText("Favorites"))
+                    .help(session.note.isFavorite ? appText("Remove from Favorites") : appText("Favorites"))
                 Menu {
                     if canInsertLink {
-                        Button("다른 노트 링크 삽입…", action: openLinkPicker)
+                        Button(appText("Insert Link to Another Note…"), action: openLinkPicker)
                         Divider()
                     }
-                    Button("Markdown 가져오기…") { library.importMarkdown() }
-                    Button("내보내기…") { library.exportMarkdown(session) }
-                    Button("첨부파일 추가…") { library.pickAttachment(for: session) }.disabled(session.note.mode == .locked || session.note.isTrashed)
+                    Button(appText("Import Markdown…")) { library.importMarkdown() }
+                    Button(appText("Export…")) { library.exportMarkdown(session) }
+                    Button(appText("Add Attachments…")) { library.pickAttachment(for: session) }.disabled(session.note.mode == .locked || session.note.isTrashed)
                     Divider()
-                    Button(session.note.isTrashed ? "복원" : "휴지통으로 이동") { library.toggleTrash(session) }
+                    Button(session.note.isTrashed ? appText("Restore") : appText("Move to Trash")) { library.toggleTrash(session) }
                     if session.note.isTrashed {
-                        Button("영구 삭제…", role: .destructive) { library.promptPermanentlyDelete(session) }.disabled(!library.canPermanentlyDelete(session.note))
+                        Button(appText("Delete Permanently…"), role: .destructive) { library.promptPermanentlyDelete(session) }.disabled(!library.canPermanentlyDelete(session.note))
                     }
-                } label: { IconButtonLabel(title: "노트 작업", systemImage: "ellipsis") }
+                } label: { IconButtonLabel(title: appText("Note Actions"), systemImage: "ellipsis") }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden)
-                    .fixedSize().frame(width: 28, height: 28).foregroundStyle(.secondary).help("노트 작업")
+                    .fixedSize().frame(width: 28, height: 28).foregroundStyle(.secondary).help(appText("Note Actions"))
                 }.fixedSize()
             }
             HStack(spacing: 9) {
-                Label(library.notebooks.first(where: { $0.id == session.note.notebookID })?.name ?? "내 노트", systemImage: "book.closed")
+                Label(library.notebooks.first(where: { $0.id == session.note.notebookID })?.name ?? appText("My Notes"), systemImage: "book.closed")
                     .lineLimit(1)
                 if !session.note.tags.isEmpty {
                     Text("·")
@@ -135,7 +135,7 @@ struct EditorView: View {
                 }
                 Spacer(minLength: 8)
                 if session.note.mode == .original && session.note.hasRemoteContent {
-                    Button("Markdown으로 편집") { Task { await library.convert(session) } }.buttonStyle(.bordered).controlSize(.small).fixedSize()
+                    Button(appText("Edit as Markdown")) { Task { await library.convert(session) } }.buttonStyle(.bordered).controlSize(.small).fixedSize()
                 }
             }.font(.caption).foregroundStyle(.secondary)
         }.padding(.horizontal, 24).padding(.vertical, 20)
@@ -143,14 +143,14 @@ struct EditorView: View {
 
     @ViewBuilder private var content: some View {
         if session.note.mode == .locked {
-            ContentUnavailableView("암호화된 노트", systemImage: "lock", description: Text("암호화 노트 편집은 아직 지원하지 않습니다. 공식 앱에서 열어 주세요."))
+            ContentUnavailableView(appText("Encrypted Note"), systemImage: "lock", description: Text(appText("Editing encrypted notes is not supported yet. Open the note in the official app.")))
         } else if session.note.mode == .original && !session.note.hasRemoteContent {
             VStack(spacing: 16) {
-                ContentUnavailableView(session.isDownloading ? "NAS에서 본문 가져오는 중…" : "본문을 가져와야 합니다",
+                ContentUnavailableView(session.isDownloading ? appText("Downloading Note Body from NAS…") : appText("Note Body Needs Downloading"),
                     systemImage: "arrow.down.document",
-                    description: Text(session.note.lastError ?? "NAS에 연결한 뒤 이 노트의 본문과 첨부파일을 가져오세요."))
+                    description: Text(session.note.lastError ?? appText("Connect to the NAS to download the note body and attachments.")))
                 if session.isDownloading { ProgressView() }
-                else { Button("본문 다시 가져오기") { Task { await library.fetchContent(for: session) } }.disabled(!library.isConnected) }
+                else { Button(appText("Retry Note Download")) { Task { await library.fetchContent(for: session) } }.disabled(!library.isConnected) }
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if session.note.mode == .original {
             OriginalHTMLEditor(html: Binding(get: { session.note.originalHTML }, set: { value in
@@ -171,7 +171,7 @@ struct EditorView: View {
                 .accessibilityHidden(mode == .read)
                 if mode != .source {
                     VStack(spacing: 0) {
-                        if mode == .split { paneLabel("미리보기", icon: "eye") }
+                        if mode == .split { paneLabel(appText("Preview"), icon: "eye") }
                         PreviewView(markdown: session.note.markdown, originalHTML: nil, blocks: session.note.activeBlocks, attachments: session.note.attachments, assetStore: library.attachments, onToggleTask: { line in
                             guard !session.note.isTrashed else { return }
                             library.edit(session, registerUndo: true) { $0.markdown = MarkdownEditing.toggleTask($0.markdown, line: line) }
@@ -195,27 +195,27 @@ struct EditorView: View {
         HStack(spacing: 10) {
             Label(session.localStatus, systemImage: session.saveError != nil ? "exclamationmark.circle" : session.isSaving ? "circle.dotted" : "checkmark.circle")
                 .foregroundStyle(session.saveError != nil ? .red : .secondary).lineLimit(1)
-            if session.saveError != nil { Button("다시 저장") { Task { await library.save(session) } } }
+            if session.saveError != nil { Button(appText("Save Again")) { Task { await library.save(session) } } }
             Spacer()
             if session.note.mode == .markdown {
-                Text("\(session.note.markdown.count.formatted())자").monospacedDigit().foregroundStyle(.secondary).fixedSize()
-            } else { Text("서식 문서").foregroundStyle(.secondary).fixedSize() }
+                Text(appText("Characters: %@", AppLocalization.number(session.note.markdown.count))).monospacedDigit().foregroundStyle(.secondary).fixedSize()
+            } else { Text(appText("Formatted Document")).foregroundStyle(.secondary).fixedSize() }
             Divider().frame(height: 12)
             Label(nasStatus, systemImage: session.note.syncState == .synced ? "checkmark.icloud" : "externaldrive")
                 .lineLimit(1).help(session.note.lastError ?? library.uploadStatus)
             if session.note.syncState == .failed {
-                Button("반영 확인") { Task { await library.pushPendingUploads() } }.disabled(library.isPushing || !library.isConnected)
+                Button(appText("Verify")) { Task { await library.pushPendingUploads() } }.disabled(library.isPushing || !library.isConnected)
             }
         }.font(.system(size: 11)).imageScale(.small).foregroundStyle(.secondary)
             .padding(.horizontal, 20).frame(minHeight: 34)
     }
     private var nasStatus: String {
         switch session.note.syncState {
-        case .synced: return "NAS 동기화됨"
-        case .conflict: return "변경 비교 필요"
-        case .failed: return "NAS 저장 확인 중"
-        case .local: return "NAS 전송 준비"
-        case .pending: return !library.isConnected ? "NAS 연결 대기" : library.isPushing ? "NAS 전송 중…" : "NAS 전송 대기"
+        case .synced: return appText("Synced with NAS")
+        case .conflict: return appText("Compare Changes")
+        case .failed: return appText("Verifying NAS Save")
+        case .local: return appText("Preparing NAS Upload")
+        case .pending: return !library.isConnected ? appText("Waiting for NAS Connection") : library.isPushing ? appText("Uploading to the NAS…") : appText("Waiting to Upload")
         }
     }
 }
@@ -226,16 +226,16 @@ private struct ConflictView: View {
     let session: EditorSession
     var body: some View {
         VStack(spacing: 16) {
-            Text("서로 다른 변경 확인").font(.title2.bold())
-            Text("한쪽을 선택해도 다른 버전은 로컬 이력 또는 사본으로 보관합니다.").foregroundStyle(.secondary)
+            Text(appText("Review Conflicting Changes")).font(.title2.bold())
+            Text(appText("Whichever version you choose, the other is kept in local history or as a copy.")).foregroundStyle(.secondary)
             HSplitView {
-                VStack { Text("이 Mac").font(.headline); PreviewView(markdown: session.note.mode == .markdown ? session.note.markdown : nil, originalHTML: session.note.originalHTML, blocks: session.note.blocks, attachments: session.note.attachments, assetStore: library.attachments) }
+                VStack { Text(appText("This Mac")).font(.headline); PreviewView(markdown: session.note.mode == .markdown ? session.note.markdown : nil, originalHTML: session.note.originalHTML, blocks: session.note.blocks, attachments: session.note.attachments, assetStore: library.attachments) }
                 VStack { Text("NAS").font(.headline); PreviewView(markdown: nil, originalHTML: session.note.conflictHTML, blocks: [], attachments: session.note.attachments, assetStore: library.attachments) }
             }
             HStack {
-                Button("나중에") { dismiss() }; Spacer()
-                Button("서버 버전 사용") { Task { await library.useServerConflict(session); dismiss() } }
-                Button("이 Mac 버전 유지") { Task { await library.keepLocalConflict(session); dismiss() } }
+                Button(appText("Later")) { dismiss() }; Spacer()
+                Button(appText("Use Server Version")) { Task { await library.useServerConflict(session); dismiss() } }
+                Button(appText("Keep This Mac’s Version")) { Task { await library.keepLocalConflict(session); dismiss() } }
             }
         }.padding(24).frame(width: 920, height: 620)
     }

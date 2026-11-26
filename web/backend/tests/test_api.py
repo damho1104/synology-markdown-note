@@ -46,6 +46,29 @@ def post(client, path, body, *, origin="http://testserver", csrf=None):
     return client.post(path, json=body, headers=headers)
 
 
+@pytest.mark.parametrize(("value", "expected"), [
+    (None, "auto"), ("", "auto"), ("auto", "auto"), ("en", "en"), ("ko", "ko"),
+])
+def test_public_config_exposes_deployment_language(tmp_path, monkeypatch, value, expected):
+    monkeypatch.setenv("WEB_DATA_DIR", str(tmp_path))
+    if value is None:
+        monkeypatch.delenv("WEB_DEFAULT_LANGUAGE", raising=False)
+    else:
+        monkeypatch.setenv("WEB_DEFAULT_LANGUAGE", value)
+
+    client = TestClient(create_app(Settings.from_env(), FakeNas()))
+    response = client.get("/api/public-config")
+    assert response.status_code == 200
+    assert response.json() == {"default_language": expected}
+    assert response.headers["Cache-Control"] == "no-store"
+
+
+def test_invalid_deployment_language_has_actionable_configuration_error(monkeypatch):
+    monkeypatch.setenv("WEB_DEFAULT_LANGUAGE", "ja")
+    with pytest.raises(ValueError, match="WEB_DEFAULT_LANGUAGE must be auto, en or ko"):
+        Settings.from_env()
+
+
 def test_setup_code_is_private_and_single_use(tmp_path):
     nas = FakeNas()
     app = app_at(tmp_path, nas)

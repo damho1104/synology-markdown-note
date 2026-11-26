@@ -1,3 +1,7 @@
+import { currentLanguage, t, UiError, type Message } from "./i18n";
+import { english } from "./messages";
+import { koreanEditorPhrases } from "./editorPhrases";
+import { NasConnectionStatus } from "./NasConnectionStatus";
 import {
   useCallback,
   useEffect,
@@ -140,11 +144,22 @@ type WriteOperation = {
 type ImportProgress = {filename:string; completed:number; total:number};
 type CreateReceipt = {status:string; note?:NoteDetail; operation_id?:string};
 
+function createStatus(status?: string): string {
+  switch (status) {
+    case "pending": return t("확인 대기 중");
+    case "uncertain": return t("저장 결과 불확실");
+    case "completed": return t("저장 확인됨");
+    case "reviewed": return t("확인 처리됨");
+    case "absent": return t("생성된 노트 없음");
+    default: return t("조회 필요");
+  }
+}
+
 function confirmedImport({filename, completed, total}: ImportProgress): string {
   const remaining = total - completed - 1;
-  return `${filename} · ${completed + 1}/${total}개 가져옴 · ${remaining > 0
-    ? `나머지 ${remaining}개 파일을 선택해 계속할 수 있습니다.`
-    : "가져오기를 확인했습니다."}`;
+  return t("{0} · {1}/{2}개 가져옴 · {3}", filename, completed + 1, total, remaining > 0
+    ? t("나머지 {0}개 파일을 선택해 계속할 수 있습니다.", remaining)
+    : t("가져오기를 확인했습니다."));
 }
 
 type Draft = {
@@ -192,12 +207,18 @@ function recordFormattedEdit(history: FormattedHistory, before: FormattedSnapsho
   return {...history, undo:[...history.undo,before].slice(-30), redo:[]};
 }
 
+function matchesDraftTitle(title: string, saved: string): boolean {
+  const trimmed = title.trim();
+  // An earlier save may have supplied the default in the other UI language.
+  return trimmed ? trimmed === saved : saved === "제목 없음" || saved === english["제목 없음"];
+}
+
 // Every toolbar operation seals earlier typing at its queue position. Later
 // typing still edits the live draft, using the operation's projected layout.
 function sealFormattedText(note: NoteDetail, draft: Draft) {
   const before = formattedTip(note,draft);
-  const title = draft.title.trim() || "제목 없음";
-  if (!draft.text_changes || (!draft.text_changes.length && before.title === title)) return null;
+  const title = draft.title.trim() || t("제목 없음");
+  if (!draft.text_changes || (!draft.text_changes.length && matchesDraftTitle(draft.title, before.title))) return null;
   const id = requestId();
   const result = {html:exportHtml(note,draft),title,writeId:id};
   const write: FormattedWrite = {id,result,changes:draft.text_changes,verify:!!draft.projected};
@@ -226,7 +247,7 @@ function exportHtml(note: NoteDetail, draft: Draft): string {
     const block = blocks?.find(block => block.index === change.index);
     if (!block || !Number.isInteger(block.start) || !Number.isInteger(block.end) ||
         block.start! < 0 || block.end! < block.start! || block.end! > source.length)
-      throw new Error("원본 HTML의 텍스트 위치를 확인할 수 없습니다. 편집본을 보관했습니다.");
+      throw new UiError("원본 HTML의 텍스트 위치를 확인할 수 없습니다. 편집본을 보관했습니다.");
     return {...change, start:block.start!, end:block.end!};
   }).sort((a,b) => b.start-a.start);
   for (const change of changes) {
@@ -272,7 +293,7 @@ const EDITOR_EXTENSIONS = [
   ),
 ];
 const BLANK_HTML = "<p></p>";
-const readOnlyReasons: Record<string, string> = {
+const readOnlyReasons: Record<string, Message> = {
   AMBIGUOUS_SOURCE:
     "본문과 일치하는 Markdown 원문이 여러 개 있어 편집할 원문을 안전하게 결정할 수 없습니다.",
   WRITE_IN_PROGRESS:
@@ -352,7 +373,7 @@ function uploadBlocksSave(item: DraftUpload, references: ReadonlySet<string>, co
 function recoveryMarkdown(markdown: string, detach: (id: string) => boolean): string {
   const cleaned = detachUploadReferences(markdown, detach);
   if ([...recoveryUploadReferences(cleaned)].some(id => !id || detach(id)))
-    throw new Error("해결되지 않은 첨부 링크가 남아 있습니다. 본문에서 해당 링크를 이름만 남도록 수정해 주세요.");
+    throw new UiError("해결되지 않은 첨부 링크가 남아 있습니다. 본문에서 해당 링크를 이름만 남도록 수정해 주세요.");
   return cleaned;
 }
 
@@ -396,6 +417,7 @@ export function Workspace({
   const [libraryReady, setLibraryReady] = useState(false);
   const graphRevision = useMemo(() => JSON.stringify(notes.map(note => [note.id, note.version, note.locked, note.trashed])), [notes]);
   const [listError, setListError] = useState("");
+  const nasConnected = libraryReady && !listError;
   const [noteError, setNoteError] = useState("");
   const [noteActionNotice, setNoteActionNotice] = useState("");
   const [detail, setDetail] = useState<NoteDetail | null>(null);
@@ -458,6 +480,8 @@ export function Workspace({
   const dark = preferences.appearance === "system" ? systemDark : preferences.appearance === "dark";
   const editorExtensions = useMemo(() => [
     ...EDITOR_EXTENSIONS,
+    ...(currentLanguage() === "ko" ? [koreanEditorPhrases] : []),
+    EditorView.contentAttributes.of({"aria-label": t("Markdown 본문")}),
     ...(preferences.lineWrapping ? [EditorView.lineWrapping] : []),
   ], [preferences.lineWrapping]);
   const attachmentInput = useRef<HTMLInputElement>(null);
@@ -602,11 +626,11 @@ export function Workspace({
       let count = items.filter(item => item.phase !== "committed").length;
       for (const file of files) {
         if (!file.size || file.size > MAX_ATTACHMENT_BYTES) {
-          errors.push(`${file.name}: ${file.size ? "50 MB를 초과했습니다." : "빈 파일입니다."}`);
+          errors.push(`${file.name}: ${file.size ? t("50 MB를 초과했습니다.") : t("빈 파일입니다.")}`);
           continue;
         }
         if (count >= MAX_QUEUED_ATTACHMENTS) {
-          errors.push(`임시 첨부파일은 최대 ${MAX_QUEUED_ATTACHMENTS}개까지 추가할 수 있습니다.`);
+          errors.push(t("임시 첨부파일은 최대 {0}개까지 추가할 수 있습니다.", MAX_QUEUED_ATTACHMENTS));
           break;
         }
         const id = requestId();
@@ -680,7 +704,7 @@ export function Workspace({
         ? item.insertedText : uploadMarkdown(item.metadata);
       const position = markdown.indexOf(text);
       if (position < 0 || uploadReferences(markdown.slice(0, position) + markdown.slice(position + text.length)).has(id)) {
-        setAttachmentError("본문에서 이 첨부파일을 가리키는 링크를 지운 뒤 취소하세요.");
+        setAttachmentError(t("본문에서 이 첨부파일을 가리키는 링크를 지운 뒤 취소하세요."));
         return;
       }
       const view = editorRef.current?.view;
@@ -712,8 +736,8 @@ export function Workspace({
       !writeInProgress(baseline) && !!baseline?.attachment_bindings?.[id];
     const detach = (reference: string) => !bound && reference === id;
     const linked = recoveryUploadReferences(current.draft?.markdown).has(id) && !bound;
-    const action = item.phase === "missing" ? "만료된 첨부 표시를 지울까요?" : "웹 서버에 보관된 임시 파일을 버릴까요?";
-    if (!window.confirm(`${item.name}: ${action}${linked ? " 본문의 첨부 링크는 이름만 남습니다." : ""}`)) return;
+    const action = item.phase === "missing" ? t("만료된 첨부 표시를 지울까요?") : t("웹 서버에 보관된 임시 파일을 버릴까요?");
+    if (!window.confirm(`${item.name}: ${action}${linked ? " " + t("본문의 첨부 링크는 이름만 남습니다.") : ""}`)) return;
     const storageKey = current.draftKey;
     try {
       // Check that any affected link can be converted before deleting bytes.
@@ -738,7 +762,7 @@ export function Workspace({
       if (navigating.current.draftKey === storageKey) {
         changeActiveDraft(remove);
         setAttachmentError(recoveryUploadReferences(navigating.current.draft?.markdown).has(id) && !bound
-          ? "본문에 남은 첨부 링크를 지우거나 파일을 다시 선택하세요." : "");
+          ? t("본문에 남은 첨부 링크를 지우거나 파일을 다시 선택하세요.") : "");
       } else {
         const stored = draftRead(storageKey);
         if (stored) draftStore(storageKey, remove(stored));
@@ -820,7 +844,7 @@ export function Workspace({
       setLibraryReady(true);
       setListError("");
     } catch (error) {
-      if (isCurrent()) handleError(signal.aborted ? new Error("NAS 목록 조회 시간이 초과되었습니다.") : error, setListError);
+      if (isCurrent()) handleError(signal.aborted ? new UiError("NAS 목록 조회 시간이 초과되었습니다.") : error, setListError);
     } finally {
       window.clearTimeout(timeout);
       background?.removeEventListener("abort", abort);
@@ -922,13 +946,13 @@ export function Workspace({
         }
       };
       if (current.saving || (current.activeKey !== destination && current.attachmentsBlocked && !current.draft?.resume_paused)) {
-        if (current.attachmentsBlocked) setAttachmentError("이동하려면 진행 중인 첨부파일을 완료하거나 취소하세요.");
+        if (current.attachmentsBlocked) setAttachmentError(t("이동하려면 진행 중인 첨부파일을 완료하거나 취소하세요."));
         restore();
         return;
       }
       if (current.activeKey !== destination && current.dirty) {
         if (
-          !window.confirm("편집 내용은 이 탭에 임시 보관됩니다. 이동할까요?")
+          !window.confirm(t("편집 내용은 이 탭에 임시 보관됩니다. 이동할까요?"))
         ) {
           restore();
           return;
@@ -1031,7 +1055,7 @@ export function Workspace({
           }
           setEditing(!staged && (note.editable || !!note.html_text_preview));
           setViewMode("split");
-          setMessage("이 탭에 남아 있던 편집 내용을 복원했습니다.");
+          setMessage(t("이 탭에 남아 있던 편집 내용을 복원했습니다."));
         } else {
           setEditing(note.editable || !!note.html_text_preview);
           setDraft({
@@ -1083,7 +1107,7 @@ export function Workspace({
   const shelves = useMemo(
     () =>
       Array.from(new Set(notebooks.map((book) => book.stack || ""))).sort(
-        (a, b) => a.localeCompare(b, "ko"),
+        (a, b) => a.localeCompare(b, currentLanguage()),
       ),
     [notebooks],
   );
@@ -1177,23 +1201,23 @@ export function Workspace({
   }
   const listTitle =
     route.filter === "graph"
-      ? "전체 그래프"
+      ? t("전체 그래프")
       : (selectedNotebook?.name ??
         (selectedShelf !== null
-          ? selectedShelf || "책장 밖 메모장"
+          ? selectedShelf || t("책장 밖 메모장")
           : route.filter === "favorites"
-            ? "즐겨찾기"
+            ? t("즐겨찾기")
             : route.filter === "trash"
-              ? "휴지통"
+              ? t("휴지통")
               : route.filter?.startsWith("tag:")
                 ? "#" + route.filter.slice(4)
-                : "전체 노트"));
+                : t("전체 노트")));
   const mobilePage = route.note || route.compose ? "editor" : route.filter === "graph" ? "graph"
     : route.notebook || route.filter ? "notes" : selectedShelf !== null ? "notebooks" : "shelves";
-  const mobileTitle = mobilePage === "shelves" ? "책장"
-    : mobilePage === "editor" && !route.notebook && !route.filter ? "메모" : listTitle;
-  const mobileParentLabel = mobilePage === "editor" ? "메모 목록으로 돌아가기"
-    : mobilePage === "notes" && route.notebook ? "메모장 목록으로 돌아가기" : "책장 목록으로 돌아가기";
+  const mobileTitle = mobilePage === "shelves" ? t("책장")
+    : mobilePage === "editor" && !route.notebook && !route.filter ? t("메모") : listTitle;
+  const mobileParentLabel = mobilePage === "editor" ? t("메모 목록으로 돌아가기")
+    : mobilePage === "notes" && route.notebook ? t("메모장 목록으로 돌아가기") : t("책장 목록으로 돌아가기");
   async function goToMobileParent() {
     const parent: Route = {shelf:null, notebook:null, note:null, compose:false};
     if (mobilePage === "editor") {
@@ -1246,7 +1270,7 @@ export function Workspace({
   async function traverseHistory(direction: -1 | 1) {
     if (saving || writeInFlight.current) return;
     if (navigating.current.attachmentsBlocked && !canLeaveReview) {
-      setAttachmentError("이동하려면 진행 중인 첨부파일을 완료하거나 취소하세요.");
+      setAttachmentError(t("이동하려면 진행 중인 첨부파일을 완료하거나 취소하세요."));
       return;
     }
     if (direction === -1 ? historyIndex.current <= 0 : historyIndex.current >= historyLast.current) return;
@@ -1257,7 +1281,7 @@ export function Workspace({
   async function navigate(next: Route, replace = false, search?:string): Promise<boolean> {
     if (saving || writeInFlight.current) return false;
     if (navigating.current.attachmentsBlocked && !canLeaveReview) {
-      setAttachmentError("이동하려면 진행 중인 첨부파일을 완료하거나 취소하세요.");
+      setAttachmentError(t("이동하려면 진행 중인 첨부파일을 완료하거나 취소하세요."));
       return false;
     }
     if (dirty && !canLeaveReview) {
@@ -1297,7 +1321,7 @@ export function Workspace({
     const restore = head && "restore" in head ? head.restore : undefined;
     if (restore && !restore.version) {
       setSaveFailure("safe");
-      setNoteError("복원할 NAS 버전을 확인할 수 없습니다. 편집본을 보관했습니다.");
+      setNoteError(t("복원할 NAS 버전을 확인할 수 없습니다. 편집본을 보관했습니다."));
       return false;
     }
     const manifest = head && !("changes" in head) ? [] :
@@ -1326,7 +1350,7 @@ export function Workspace({
         url,
         jsonRequest(
           {
-            title: head?.result.title ?? (writing.title.trim() || "제목 없음"),
+            title: head?.result.title ?? (writing.title.trim() || t("제목 없음")),
             ...(isNew ? {client_request_id:sent.client_request_id} : {}),
             ...(restore ? {restore_version:restore.version}
               : head && "edit" in head ? {structure_edit:head.edit, text_layout:writing.text_layout,
@@ -1359,7 +1383,7 @@ export function Workspace({
           if (!persisted?.review_required || (isNew && persisted.client_request_id !== sent.client_request_id) ||
               (head && (persisted.formattedWrites?.[0]?.id !== head.id ||
                 persisted.formattedWrites?.at(-1)?.id !== held.formattedWrites?.at(-1)?.id)))
-            throw new Error("편집본을 이 탭에 보관할 수 없어 저장을 중단했습니다. 브라우저 저장소 설정을 확인하세요.");
+            throw new UiError("편집본을 이 탭에 보관할 수 없어 저장을 중단했습니다. 브라우저 저장소 설정을 확인하세요.");
           changeActiveDraft(() => held);
           mutationStarted = true;
         },
@@ -1378,7 +1402,7 @@ export function Workspace({
         ...latest, version:next.version, review_required:false, recovery_acknowledged:false, resume_paused:false,
         attachments, pending_upload_ids:undefined, formattedWrites:remaining,
         text_layout:next.html_text_layout,
-        title:latest.title.trim() === next.title || (!latest.title.trim() && next.title === "제목 없음") ? next.title : latest.title,
+        title:matchesDraftTitle(latest.title, next.title) ? next.title : latest.title,
         // Keep the projected editor and text coordinates while later edits
         // depend on it. The latest verified response becomes the base version.
         ...(remaining?.length || latest.text_changes?.length ? {} : {
@@ -1520,16 +1544,16 @@ export function Workspace({
     if (!draft || !activeDraftKey || !["reviewed", "absent"].includes(createReceipt?.status ?? "")) return;
     const pause = !!(draft.attachments?.items.length || draft.pending_upload_ids?.length || recoveryUploadReferences(draft.markdown).size);
     if (!window.confirm(pause
-      ? "원래 초안은 이 탭에 보관됩니다. 첨부 링크는 이름만 남긴 별도 초안을 열까요? 필요한 파일을 다시 선택한 뒤 저장할 수 있습니다."
-      : "원래 초안은 이 탭에 보관됩니다. 별도의 새 노트를 생성할까요?")) return;
+      ? t("원래 초안은 이 탭에 보관됩니다. 첨부 링크는 이름만 남긴 별도 초안을 열까요? 필요한 파일을 다시 선택한 뒤 저장할 수 있습니다.")
+      : t("원래 초안은 이 탭에 보관됩니다. 별도의 새 노트를 생성할까요?"))) return;
     try {
       const next = separateDraft(draft, pause);
       const heldKey = `${activeDraftKey}:held:${draft.client_request_id}`;
       draftStore(heldKey, draft);
-      if (!draftRead(heldKey)) throw new Error("원래 초안을 이 탭에 보관할 수 없습니다.");
+      if (!draftRead(heldKey)) throw new UiError("원래 초안을 이 탭에 보관할 수 없습니다.");
       draftStore(activeDraftKey, next);
       if (draftRead(activeDraftKey)?.client_request_id !== next.client_request_id)
-        throw new Error("새 초안을 이 탭에 보관할 수 없습니다.");
+        throw new UiError("새 초안을 이 탭에 보관할 수 없습니다.");
       setDraft(next);
       setCreateReceipt(null); setSaveFailure(null); setNoteError("");
     } catch (error) {
@@ -1552,11 +1576,11 @@ export function Workspace({
     try {
       const next = separateDraft(draft, true);
       const key = draftPrefix + next.key;
-      if (draftRead(key)) throw new Error("이 메모장에 작성 중인 새 노트가 있습니다. 기존 초안을 먼저 확인해 주세요.");
-      if (!window.confirm("원래 노트와 편집본을 보관합니다. 첨부 링크는 이름만 남기고 별도의 새 노트를 작성할까요?")) return;
+      if (draftRead(key)) throw new UiError("이 메모장에 작성 중인 새 노트가 있습니다. 기존 초안을 먼저 확인해 주세요.");
+      if (!window.confirm(t("원래 노트와 편집본을 보관합니다. 첨부 링크는 이름만 남기고 별도의 새 노트를 작성할까요?"))) return;
       draftStore(key, next);
       if (draftRead(key)?.client_request_id !== next.client_request_id)
-        throw new Error("새 초안을 이 탭에 보관할 수 없습니다.");
+        throw new UiError("새 초안을 이 탭에 보관할 수 없습니다.");
       commitRoute({shelf:route.shelf, notebook:next.notebook_id, note:null, compose:true});
     } catch (error) {
       handleError(error, setNoteError);
@@ -1580,13 +1604,13 @@ export function Workspace({
       if (current.draftKey !== activeDraftKey || !source?.review_required || !source.recovery_acknowledged) return;
       setRecoveredDetail(fresh); setCompare(fresh);
       if (!editableRecovery(fresh, source) || fresh.version !== recoveredDetail.version) {
-        setNoteError("NAS 확인본이 바뀌었습니다. 최신 내용을 검토한 뒤 다시 선택해 주세요.");
+        setNoteError(t("NAS 확인본이 바뀌었습니다. 최신 내용을 검토한 뒤 다시 선택해 주세요."));
         return;
       }
       const formatted = source.markdown === undefined;
       if (!window.confirm(formatted
-        ? "NAS 확인본을 기준으로 보관한 편집본을 열까요? 이전에 선택한 첨부파일은 다시 전송하지 않습니다."
-        : "최신 NAS 확인본을 기준으로 보관한 편집본을 엽니다. NAS에서 확인되지 않은 첨부 링크는 이름만 남길까요?")) return;
+        ? t("NAS 확인본을 기준으로 보관한 편집본을 열까요? 이전에 선택한 첨부파일은 다시 전송하지 않습니다.")
+        : t("최신 NAS 확인본을 기준으로 보관한 편집본을 엽니다. NAS에서 확인되지 않은 첨부 링크는 이름만 남길까요?"))) return;
       const remaining = reviewedFormattedWrites(fresh,source);
       const needsProjection = !!remaining && (!!remaining.length || !!source.text_changes?.length);
       const next: Draft = {
@@ -1605,9 +1629,9 @@ export function Workspace({
       };
       const heldKey = `${activeDraftKey}:held:${requestId()}`;
       draftStore(heldKey, source);
-      if (!draftRead(heldKey)) throw new Error("원래 초안을 이 탭에 보관할 수 없습니다.");
+      if (!draftRead(heldKey)) throw new UiError("원래 초안을 이 탭에 보관할 수 없습니다.");
       draftStore(activeDraftKey, next);
-      if (!draftRead(activeDraftKey)?.resume_paused) throw new Error("복구한 초안을 이 탭에 보관할 수 없습니다.");
+      if (!draftRead(activeDraftKey)?.resume_paused) throw new UiError("복구한 초안을 이 탭에 보관할 수 없습니다.");
       if (remaining) {
         const confirmed = source.formattedWrites?.[0];
         if (confirmed && fresh.version !== source.version)
@@ -1662,7 +1686,7 @@ export function Workspace({
   async function acknowledge(operation: WriteOperation) {
     if (
       !window.confirm(
-        `NAS에서 '${operation.title}'의 저장 결과를 직접 확인했나요? 확인한 경우에만 작업 보류를 해제합니다.`,
+        t("NAS에서 '{0}'의 저장 결과를 직접 확인했나요? 확인한 경우에만 작업 보류를 해제합니다.", operation.title),
       )
     )
       return;
@@ -1671,7 +1695,7 @@ export function Workspace({
         `/api/writes/${encodeURIComponent(operation.operation_id)}/ack`,
         jsonRequest({}, { "X-CSRF-Token": session.csrf_token }),
       );
-      setMessage("보류된 쓰기 기록을 확인 처리했습니다.");
+      setMessage(t("보류된 쓰기 기록을 확인 처리했습니다."));
       await loadPending();
       const current = navigating.current;
       if (current.draft?.review_required && current.draftKey &&
@@ -1693,7 +1717,7 @@ export function Workspace({
     if (saving || writeInFlight.current) return;
     if (!canLeaveReview && (navigating.current.attachmentsBlocked || uploads?.items.some(item =>
       item.phase !== "committed" && !referencedUploads.has(item.id)))) {
-      setAttachmentError("로그아웃하려면 진행 중인 첨부파일을 완료하거나 취소하세요.");
+      setAttachmentError(t("로그아웃하려면 진행 중인 첨부파일을 완료하거나 취소하세요."));
       return;
     }
     if (dirty && !canLeaveReview && (!await saveLatest.current() || saveHasMore.current)) return;
@@ -1732,7 +1756,7 @@ export function Workspace({
   async function applyNoteAction(action: {remove_attachment_id: string} | {restore_version: string}): Promise<string | undefined> {
     if (!detail || !draft || dirty || saving || writeInFlight.current || hasStagedUploads ||
         draft.review_required || draft.resume_paused || composingNow.current)
-      return "편집본과 진행 중인 저장을 먼저 확인하세요.";
+      return t("편집본과 진행 중인 저장을 먼저 확인하세요.");
     writeInFlight.current = true;
     setSavingAction("note-action");
     setNoteError("");
@@ -1788,7 +1812,7 @@ export function Workspace({
         const direction = command.historyDirection;
         const target = history[direction].at(-1);
         if (!target) {
-          setNoteActionNotice(direction === "undo" ? "실행 취소할 편집 이력이 없습니다." : "다시 실행할 편집 이력이 없습니다.");
+          setNoteActionNotice(direction === "undo" ? t("실행 취소할 편집 이력이 없습니다.") : t("다시 실행할 편집 이력이 없습니다."));
           return;
         }
         write = {id,result:{html:target.html,title:target.title,writeId:id},
@@ -1812,7 +1836,7 @@ export function Workspace({
     const key = `new:${destination}`;
     const storageKey = draftPrefix + key;
     if (dirty || hasStagedUploads || draft?.review_required || draft?.resume_paused || draftRead(storageKey)) {
-      setMessage("작성하거나 보관 중인 편집본을 먼저 확인한 뒤 가져오세요.");
+      setMessage(t("작성하거나 보관 중인 편집본을 먼저 확인한 뒤 가져오세요."));
       return;
     }
     let imported = 0;
@@ -1838,7 +1862,7 @@ export function Workspace({
         }, {"X-CSRF-Token":session.csrf_token}), () => {
           draftStore(storageKey, sent);
           if (draftRead(storageKey)?.client_request_id !== client_request_id) {
-            throw new Error("편집본을 이 탭에 보관할 수 없어 가져오기를 중단했습니다.");
+            throw new UiError("편집본을 이 탭에 보관할 수 없어 가져오기를 중단했습니다.");
           }
           held = sent;
         });
@@ -1847,7 +1871,7 @@ export function Workspace({
         imported += 1;
       }
       if (latest) commitRoute({shelf: route.shelf, notebook: destination, note: latest.id, compose: false});
-      setMessage(`Markdown 노트 ${imported}개를 가져왔습니다.`);
+      setMessage(t("Markdown 노트 {0}개를 가져왔습니다.", imported));
     } catch (error) {
       const rejected = error instanceof ApiFailure && [400, 401, 403, 413, 422].includes(error.status);
       if (held && rejected) {
@@ -1867,11 +1891,11 @@ export function Workspace({
           setMessage(confirmedImport(held.importProgress!));
           return;
         }
-        setMessage(`${filename} · NAS 생성 결과를 확인하고 있습니다.`);
+        setMessage(t("{0} · NAS 생성 결과를 확인하고 있습니다.", filename));
         commitRoute({shelf: route.shelf, notebook: destination, note: null, compose: true});
         void loadPending();
       } else {
-        handleError(error, message => setMessage(`${filename} · ${imported}/${files.length}개 가져옴 · ${message}`));
+        handleError(error, message => setMessage(t("{0} · {1}/{2}개 가져옴 · {3}", filename, imported, files.length, message)));
       }
     } finally {
       if (imported) await loadLists();
@@ -1881,12 +1905,12 @@ export function Workspace({
   }
 
   async function libraryAction(action: LibraryAction) {
-    if (saving || writeInFlight.current) throw new Error("진행 중인 저장이 끝난 뒤 다시 시도하세요.");
+    if (saving || writeInFlight.current) throw new UiError("진행 중인 저장이 끝난 뒤 다시 시도하세요.");
     if (dirty)
-      throw new Error("편집 내용을 저장하거나 취소한 다음 실행하세요.");
+      throw new UiError("편집 내용을 저장하거나 취소한 다음 실행하세요.");
     if (action.kind === "notebook" && action.action === "delete" &&
         (hasStagedUploads || draft?.review_required || draft?.resume_paused))
-      throw new Error("보관된 편집본과 첨부파일을 먼저 확인하세요.");
+      throw new UiError("보관된 편집본과 첨부파일을 먼저 확인하세요.");
     listMutationVersion.current += 1;
     setSavingAction("library");
     setPendingError("");
@@ -1967,7 +1991,7 @@ export function Workspace({
   let reviewDraftBody = draft?.markdown ?? draft?.html ?? "";
   if (draft?.text_changes?.length && detail) {
     try { reviewDraftBody = exportHtml(detail, draft); }
-    catch { reviewDraftBody = "원본 위치 확인 필요\n" + JSON.stringify(draft.text_changes, null, 2); }
+    catch { reviewDraftBody = t("원본 위치 확인 필요") + JSON.stringify(draft.text_changes, null, 2); }
   }
   const selectedSummary = notes.find((n) => n.id === route.note);
   const previewHtml =
@@ -2017,7 +2041,7 @@ export function Workspace({
       }
     >
       <BookOpenText size={15} />
-      <span>{book.name || "이름 없는 메모장"}</span>
+      <span>{book.name || t("이름 없는 메모장")}</span>
     </button>
   );
   return (
@@ -2028,14 +2052,14 @@ export function Workspace({
       onCompositionEnd={() => { composingNow.current = false; setComposing(false); }}
       style={{ "--editor-font-size": `${preferences.editorFontSize}px` } as CSSProperties}>
       <header className="native-toolbar" data-mobile-page={mobilePage}>
-        <div className="panel-controls" role="group" aria-label="패널 표시">
-            <button className="icon-button panel-toggle panel-toggle-sidebar" aria-label={sidebarCollapsed ? "책장 패널 펼치기" : "책장 패널 접기"}
-              aria-expanded={!sidebarCollapsed} aria-controls="workspace-sidebar" title={sidebarCollapsed ? "책장 패널 펼치기" : "책장 패널 접기"}
+        <div className="panel-controls" role="group" aria-label={t("패널 표시")}>
+            <button className="icon-button panel-toggle panel-toggle-sidebar" aria-label={sidebarCollapsed ? t("책장 패널 펼치기") : t("책장 패널 접기")}
+              aria-expanded={!sidebarCollapsed} aria-controls="workspace-sidebar" title={sidebarCollapsed ? t("책장 패널 펼치기") : t("책장 패널 접기")}
               onClick={() => {setSidebarCollapsed(!sidebarCollapsed); savePreference("sidebarCollapsed", !sidebarCollapsed);}}>
               {sidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
             </button>
-            <button className="icon-button panel-toggle panel-toggle-list" aria-label={listCollapsed ? "노트 목록 펼치기" : "노트 목록 접기"}
-              aria-expanded={!listCollapsed} aria-controls="workspace-note-list" title={listCollapsed ? "노트 목록 펼치기" : "노트 목록 접기"}
+            <button className="icon-button panel-toggle panel-toggle-list" aria-label={listCollapsed ? t("노트 목록 펼치기") : t("노트 목록 접기")}
+              aria-expanded={!listCollapsed} aria-controls="workspace-note-list" title={listCollapsed ? t("노트 목록 펼치기") : t("노트 목록 접기")}
               onClick={() => {setListCollapsed(!listCollapsed); savePreference("noteListCollapsed", !listCollapsed);}}>
               {listCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
             </button>
@@ -2057,7 +2081,7 @@ export function Workspace({
           <div className="toolbar-group">
             <button
               className="icon-button desktop-history"
-              aria-label="이전 화면"
+              aria-label={t("이전 화면")}
               disabled={saving || historyBounds.index === 0}
               onClick={() => void traverseHistory(-1)}
             >
@@ -2065,7 +2089,7 @@ export function Workspace({
             </button>
             <button
               className="icon-button desktop-history"
-              aria-label="다음 화면"
+              aria-label={t("다음 화면")}
               disabled={saving || historyBounds.index >= historyBounds.last}
               onClick={() => void traverseHistory(1)}
             >
@@ -2073,9 +2097,9 @@ export function Workspace({
             </button>
             <button
               className="icon-button notebook-action"
-              aria-label="새 노트"
+              aria-label={t("새 노트")}
               disabled={saving || !selectedNotebook}
-              title={selectedNotebook ? "새 노트" : "메모장을 선택하세요"}
+              title={selectedNotebook ? t("새 노트") : t("메모장을 선택하세요")}
               onClick={() =>
                 selectedNotebook &&
                 navigate({
@@ -2088,14 +2112,14 @@ export function Workspace({
             >
               <FilePlus2 size={19} />
             </button>
-            <button className="icon-button notebook-action" aria-label="Markdown 가져오기"
-              title={selectedNotebook ? "Markdown 가져오기" : "메모장을 선택하세요"}
+            <button className="icon-button notebook-action" aria-label={t("Markdown 가져오기")}
+              title={selectedNotebook ? t("Markdown 가져오기") : t("메모장을 선택하세요")}
               disabled={saving || !selectedNotebook || route.compose}
               onClick={() => markdownImportInput.current?.click()}>
               <FileUp size={18} />
             </button>
             <input hidden ref={markdownImportInput} type="file" multiple
-              accept=".md,.markdown,text/markdown" aria-label="가져올 Markdown 파일 선택"
+              accept=".md,.markdown,text/markdown" aria-label={t("가져올 Markdown 파일 선택")}
               onChange={event => {
                 const files = Array.from(event.currentTarget.files ?? []);
                 event.currentTarget.value = "";
@@ -2103,8 +2127,8 @@ export function Workspace({
               }} />
             <button
               className="icon-button"
-              aria-label="전체 검색"
-              title="전체 노트 검색"
+              aria-label={t("전체 검색")}
+              title={t("전체 노트 검색")}
               onClick={() => {
                 setShowGlobalSearch(true);
                 void loadLists();
@@ -2113,21 +2137,21 @@ export function Workspace({
               <Search size={19} />
             </button>
           </div>
-          {!formattedNote && <div className="mode-picker" aria-label="보기 모드">
+          {!formattedNote && <div className="mode-picker" aria-label={t("보기 모드")}>
             {(["source", "split", "read"] as const).map((m, i) => (
               <button
                 key={m}
                 aria-pressed={viewMode === m}
                 onClick={() => chooseMode(m)}
               >
-                {["원문", "분할", "읽기"][i]}
+                {[t("원문"), t("분할"), t("읽기")][i]}
               </button>
             ))}
           </div>}
           <div className="toolbar-group">
             <button
               className="icon-button note-info-action"
-              aria-label="노트 정보"
+              aria-label={t("노트 정보")}
               aria-pressed={inspector}
               onClick={() => setInspector(!inspector)}
             >
@@ -2135,7 +2159,7 @@ export function Workspace({
             </button>
             <button
               className="icon-button"
-              aria-label="새로고침"
+              aria-label={t("새로고침")}
               disabled={saving || dirty}
               onClick={() => {
                 void loadLists();
@@ -2147,8 +2171,8 @@ export function Workspace({
             </button>
             <button
               className="icon-button"
-              title="로그아웃"
-              aria-label="로그아웃"
+              title={t("로그아웃")}
+              aria-label={t("로그아웃")}
               disabled={saving}
               onClick={logout}
             >
@@ -2161,13 +2185,13 @@ export function Workspace({
       {!!pending.length && (
         <section
           className="workspace-alert warning"
-          aria-label="저장 확인 대기 작업"
+          aria-label={t("저장 확인 대기 작업")}
         >
           <ShieldAlert size={16} />
           <div>
-            <b>NAS 저장 결과 확인 필요 · {pending.length}건</b>
+            <b>{t("NAS 저장 결과 확인 필요 · {0}건", pending.length)}</b>
             <p>
-              Note Station에서 저장 결과를 직접 확인한 후 보류를 해제하세요.
+              {t("Note Station에서 저장 결과를 직접 확인한 후 보류를 해제하세요.")}
             </p>
             {pending.map((op) => (
               <button
@@ -2179,7 +2203,7 @@ export function Workspace({
                 }
                 onClick={() => void acknowledge(op)}
               >
-                {op.title} · NAS 확인 후 보류 해제
+                {op.title}{" "}{t("· NAS 확인 후 보류 해제")}
               </button>
             ))}
           </div>
@@ -2200,7 +2224,7 @@ export function Workspace({
           id="workspace-sidebar"
           className="native-sidebar"
           data-mobile-unfiled={selectedShelf === "" ? "" : undefined}
-          aria-label="책장 및 메모장"
+          aria-label={t("책장 및 메모장")}
         >
           <div className="sidebar-scroll">
             <button
@@ -2208,37 +2232,37 @@ export function Workspace({
               onClick={() => selectFilter(window.matchMedia?.("(max-width: 800px)").matches ? "all" : undefined)}
             >
               <FileText size={16} />
-              <span>전체 노트</span>
+              <span>{t("전체 노트")}</span>
             </button>
             <button
               className={`native-nav mobile-shelves-only ${route.filter === "favorites" ? "selected" : ""}`}
               onClick={() => selectFilter("favorites")}
             >
               <Star size={16} />
-              <span>즐겨찾기</span>
+              <span>{t("즐겨찾기")}</span>
             </button>
             <button
               className={`native-nav mobile-shelves-only ${route.filter === "graph" ? "selected" : ""}`}
               onClick={() => selectFilter("graph")}
             >
               <Network size={16} />
-              <span>전체 그래프</span>
+              <span>{t("전체 그래프")}</span>
             </button>
-            <div className="sidebar-section mobile-shelves-only">책장 · 메모장</div>
-            <div className="sidebar-create-actions mobile-shelves-only" role="group" aria-label="책장 및 노트북 추가">
+            <div className="sidebar-section mobile-shelves-only">{t("책장 · 메모장")}</div>
+            <div className="sidebar-create-actions mobile-shelves-only" role="group" aria-label={t("책장 및 노트북 추가")}>
             <button
               className="sidebar-create-button"
               disabled={saving}
               onClick={() =>
                 setDialogAction({
                   request: { kind: "stack", action: "create" },
-                  title: "새 책장 만들기",
+                  title: t("새 책장 만들기"),
                   mode: "createStack",
                 })
               }
             >
               <FolderPlus size={16} />
-              <span>책장 만들기</span>
+              <span>{t("책장 만들기")}</span>
             </button>
             <button
               className="sidebar-create-button"
@@ -2246,13 +2270,13 @@ export function Workspace({
               onClick={() =>
                 setDialogAction({
                   request: { kind: "notebook", action: "create" },
-                  title: "메모장 추가",
+                  title: t("메모장 추가"),
                   mode: "name",
                 })
               }
             >
               <BookPlus size={16} />
-              <span>노트북 추가</span>
+              <span>{t("노트북 추가")}</span>
             </button>
             </div>
             {shelves.filter(Boolean).map((stack) => (
@@ -2276,7 +2300,7 @@ export function Workspace({
                 >
                   <button
                     className="disclosure"
-                    aria-label={`${stack} 책장 ${expandedStacks.includes(stack) ? "접기" : "펼치기"}`}
+                    aria-label={expandedStacks.includes(stack) ? t("{0} 책장 접기", stack) : t("{0} 책장 펼치기", stack)}
                     aria-expanded={expandedStacks.includes(stack)}
                     onClick={() => toggleStack(stack)}
                   >
@@ -2307,7 +2331,7 @@ export function Workspace({
                     {notebooks
                       .filter((b) => b.stack === stack)
                       .sort((a, b) =>
-                        a.name.localeCompare(b.name, "ko", { numeric: true }),
+                        a.name.localeCompare(b.name, currentLanguage(), { numeric: true }),
                       )
                       .map(renderNotebook)}
                   </div>
@@ -2317,22 +2341,22 @@ export function Workspace({
             <button className="native-nav mobile-only mobile-shelves-only" onClick={() =>
               void navigate({shelf:"",notebook:null,note:null,compose:false})}>
               <FolderOpen size={16} />
-              <span>책장 밖 메모장</span>
+              <span>{t("책장 밖 메모장")}</span>
             </button>
             <div className="unfiled-notebooks">
               <div className="sidebar-subheading">
                 <FolderOpen size={14} />
-                책장 밖 메모장
+                {t("책장 밖 메모장")}
               </div>
               {notebooks.filter(book => !book.stack).sort((a, b) =>
-                a.name.localeCompare(b.name, "ko", {numeric:true})).map(renderNotebook)}
+                a.name.localeCompare(b.name, currentLanguage(), {numeric:true})).map(renderNotebook)}
             </div>
             {mobilePage === "notebooks" && !listLoading && !notebooks.some(book => (book.stack || "") === selectedShelf) &&
-              <p className="sidebar-status mobile-only">이 책장에 메모장이 없습니다.</p>}
-            {listLoading && <p className="sidebar-status">불러오는 중…</p>}
+              <p className="sidebar-status mobile-only">{t("이 책장에 메모장이 없습니다.")}</p>}
+            {listLoading && <p className="sidebar-status">{t("불러오는 중…")}</p>}
             {!!tags.length && (
               <>
-                <div className="sidebar-section mobile-shelves-only">태그</div>
+                <div className="sidebar-section mobile-shelves-only">{t("태그")}</div>
                 {tags.map((tag) => (
                   <button
                     key={tag}
@@ -2350,18 +2374,17 @@ export function Workspace({
               onClick={() => selectFilter("trash")}
             >
               <Trash2 size={16} />
-              <span>휴지통</span>
+              <span>{t("휴지통")}</span>
             </button>
           </div>
           <div className="account-footer">
-            <ServerIcon />
             <div>
               <b>{session.username}</b>
-              <p>NAS 연결 · 조회 가능</p>
+              <p>{nasConnected ? t("NAS 연결 · 조회 가능") : t("NAS 연결 안 됨")}</p>
             </div>
             <button
               className="icon-button"
-              aria-label="설정"
+              aria-label={t("설정")}
               aria-haspopup="dialog"
               aria-expanded={showSettings}
               onClick={() => setShowSettings(true)}
@@ -2370,62 +2393,62 @@ export function Workspace({
             </button>
           </div>
         </aside>
-        <section id="workspace-note-list" className="native-list" aria-label="노트 목록">
+        <section id="workspace-note-list" className="native-list" aria-label={t("노트 목록")}>
           {route.filter === "graph" ? <GraphNavigationPanel notebooks={notebooks} onOpenNote={(id) => navigate({shelf:null,notebook:null,note:id,compose:false})} /> : <>
           <div className="list-controls">
             <label className="native-search">
               <Search size={15} />
               <input
                 id="library-search"
-                aria-label="노트 검색"
-                placeholder="노트 검색"
+                aria-label={t("노트 검색")}
+                placeholder={t("노트 검색")}
                 value={query}
                 onChange={(e) => changeQuery(e.target.value)}
               />
               {query && (
-                <button aria-label="검색 지우기" onClick={() => changeQuery("")}>
+                <button aria-label={t("검색 지우기")} onClick={() => changeQuery("")}>
                   <X size={13} />
                 </button>
               )}
             </label>
             <div className="list-sort">
               <select
-                aria-label="노트 정렬 기준"
+                aria-label={t("노트 정렬 기준")}
                 value={sortField}
                 onChange={(e) => {
                   setSortField(e.target.value as SortField);
                   savePreference("noteListSortField", e.target.value);
                 }}
               >
-                <option value="title">제목</option>
-                <option value="createdAt">추가 날짜</option>
-                <option value="modifiedAt">수정 날짜</option>
+                <option value="title">{t("제목")}</option>
+                <option value="createdAt">{t("추가 날짜")}</option>
+                <option value="modifiedAt">{t("수정 날짜")}</option>
               </select>
               <select
-                aria-label="노트 정렬 방향"
+                aria-label={t("노트 정렬 방향")}
                 value={sortDirection}
                 onChange={(e) => {
                   setSortDirection(e.target.value as SortDirection);
                   savePreference("noteListSortDirection", e.target.value);
                 }}
               >
-                <option value="ascending">오름차순</option>
-                <option value="descending">내림차순</option>
+                <option value="ascending">{t("오름차순")}</option>
+                <option value="descending">{t("내림차순")}</option>
               </select>
             </div>
           </div>
           {listError && (
             <div role="alert" className="workspace-alert error">
               {listError}
-              <button onClick={() => void loadLists()}>재시도</button>
+              <button onClick={() => void loadLists()}>{t("재시도")}</button>
             </div>
           )}
           <div className="list-scroll">
             {listLoading ? (
-              <p className="empty-list">노트를 불러오는 중…</p>
+              <p className="empty-list">{t("노트를 불러오는 중…")}</p>
             ) : !visibleNotes.length ? (
               <p className="empty-list">
-                {query ? "검색 결과 없음" : "노트가 없습니다"}
+                {query ? t("검색 결과 없음") : t("노트가 없습니다")}
               </p>
             ) : (
               visibleNotes.map((note) => (
@@ -2438,7 +2461,7 @@ export function Workspace({
                 >
                   <div className="note-row-title">
                     {note.favorite && <Star size={12} />}
-                    <b>{note.title || "제목 없음"}</b>
+                    <b>{note.title || t("제목 없음")}</b>
                     {noteHasMarkdown(note) && (
                       <span className="md-badge">MD</span>
                     )}
@@ -2446,18 +2469,18 @@ export function Workspace({
                   <p className="note-excerpt">
                     {note.excerpt?.replace(/<[^>]*>/g, "") ||
                       notebookById.get(note.notebook_id)?.name ||
-                      "원본 서식 문서"}
+                      t("원본 서식 문서")}
                   </p>
                   <small>
                     {sortField === "createdAt"
-                      ? `추가${note.created_at ? "" : "일 없음 · 수정"}: `
+                      ? (note.created_at ? t("추가:") : t("추가일 없음 · 수정:")) + " "
                       : ""}
                     {dateLabel(
                       sortField === "createdAt"
                         ? (note.created_at ?? note.modified_at)
                         : note.modified_at,
                     )}
-                    {note.locked ? " · 암호화" : ""}
+                    {note.locked ? " " + t("· 암호화") : ""}
                   </small>
                 </button>
               ))
@@ -2465,11 +2488,11 @@ export function Workspace({
           </div>
           </>}
           <footer className="native-status">
-            {route.filter !== "graph" && <span>{visibleNotes.length}개의 노트</span>}
+            {route.filter !== "graph" && <span>{t("{0}개의 노트", visibleNotes.length)}</span>}
             <GraphIndexStatus />
           </footer>
         </section>
-        <main className="native-detail" aria-label="노트 본문"
+        <main className="native-detail" aria-label={t("노트 본문")}
           inert={savingAction === "import" || savingAction === "note-action"}>
           {route.filter === "graph" ? (
             <NoteGraph
@@ -2486,13 +2509,13 @@ export function Workspace({
           ) : !activeKey ? (
             <div className="native-empty">
               <AppIcon size={40} />
-              <h2>노트를 선택하세요</h2>
-              <p>책장과 메모장에서 노트를 선택하세요.</p>
+              <h2>{t("노트를 선택하세요")}</h2>
+              <p>{t("책장과 메모장에서 노트를 선택하세요.")}</p>
             </div>
           ) : noteLoading ? (
             <div className="native-empty">
               <RefreshCw size={24} className="animate-spin" />
-              <p>NAS에서 본문 가져오는 중…</p>
+              <p>{t("NAS에서 본문 가져오는 중…")}</p>
             </div>
           ) : (
             <>
@@ -2502,23 +2525,23 @@ export function Workspace({
                     <input
                       id="note-title"
                       readOnly={!editing}
-                      aria-label="노트 제목"
+                      aria-label={t("노트 제목")}
                       required
                       maxLength={256}
                       value={draft.title}
-                      placeholder="제목"
+                      placeholder={t("제목")}
                       onChange={(e) =>
                         changeActiveDraft(current => ({ ...current, title: e.target.value }))
                       }
                     />
                   ) : (
-                    <h1>{detail?.title || "제목 없음"}</h1>
+                    <h1>{detail?.title || t("제목 없음")}</h1>
                   )}
                   <div className="editor-tools">
                     {editing && draft?.markdown !== undefined && (
                       <button
                         className="icon-button"
-                        aria-label="노트 연결"
+                        aria-label={t("노트 연결")}
                         disabled={saving || displayedMode === "read"}
                         onClick={() => setShowLinkPicker(true)}
                       >
@@ -2531,8 +2554,8 @@ export function Workspace({
                           className="icon-button"
                           aria-label={
                             selectedSummary?.favorite
-                              ? "즐겨찾기 해제"
-                              : "즐겨찾기"
+                              ? t("즐겨찾기 해제")
+                              : t("즐겨찾기")
                           }
                           disabled={saving || dirty}
                           onClick={() =>
@@ -2557,7 +2580,7 @@ export function Workspace({
                         <details className="editor-menu">
                           <summary
                             className="icon-button"
-                            aria-label="노트 작업"
+                            aria-label={t("노트 작업")}
                           >
                             ···
                           </summary>
@@ -2572,13 +2595,13 @@ export function Workspace({
                                     action: "move",
                                     version: detail.version,
                                   },
-                                  title: "노트 이동",
+                                  title: t("노트 이동"),
                                   mode: "notebook",
                                   initial: detail.notebook_id,
                                 })
                               }
                             >
-                              다른 메모장으로 이동…
+                              {t("다른 메모장으로 이동…")}
                             </button>
                             <button
                               disabled={saving || dirty}
@@ -2590,7 +2613,7 @@ export function Workspace({
                                     action: "tags",
                                     version: detail.version,
                                   },
-                                  title: "태그 편집",
+                                  title: t("태그 편집"),
                                   mode: "tags",
                                   initial: (
                                     detail.tags ??
@@ -2600,17 +2623,17 @@ export function Workspace({
                                 })
                               }
                             >
-                              태그 편집…
+                              {t("태그 편집…")}
                             </button>
-                            <button onClick={exportNote}>내보내기…</button>
+                            <button onClick={exportNote}>{t("내보내기…")}</button>
                             <button
                               disabled={saving || dirty}
                               onClick={() => {
                                 if (
                                   window.confirm(
                                     detail.trashed
-                                      ? "이 노트를 복원할까요?"
-                                      : "이 노트를 휴지통으로 이동할까요?",
+                                      ? t("이 노트를 복원할까요?")
+                                      : t("이 노트를 휴지통으로 이동할까요?"),
                                   )
                                 )
                                   void libraryAction({
@@ -2623,7 +2646,7 @@ export function Workspace({
                                   }).catch(() => {});
                               }}
                             >
-                              {detail.trashed ? "복원" : "휴지통으로 이동"}
+                              {detail.trashed ? t("복원") : t("휴지통으로 이동")}
                             </button>
                           </div>
                         </details>
@@ -2636,7 +2659,7 @@ export function Workspace({
                   <BookOpenText size={12} />
                   {notebookById.get(
                     draft?.notebook_id ?? detail?.notebook_id ?? "",
-                  )?.name ?? "내 노트"}
+                  )?.name ?? t("내 노트")}
                   {detail?.tags?.length
                     ? " · " + detail.tags.map((t) => "#" + t).join(" ")
                     : ""}
@@ -2645,7 +2668,7 @@ export function Workspace({
               {noteError && (
                 <div className="workspace-alert error" role="alert">
                   {noteError}
-                  {saveFailure === "safe" && <button className="native-button" onClick={() => { setSaveFailure(null); setNoteError(""); }}>자동 저장 다시 시도</button>}
+                  {saveFailure === "safe" && <button className="native-button" onClick={() => { setSaveFailure(null); setNoteError(""); }}>{t("자동 저장 다시 시도")}</button>}
                 </div>
               )}
               {noteActionNotice && <div className="workspace-alert" role="status">{noteActionNotice}</div>}
@@ -2655,63 +2678,63 @@ export function Workspace({
                 !detail.html_text_preview && (
                   <div className="workspace-alert warning">
                     <ShieldAlert size={15} />
-                    {readOnlyReasons[detail.read_only_reason ?? ""] ??
-                      "이 문서는 읽기 전용입니다."}
+                    {t(detail.read_only_reason && Object.hasOwn(readOnlyReasons, detail.read_only_reason)
+                      ? readOnlyReasons[detail.read_only_reason] : "이 문서는 읽기 전용입니다.")}
                   </div>
                 )}
               {savingAction !== "note" && route.compose && draft?.review_required && (
                 <div className="workspace-alert warning">
                   <div>
-                    <b>새 노트 저장 결과 확인 필요</b>
-                    <p>상태: {createReceipt?.status ?? "조회 필요"}. 자동 재전송하지 않습니다. 초안을 보관한 채 다른 화면으로 이동할 수 있습니다.</p>
-                    <button className="native-button" onClick={() => activeDraftKey && void recoverCreate(draft, activeDraftKey)}>생성 결과 다시 조회</button>
-                    {["reviewed", "absent"].includes(createReceipt?.status ?? "") && <button className="native-button" onClick={restartReviewedCreate}>초안 보관하고 별도 노트 생성</button>}
+                    <b>{t("새 노트 저장 결과 확인 필요")}</b>
+                    <p>{t("상태: {0}. 자동 재전송하지 않습니다. 초안을 보관한 채 다른 화면으로 이동할 수 있습니다.", createStatus(createReceipt?.status))}</p>
+                    <button className="native-button" onClick={() => activeDraftKey && void recoverCreate(draft, activeDraftKey)}>{t("생성 결과 다시 조회")}</button>
+                    {["reviewed", "absent"].includes(createReceipt?.status ?? "") && <button className="native-button" onClick={restartReviewedCreate}>{t("초안 보관하고 별도 노트 생성")}</button>}
                   </div>
                 </div>
               )}
               {savingAction !== "note" && !route.compose && draft?.review_required && !recoveredDetail && (
                 <div className="workspace-alert warning">
-                  NAS 확인본을 읽기 전까지 자동 저장을 중단합니다.
-                  <button className="native-button" onClick={() => void reviewAcknowledged()}>NAS 확인본 다시 불러오기</button>
+                  {t("NAS 확인본을 읽기 전까지 자동 저장을 중단합니다.")}
+                  <button className="native-button" onClick={() => void reviewAcknowledged()}>{t("NAS 확인본 다시 불러오기")}</button>
                 </div>
               )}
               {recoveredDetail && draft && (
                 <div className="workspace-alert warning">
                   <div>
-                    <b>확인한 NAS 결과와 보관한 편집본을 검토하세요</b>
-                    <p>자동 재전송하지 않습니다. 편집본은 이동·로그아웃 후에도 이 탭에 보관됩니다.</p>
+                    <b>{t("확인한 NAS 결과와 보관한 편집본을 검토하세요")}</b>
+                    <p>{t("자동 재전송하지 않습니다. 편집본은 이동·로그아웃 후에도 이 탭에 보관됩니다.")}</p>
                     <strong>{recoveredDetail.title}</strong>
                     {!draft.recovery_acknowledged && <button className="native-button" onClick={() => {
                       const operation = pending.find(operation => operation.note_id === route.note);
                       if (operation) { void acknowledge(operation); return; }
-                      if (!window.confirm("NAS에서 현재 저장 결과를 확인했나요? 편집본을 보관하고 자동 재전송하지 않습니다.")) return;
+                      if (!window.confirm(t("NAS에서 현재 저장 결과를 확인했나요? 편집본을 보관하고 자동 재전송하지 않습니다."))) return;
                       acknowledgeDraft();
-                    }}>NAS 결과 확인하고 편집본 보관</button>}
+                    }}>{t("NAS 결과 확인하고 편집본 보관")}</button>}
                     <div className="conflict-columns">
                       <pre>{recoveredDetail.markdown ?? recoveredDetail.html}</pre>
                       <pre>{draft.title}{"\n"}{reviewDraftBody}</pre>
                     </div>
                     {draft.recovery_acknowledged && (
                       editableRecovery(recoveredDetail, draft) ?
-                        <button className="native-button" onClick={() => void resumeReviewedNote()}>보관한 편집본으로 계속</button> :
+                        <button className="native-button" onClick={() => void resumeReviewedNote()}>{t("보관한 편집본으로 계속")}</button> :
                         draft.markdown !== undefined ?
-                          <button className="native-button" onClick={copyReviewedNote}>보관한 본문으로 별도 노트 작성</button> :
+                          <button className="native-button" onClick={copyReviewedNote}>{t("보관한 본문으로 별도 노트 작성")}</button> :
                           draft.text_changes !== undefined && recoveredDetail.html_text_layout &&
-                          <p>NAS 본문이 바뀌어 보관한 편집 위치를 확인할 수 없습니다. 위의 두 본문을 비교해 주세요.</p>
+                          <p>{t("NAS 본문이 바뀌어 보관한 편집 위치를 확인할 수 없습니다. 위의 두 본문을 비교해 주세요.")}</p>
                     )}
                     <button className="native-button" disabled={writeInProgress(recoveredDetail)} onClick={() => {
-                      if (!window.confirm("보관한 편집본을 버리고 확인한 NAS 내용을 사용할까요?")) return;
+                      if (!window.confirm(t("보관한 편집본을 버리고 확인한 NAS 내용을 사용할까요?"))) return;
                       if (activeDraftKey) draftDelete(activeDraftKey);
                       setDraft(null); setEditing(false); setRecoveredDetail(null); setCompare(null);
                       setRevision(value => value + 1);
-                    }}>편집본 버리고 NAS 확인본 사용</button>
+                    }}>{t("편집본 버리고 NAS 확인본 사용")}</button>
                   </div>
                 </div>
               )}
               {draft?.resume_paused && !draft.review_required && (
                 <div className="workspace-alert warning">
-                  편집본과 첨부를 확인한 뒤 저장하세요. 자동 저장이 일시 중지되었습니다.
-                  {unresolvedRecoveryLinks && <p>해결되지 않은 첨부 링크가 남아 있습니다. 링크를 수정하거나 파일을 다시 선택하세요.</p>}
+                  {t("편집본과 첨부를 확인한 뒤 저장하세요. 자동 저장이 일시 중지되었습니다.")}
+                  {unresolvedRecoveryLinks && <p>{t("해결되지 않은 첨부 링크가 남아 있습니다. 링크를 수정하거나 파일을 다시 선택하세요.")}</p>}
                   <button className="native-button" disabled={saving || composing || attachmentsBlocked || unresolvedRecoveryLinks || !editing}
                     onClick={() => {
                       if (!route.compose && !dirty) {
@@ -2719,14 +2742,14 @@ export function Workspace({
                         return;
                       }
                       void save(true);
-                    }}>편집본 저장하고 자동 저장 재개</button>
+                    }}>{t("편집본 저장하고 자동 저장 재개")}</button>
                 </div>
               )}
               {compare && !recoveredDetail && draft && (
                 <div className="workspace-alert warning">
                   <div>
-                    <b>버전 충돌 · 로컬 편집본을 유지했습니다</b>
-                    <p>NAS 버전 {compare.version}</p>
+                    <b>{t("버전 충돌 · 로컬 편집본을 유지했습니다")}</b>
+                    <p>{t("NAS 버전")}{" "}{compare.version}</p>
                     <div className="conflict-columns">
                       <pre>{compare.markdown ?? compare.html}</pre>
                       <pre>{draft.markdown ?? draft.html}</pre>
@@ -2736,7 +2759,7 @@ export function Workspace({
                       onClick={() => {
                         if (
                           window.confirm(
-                            "로컬 편집 내용을 삭제하고 NAS 최신 버전을 열까요?",
+                            t("로컬 편집 내용을 삭제하고 NAS 최신 버전을 열까요?"),
                           )
                         ) {
                           if (activeDraftKey) draftDelete(activeDraftKey);
@@ -2747,7 +2770,7 @@ export function Workspace({
                         }
                       }}
                     >
-                      로컬 편집 포기하고 NAS 최신 버전 열기
+                      {t("로컬 편집 포기하고 NAS 최신 버전 열기")}
                     </button>
                   </div>
                 </div>
@@ -2755,8 +2778,8 @@ export function Workspace({
               {detail?.locked ? (
                 <div className="native-empty">
                   <ShieldAlert size={30} />
-                  <h2>암호화된 노트</h2>
-                  <p>공식 앱에서 열어 주세요.</p>
+                  <h2>{t("암호화된 노트")}</h2>
+                  <p>{t("공식 앱에서 열어 주세요.")}</p>
                 </div>
               ) : (
                 <div className={`editor-panes mode-${displayedMode}`}>
@@ -2766,11 +2789,11 @@ export function Workspace({
                         <Code size={13} />
                         {previewMarkdown !== undefined
                           ? "MARKDOWN"
-                          : "HTML 원문"}
+                          : t("HTML 원문")}
                         {canAttach && <>
                           <button type="button" className="native-button attachment-picker"
-                            onClick={() => attachmentInput.current?.click()}><Paperclip size={13} /> 파일 추가…</button>
-                          <input hidden ref={attachmentInput} type="file" multiple aria-label="첨부할 파일 선택"
+                            onClick={() => attachmentInput.current?.click()}><Paperclip size={13} />{" "}{t("파일 추가…")}</button>
+                          <input hidden ref={attachmentInput} type="file" multiple aria-label={t("첨부할 파일 선택")}
                             onChange={event => {
                               const view = editorRef.current?.view;
                               acceptFiles.current(Array.from(event.currentTarget.files ?? []), view?.state.selection.main.head ?? 0);
@@ -2782,7 +2805,7 @@ export function Workspace({
                       draft?.text_changes !== undefined ? (
                         <>
                         {canAttachFormatted && <input hidden ref={attachmentInput} type="file" multiple
-                          aria-label="첨부할 파일 선택" onChange={event=>{
+                          aria-label={t("첨부할 파일 선택")} onChange={event=>{
                             acceptFiles.current(Array.from(event.currentTarget.files ?? []),0);
                             event.currentTarget.value="";
                           }}/>}
@@ -2798,9 +2821,9 @@ export function Workspace({
                           onAttach={canAttachFormatted ? () => attachmentInput.current?.click() : undefined}
                           attachmentPath={bodyAttachmentPath}
                           canUndo={!!currentHistory?.undo.length || !!draft.text_changes.length ||
-                            (draft.title.trim() || "제목 없음") !== formattedTip(detail,draft).title}
+                            !matchesDraftTitle(draft.title, formattedTip(detail,draft).title)}
                           canRedo={!!currentHistory?.redo.length && !draft.text_changes.length &&
-                            (draft.title.trim() || "제목 없음") === formattedTip(detail,draft).title}
+                            matchesDraftTitle(draft.title, formattedTip(detail,draft).title)}
                           onUndo={() => queueNoteAction({historyDirection: "undo"})}
                           onRedo={() => queueNoteAction({historyDirection: "redo"})}
                           onStructureEdit={(edit) => queueNoteAction({structureEdit: edit})}
@@ -2817,7 +2840,6 @@ export function Workspace({
                       ) : previewMarkdown !== undefined ? (
                         <CodeMirror
                           ref={editorRef}
-                          aria-label="Markdown 본문"
                           value={previewMarkdown}
                           extensions={markdownExtensions}
                           theme={dark ? "dark" : "light"}
@@ -2845,7 +2867,7 @@ export function Workspace({
                       ) : (
                         <textarea
                           id="note-html"
-                          aria-label="HTML 본문"
+                          aria-label={t("HTML 본문")}
                           value={previewHtml}
                           spellCheck={false}
                           readOnly={!editing}
@@ -2862,7 +2884,7 @@ export function Workspace({
                       {viewMode === "split" && (
                         <div className="pane-label">
                           <Eye size={13} />
-                          미리보기
+                          {t("미리보기")}
                         </div>
                       )}
                       <NotePreview
@@ -2893,56 +2915,50 @@ export function Workspace({
                   patchUpload(uploads.id, id, row => ({...row, phase: "checking", error: undefined}))} /> : null}
               <footer className="native-status editor-status">
                 <span>
-                  {saveFailure ? "자동 저장 중단 · 편집본 보관됨" : saving ? "NAS에 자동 저장 중…"
-                    : draft?.resume_paused ? "자동 저장 일시 중지"
-                    : attachmentsBlocked ? "첨부파일 처리 대기 중…" : dirty ? "자동 저장 대기 중…" : route.compose ? "새 노트 작성 중" : "✓ NAS에 자동 저장됨"}
+                  {saveFailure ? t("자동 저장 중단 · 편집본 보관됨") : saving ? t("NAS에 자동 저장 중…")
+                    : draft?.resume_paused ? t("자동 저장 일시 중지")
+                    : attachmentsBlocked ? t("첨부파일 처리 대기 중…") : dirty ? t("자동 저장 대기 중…") : route.compose ? t("새 노트 작성 중") : t("✓ NAS에 자동 저장됨")}
                 </span>
                 <span>
-                  {
-                    (
-                      draft?.markdown ??
-                      draft?.html ??
-                      detail?.markdown ??
-                      detail?.html ??
-                      ""
-                    ).length
-                  }
-                  자 · 버전 {detail?.version ?? "새 노트"}
+                  {t("{0}자 · 버전 {1}",
+                    (draft?.markdown ?? draft?.html ?? detail?.markdown ?? detail?.html ?? "").length,
+                    detail?.version ?? t("새 노트"),
+                  )}
                 </span>
               </footer>
             </>
           )}
         </main>
         {inspector && (
-          <aside className="native-inspector" aria-label="노트 정보">
-            <h3>노트 정보</h3>
+          <aside className="native-inspector" aria-label={t("노트 정보")}>
+            <h3>{t("노트 정보")}</h3>
             <div className="inspector-card">
               <p>
-                수정 <span>{dateLabel(detail?.modified_at)}</span>
+                {t("수정")}{" "}<span>{dateLabel(detail?.modified_at)}</span>
               </p>
               <p>
-                추가 <span>{dateLabel(detail?.created_at)}</span>
+                {t("추가")}{" "}<span>{dateLabel(detail?.created_at)}</span>
               </p>
               <p>
-                변경 번호 <span>{detail?.version ?? "—"}</span>
+                {t("변경 번호")}{" "}<span>{detail?.version ?? "—"}</span>
               </p>
               <p>
-                NAS 메모장{" "}
+                {t("NAS 메모장")}{" "}
                 <span>
                   {notebookById.get(detail?.notebook_id ?? "")?.name ?? "—"}
                 </span>
               </p>
               <p>
-                서버 ID <span>{detail?.id ?? "—"}</span>
+                {t("서버 ID")}{" "}<span>{detail?.id ?? "—"}</span>
               </p>
             </div>
-            <h3>태그</h3>
+            <h3>{t("태그")}</h3>
             <div className="inspector-card">
-              {detail?.tags?.join(" · ") || "태그 없음"}
+              {detail?.tags?.join(" · ") || t("태그 없음")}
             </div>
             {detail && !detail.locked && !detail.trashed && <button className="native-button"
-              onClick={() => setRevisionNoteId(detail.id)}>수정 이력 조회</button>}
-            <h3>첨부파일</h3>
+              onClick={() => setRevisionNoteId(detail.id)}>{t("수정 이력 조회")}</button>}
+            <h3>{t("첨부파일")}</h3>
             <div className="inspector-card">
               {detail?.attachments.length
                 ? detail.attachments.map((file) => {
@@ -2954,17 +2970,17 @@ export function Workspace({
                         download={file.name}><Paperclip size={14} />{file.name}</a>
                       {!protectedFile && !detail.locked && !detail.trashed && !writeInProgress(detail) &&
                         (detail.editable || detail.html_text_preview) && <button className="icon-button"
-                          type="button" aria-label={`${file.name} 제거`} title="첨부파일 제거"
+                          type="button" aria-label={t("{0} 제거", file.name)} title={t("첨부파일 제거")}
                           disabled={saving || dirty || hasStagedUploads || draft?.review_required || draft?.resume_paused}
                           onClick={() => {
-                            if (window.confirm(`‘${file.name}’ 파일을 NAS 노트에서 제거할까요?`))
+                            if (window.confirm(t("‘{0}’ 파일을 NAS 노트에서 제거할까요?", file.name)))
                               void applyNoteAction({remove_attachment_id:file.id});
                           }}><Trash2 size={14}/></button>}
                     </div>;
                   })
-                : "첨부파일 없음"}
+                : t("첨부파일 없음")}
             </div>
-            <h3>로컬 그래프 · 백링크</h3>
+            <h3>{t("로컬 그래프 · 백링크")}</h3>
             {showLocalGraph && detail ? (
               <div style={{ height: 420 }}>
                 <NoteGraph
@@ -2987,17 +3003,18 @@ export function Workspace({
                 disabled={!detail}
                 onClick={() => setShowLocalGraph(true)}
               >
-                연결 확인
+                {t("연결 확인")}
               </button>
             )}
-            <h3>화면</h3>
-            <button className="native-button" onClick={() => setShowSettings(true)}>화면·편집기 설정…</button>
+            <h3>{t("화면")}</h3>
+            <button className="native-button" onClick={() => setShowSettings(true)}>{t("화면·편집기 설정…")}</button>
             <p className="inspector-help">
-              원문과 미리보기는 같은 노트 내용을 표시합니다.
+              {t("원문과 미리보기는 같은 노트 내용을 표시합니다.")}
             </p>
           </aside>
         )}
       </div>
+      <NasConnectionStatus connected={nasConnected} />
       {contextMenu && (
         <div
           className="native-context-menu"
@@ -3018,8 +3035,8 @@ export function Workspace({
                 },
                 title:
                   contextMenu.kind === "stack"
-                    ? "책장 이름 변경"
-                    : "메모장 이름 변경",
+                    ? t("책장 이름 변경")
+                    : t("메모장 이름 변경"),
                 mode: "name",
                 initial:
                   contextMenu.kind === "stack"
@@ -3029,7 +3046,7 @@ export function Workspace({
               setContextMenu(null);
             }}
           >
-            이름 변경…
+            {t("이름 변경…")}
           </button>
           {contextMenu.kind === "notebook" && (
             <button
@@ -3040,31 +3057,31 @@ export function Workspace({
                     id: contextMenu.id,
                     action: "move",
                   },
-                  title: "책장으로 이동",
+                  title: t("책장으로 이동"),
                   mode: "stack",
                   initial: notebookById.get(contextMenu.id)?.stack,
                 });
                 setContextMenu(null);
               }}
             >
-              책장으로 이동…
+              {t("책장으로 이동…")}
             </button>
           )}
           <button
             onClick={() => {
-              const label = contextMenu.kind === "stack" ? "책장" : "메모장";
+              const label = contextMenu.kind === "stack" ? t("책장") : t("메모장");
               const name = contextMenu.kind === "stack" ? contextMenu.id : notebookById.get(contextMenu.id)?.name;
               setDialogAction({
                 request: {kind: contextMenu.kind, id: contextMenu.id, action: "delete"},
-                title: name ? `‘${name}’ ${label}을 삭제할까요?` : `${label}을 삭제할까요?`,
+                title: name ? t("‘{0}’ {1}을 삭제할까요?", name, label) : t("{0}을 삭제할까요?", label),
                 mode: "delete",
               });
               setContextMenu(null);
             }}
           >
-            {contextMenu.kind === "stack" ? "책장 삭제…" : "메모장 삭제…"}
+            {contextMenu.kind === "stack" ? t("책장 삭제…") : t("메모장 삭제…")}
           </button>
-          <button onClick={() => setContextMenu(null)}>닫기</button>
+          <button onClick={() => setContextMenu(null)}>{t("닫기")}</button>
         </div>
       )}
       {showLinkPicker && (
@@ -3115,7 +3132,4 @@ export function Workspace({
     </GraphNavigationProvider>
     </GraphIndexProvider>
   );
-}
-function ServerIcon() {
-  return <FolderOpen size={18} />;
 }

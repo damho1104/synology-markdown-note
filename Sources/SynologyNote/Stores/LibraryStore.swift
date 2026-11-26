@@ -24,12 +24,13 @@ final class LibraryStore {
     var noteGraph = NoteGraph()
     var errorMessage: String?
     var stackSuccessMessage: String?
-    var connectionStatus = "NAS 연결 안 됨"
+    var connectionStatus = appText("Disconnected from NAS")
     var isRefreshing = false
     var isConnected = false
     var profile: ConnectionProfile
     var connectionError: String?
     var loginStorageMessage: String?
+    var loginStorageIssue: LoginStorageIssue?
     var trustedDeviceRemembered = false
     @ObservationIgnored var credentialAccess = NASCredentialAccess.keychain
     @ObservationIgnored var clientFactory: @Sendable (URL, Bool) -> NoteStationClient = { NoteStationClient(baseURL: $0, allowsValidatedWrites: $1) }
@@ -37,7 +38,7 @@ final class LibraryStore {
     var deletingNotebookIDs: Set<String> = []
     var isManagingStacks = false
     var deletingNoteIDs: Set<UUID> = []
-    var uploadStatus = "NAS 연결 후 자동 동기화"
+    var uploadStatus = appText("Automatic Sync After NAS Connection")
     @ObservationIgnored var uploadTask: Task<Void, Never>?
     @ObservationIgnored var uploadLoop: Task<Void, Never>?
     @ObservationIgnored var syncCoordinator: SyncCoordinator?
@@ -65,7 +66,7 @@ final class LibraryStore {
     @ObservationIgnored var offlineTask: Task<Void, Never>?
     @ObservationIgnored var offlineRunID = UUID()
     var isCachingOffline = false
-    var offlineStatus = "오프라인 보관 준비"
+    var offlineStatus = appText("Preparing Offline Download")
     var offlineCompleted = 0
     var offlineTotal = 0
     var offlineFailures: [UUID: String] = [:]
@@ -78,9 +79,7 @@ final class LibraryStore {
     init() throws {
         let initialRoot = Self.storageRoot()
         // Isolated build/run verification must not restore the real NAS account.
-        let initialPreferences = ProcessInfo.processInfo.environment["SYNOLOGY_NOTE_DATA_DIR"] == nil
-            ? UserDefaults.standard
-            : UserDefaults(suiteName: "com.damho.SynologyMarkdown.verify." + initialRoot.lastPathComponent)!
+        let initialPreferences = NoteLocalization.preferences
         let initialProfile = ConnectionProfile.load(from: initialPreferences)
         root = initialRoot
         preferences = initialPreferences
@@ -126,17 +125,17 @@ final class LibraryStore {
         do { _ = try await repo.backupIfNeeded() }
         catch {
             if generation == accountGeneration {
-                errorMessage = "로컬 데이터베이스 자동 백업에 실패했습니다: \(error.localizedDescription)"
+                errorMessage = appText("Could not back up the local database automatically: %@", "\(error.localizedDescription)")
             }
         }
     }
 
     var canCreateNotes: Bool { !profile.server.isEmpty && notebooks.contains { isNASNotebook($0.id) && !deletingNotebookIDs.contains($0.id) } }
     func destinationNotebook(preferred: String? = nil) throws -> String {
-        guard !profile.server.isEmpty else { throw RepositoryError(message: "NAS 계정을 먼저 연결하세요.") }
+        guard !profile.server.isEmpty else { throw RepositoryError(message: appText("Connect a NAS account first.")) }
         if let preferred, isNASNotebook(preferred), !deletingNotebookIDs.contains(preferred) { return preferred }
         guard let book = notebooks.first(where: { isNASNotebook($0.id) && !deletingNotebookIDs.contains($0.id) }) else {
-            throw RepositoryError(message: "NAS에 연결하고 메모장을 만들어 주세요. 연결이 끊겨도 이미 가져온 NAS 메모장에는 계속 작성할 수 있습니다.")
+            throw RepositoryError(message: appText("Connect to the NAS and create a notebook. You can keep writing in a downloaded NAS notebook when offline."))
         }
         return book.id
     }
@@ -196,7 +195,7 @@ final class LibraryStore {
 
     func saveCurrentSearch(name: String) async {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { errorMessage = "스마트 메모장 이름을 입력하세요."; return }
+        guard !trimmed.isEmpty else { errorMessage = appText("Enter a name for the smart notebook."); return }
         do {
             try await repository.saveSearch(SavedSearch(name: trimmed, query: search, title: advancedTitle, tag: advancedTag,
                                                         notebookID: advancedNotebookID, modifiedAfter: advancedAfter, modifiedBefore: advancedBefore))
@@ -303,7 +302,7 @@ final class LibraryStore {
         }
         guard session.workspaceGeneration == accountGeneration, sessions[session.id] === session else { return nil }
         guard session.note.remoteID == nil || session.note.hasRemoteContent || session.note.mode == .locked else {
-            errorMessage = session.note.lastError ?? "NAS 본문을 가져온 뒤 다시 수정해 주세요."
+            errorMessage = session.note.lastError ?? appText("Download the note body from the NAS before editing.")
             return nil
         }
         return session
@@ -313,7 +312,8 @@ final class LibraryStore {
         let generation = accountGeneration
         do {
             let destination = try destinationNotebook(preferred: notebookID)
-            let note = try await repository.save(NoteRecord(notebookID: destination), enqueue: isNASNotebook(destination))
+            let note = try await repository.save(NoteRecord(title: appText("New Note"), notebookID: destination),
+                                                 enqueue: isNASNotebook(destination))
             guard generation == accountGeneration else { return nil }
             sessions[note.id] = EditorSession(note: note, workspaceGeneration: generation)
             applyLocalNote(note)
@@ -327,11 +327,11 @@ final class LibraryStore {
     func edit(_ session: EditorSession, registerUndo: Bool = false, mutate: (inout NoteRecord) -> Void) {
         guard session.workspaceGeneration == accountGeneration, sessions[session.id] === session else { return }
         guard session.note.remoteID == nil || session.note.hasRemoteContent || session.note.mode == .locked else {
-            errorMessage = "NAS 본문을 가져온 뒤 다시 수정해 주세요."
+            errorMessage = appText("Download the note body from the NAS before editing.")
             return
         }
         guard !deletingNoteIDs.contains(session.id) else { return }
-        guard !deletingNotebookIDs.contains(session.note.notebookID) else { errorMessage = "메모장 삭제가 끝날 때까지 잠시 기다려 주세요."; return }
+        guard !deletingNotebookIDs.contains(session.note.notebookID) else { errorMessage = appText("Wait for the notebook deletion to finish."); return }
         if registerUndo {
             let previous = session.note
             session.undoManager.registerUndo(withTarget: session) { [weak self] target in
@@ -384,7 +384,7 @@ final class LibraryStore {
     func convert(_ session: EditorSession) async {
         let html = session.note.originalHTML
         let converted = await Task.detached(priority: .userInitiated) { MarkdownPipeline.importHTML(html) }.value
-        guard converted.safeToEdit else { errorMessage = "안전하게 나눌 수 없는 서식이 있습니다. 원본 보기와 내보내기를 이용하세요."; return }
+        guard converted.safeToEdit else { errorMessage = appText("Some formatting cannot be separated safely. View or export the original instead."); return }
         session.note.markdown = converted.markdown; session.note.blocks = converted.blocks; session.note.mode = .markdown
         session.editGeneration += 1
         await save(session, enqueue: false)
@@ -411,7 +411,7 @@ final class LibraryStore {
     func keepLocalConflict(_ session: EditorSession) async {
         // Preserve the other side as its own local note before resolving the comparison.
         guard let html = session.note.conflictSnapshot?.html ?? session.note.conflictHTML else { return }
-        var copy = NoteRecord(title: session.note.title + " · 서버 사본", mode: .original)
+        var copy = NoteRecord(title: session.note.title + appText(" · Server Copy"), mode: .original)
         copy.originalHTML = html
         copy.attachments = session.note.conflictSnapshot?.attachments ?? []
         do {
@@ -436,7 +436,7 @@ final class LibraryStore {
     func addImage(to session: EditorSession, data: Data) async {
         let generation = accountGeneration, store = attachments
         do {
-            let attachment = try await store.importData(data, name: "붙여넣은 이미지.png")
+            let attachment = try await store.importData(data, name: appText("Pasted Image.png"))
             guard generation == accountGeneration, session.workspaceGeneration == generation else { return }
             insertAttachment(attachment, into: session)
         }

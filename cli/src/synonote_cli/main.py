@@ -32,7 +32,7 @@ def emit(action: str, value: dict, json_mode: bool) -> None:
 
 @app.command()
 def version(json_mode: bool = typer.Option(False, "--json")):
-    """CLI 버전과 Git 커밋을 표시합니다."""
+    """Show the CLI version and Git commit."""
     value = display_version()
     if json_mode:
         emit("version", {"status": "ok", "version": value}, True)
@@ -69,11 +69,11 @@ def login(server: str = typer.Option(...), username: str = typer.Option(...),
     if password_stdin:
         password = sys.stdin.readline().rstrip("\r\n")
     elif non_interactive or not sys.stdin.isatty():
-        raise CLIError("AUTH_REQUIRED", "비대화형 로그인에는 --password-stdin이 필요합니다.")
+        raise CLIError("AUTH_REQUIRED", "Non-interactive login requires --password-stdin.")
     else:
         password = getpass.getpass("NAS password: ")
     if not password:
-        raise CLIError("INVALID_ARGUMENT", "비밀번호가 비어 있습니다.")
+        raise CLIError("INVALID_ARGUMENT", "The password is empty.")
     try:
         result = auth.login(server, username, password, otp, remember)
     except CLIError as ex:
@@ -97,7 +97,7 @@ def auth_status(json_mode: bool = typer.Option(False, "--json")):
 @auth_app.command("set-server")
 def auth_set_server(server: str = typer.Option(..., "--server"),
                     json_mode: bool = typer.Option(False, "--json")):
-    """저장된 로그인을 유지하면서 같은 NAS의 접속 URL을 변경합니다."""
+    """Change the URL for the same NAS while keeping the saved login."""
     emit("auth.set-server", auth.set_server(server), json_mode)
 
 
@@ -197,9 +197,9 @@ def index_build(stack: str = typer.Option(..., "--stack"),
                 apply: bool = typer.Option(False, "--apply"),
                 dry_run: bool = typer.Option(False, "--dry-run"),
                 json_mode: bool = typer.Option(False, "--json")):
-    """일일 노트의 전체·프로젝트·주제·연관 지식 인덱스를 생성합니다 (기본 dry-run)."""
+    """Build indexes for daily notes by date, project, topic, and related knowledge (dry run by default)."""
     if apply and dry_run:
-        raise CLIError("INVALID_ARGUMENT", "--apply와 --dry-run은 함께 사용할 수 없습니다.")
+        raise CLIError("INVALID_ARGUMENT", "--apply and --dry-run cannot be used together.")
     execute("index.build", json_mode, lambda api: build_index(
         api, stack=stack, index_notebook=index_notebook, apply=apply,
         project_min_days=project_min_days))

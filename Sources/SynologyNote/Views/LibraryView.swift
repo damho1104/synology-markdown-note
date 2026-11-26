@@ -103,12 +103,12 @@ struct LibraryView: View {
                               onClose: { showingGlobalSearch = false })
         }
         .onChange(of: library.summaries.map(\.id)) { _, ids in if selection == nil { selection = rows.first?.id } else if let selection, !ids.contains(selection) { self.selection = rows.first?.id } }
-        .alert(library.errorMessage == nil ? "책장 이름 변경 완료" : "확인이 필요합니다",
+        .alert(library.errorMessage == nil ? appText("Stack Renamed") : appText("Review Required"),
                isPresented: Binding(
                 get: { library.errorMessage != nil || library.stackSuccessMessage != nil },
                 set: { if !$0 { library.errorMessage = nil; library.stackSuccessMessage = nil } }
                )) {
-            Button("확인") { library.errorMessage = nil; library.stackSuccessMessage = nil }
+            Button(appText("OK")) { library.errorMessage = nil; library.stackSuccessMessage = nil }
         } message: { Text(library.errorMessage ?? library.stackSuccessMessage ?? "") }
         .onReceive(NotificationCenter.default.publisher(for: .openNote), perform: handleOpenNote)
     }
@@ -122,56 +122,74 @@ struct LibraryView: View {
         } detail: {
             editorContent
         }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                Divider()
+                HStack(spacing: 6) {
+                    Spacer()
+                    Text("NAS").font(.caption2).foregroundStyle(.secondary)
+                    Circle()
+                        .fill(library.isConnected ? Color.green : Color.red)
+                        .frame(width: 8, height: 8)
+                }
+                .padding(.horizontal, 12)
+                .frame(height: 25)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(appText(library.isConnected ? "Connected to NAS" : "Disconnected from NAS"))
+                .help(library.connectionStatus)
+            }
+            .background(.bar)
+        }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
-                Button(action: goBack) { IconButtonLabel(title: "뒤로 가기", systemImage: "chevron.backward") }
+                Button(action: goBack) { IconButtonLabel(title: appText("Go Back"), systemImage: "chevron.backward") }
                     .disabled(!noteNavigation.canGoBack)
                     .keyboardShortcut("[", modifiers: .command)
-                    .help("뒤로 가기 (⌘[)")
-                Button(action: goForward) { IconButtonLabel(title: "앞으로 가기", systemImage: "chevron.forward") }
+                    .help(appText("Go Back (⌘[)"))
+                Button(action: goForward) { IconButtonLabel(title: appText("Go Forward"), systemImage: "chevron.forward") }
                     .disabled(!noteNavigation.canGoForward)
                     .keyboardShortcut("]", modifiers: .command)
-                    .help("앞으로 가기 (⌘])")
-                Button(action: newNote) { IconButtonLabel(title: "새 노트", systemImage: "square.and.pencil") }
+                    .help(appText("Go Forward (⌘])"))
+                Button(action: newNote) { IconButtonLabel(title: appText("New Note"), systemImage: "square.and.pencil") }
                     .disabled(!library.canCreateNotes)
-                    .help("새 노트 (⌘N)")
-                Button { showingGlobalSearch = true } label: { IconButtonLabel(title: "전체 검색", systemImage: "magnifyingglass") }
-                    .help("전체 검색 (⇧⌘F)")
-                Button { showingAdvancedSearch.toggle() } label: { IconButtonLabel(title: "고급 검색", systemImage: "line.3.horizontal.decrease.circle") }
-                    .help("고급 검색 및 스마트 메모장 저장")
+                    .help(appText("New Note (⌘N)"))
+                Button { showingGlobalSearch = true } label: { IconButtonLabel(title: appText("Global Search"), systemImage: "magnifyingglass") }
+                    .help(appText("Global Search (⇧⌘F)"))
+                Button { showingAdvancedSearch.toggle() } label: { IconButtonLabel(title: appText("Advanced Search"), systemImage: "line.3.horizontal.decrease.circle") }
+                    .help(appText("Advanced Search and Save Smart Notebook"))
             }
             if session?.note.mode == .markdown {
                 ToolbarItem(placement: .primaryAction) {
-                    Picker("보기 모드", selection: mode) {
+                    Picker(appText("View Mode"), selection: mode) {
                         ForEach(EditorMode.allCases, id: \.rawValue) { Text($0.title).tag($0) }
-                    }.pickerStyle(.segmented).frame(width: 168).help("편집기 보기 모드")
+                    }.pickerStyle(.segmented).frame(width: 168).help(appText("Editor View Mode"))
                 }
             }
             ToolbarItemGroup(placement: .primaryAction) {
                 if session?.note.mode == .markdown {
-                    Button { togglePreview() } label: { IconButtonLabel(title: "미리보기", systemImage: "rectangle.split.2x1") }
+                    Button { togglePreview() } label: { IconButtonLabel(title: appText("Preview"), systemImage: "rectangle.split.2x1") }
                         .foregroundStyle(mode.wrappedValue == .split ? Color.accentColor : Color.secondary)
-                        .accessibilityValue(mode.wrappedValue == .split ? "켜짐" : "꺼짐")
-                        .help("미리보기 켜기·끄기 (⇧⌘P)")
+                        .accessibilityValue(mode.wrappedValue == .split ? appText("On") : appText("Off"))
+                        .help(appText("Toggle Preview (⇧⌘P)"))
                 }
                 Button {
                     library.logEvent(.inspectorRequested, noteID: session?.id, fields: ["visible": String(!inspector)])
                     inspector.toggle()
-                } label: { IconButtonLabel(title: "노트 정보", systemImage: "sidebar.right") }
+                } label: { IconButtonLabel(title: appText("Note Info"), systemImage: "sidebar.right") }
                     .foregroundStyle(inspector ? Color.accentColor : Color.secondary)
-                    .accessibilityValue(inspector ? "켜짐" : "꺼짐")
-                    .disabled(session == nil).help("노트 정보")
+                    .accessibilityValue(inspector ? appText("On") : appText("Off"))
+                    .disabled(session == nil).help(appText("Note Info"))
             }
             ToolbarItem(placement: .primaryAction) {
                 Button { Task { await library.refreshFromServer() } } label: {
                     if library.isRefreshing {
                         ProgressView().controlSize(.small).frame(width: 28, height: 28)
                     } else {
-                        IconButtonLabel(title: "NAS 새로고침", systemImage: "arrow.triangle.2.circlepath")
+                        IconButtonLabel(title: appText("Refresh NAS"), systemImage: "arrow.triangle.2.circlepath")
                     }
                 }.disabled(!library.isConnected || library.isRefreshing || library.isPushing)
-                    .help("NAS 목록 새로고침 · " + library.connectionStatus)
-                    .accessibilityLabel("NAS 새로고침")
+                    .help(appText("Refresh NAS List · ") + library.connectionStatus)
+                    .accessibilityLabel(appText("Refresh NAS"))
             }
         }
     }
@@ -222,26 +240,26 @@ struct LibraryView: View {
                 HStack {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 13)).foregroundStyle(.secondary).frame(width: 20, height: 20)
-                    TextField("노트 검색", text: $library.search)
-                        .textFieldStyle(.plain).focused($searchFocused).accessibilityLabel("전체 노트 검색")
+                    TextField(appText("Search Notes"), text: $library.search)
+                        .textFieldStyle(.plain).focused($searchFocused).accessibilityLabel(appText("Search All Notes"))
                     if !library.search.isEmpty {
-                        Button { library.search = "" } label: { IconButtonLabel(title: "검색 지우기", systemImage: "xmark.circle.fill") }
-                            .buttonStyle(.borderless).foregroundStyle(.secondary).help("검색 지우기")
+                        Button { library.search = "" } label: { IconButtonLabel(title: appText("Clear Search"), systemImage: "xmark.circle.fill") }
+                            .buttonStyle(.borderless).foregroundStyle(.secondary).help(appText("Clear Search"))
                     }
                 }.padding(12)
                 if showingAdvancedSearch { AdvancedSearchControls(library: library) }
                 HStack(spacing: 6) {
-                    Picker("노트 정렬 기준", selection: $sortFieldValue) {
-                        Text("제목").tag(NoteSortField.title.rawValue)
-                        Text("추가 날짜").tag(NoteSortField.createdAt.rawValue)
-                        Text("수정 날짜").tag(NoteSortField.modifiedAt.rawValue)
+                    Picker(appText("Sort Notes By"), selection: $sortFieldValue) {
+                        Text(appText("Title")).tag(NoteSortField.title.rawValue)
+                        Text(appText("Date Added")).tag(NoteSortField.createdAt.rawValue)
+                        Text(appText("Date Modified")).tag(NoteSortField.modifiedAt.rawValue)
                     }
                     .labelsHidden()
                     .frame(maxWidth: .infinity)
-                    .help("제목, 추가 날짜, 수정 날짜로 노트를 정렬합니다. 추가 날짜가 없는 기존 노트는 수정 날짜를 사용합니다.")
-                    Picker("노트 정렬 방향", selection: $sortDirectionValue) {
-                        Text("오름차순").tag(NoteSortDirection.ascending.rawValue)
-                        Text("내림차순").tag(NoteSortDirection.descending.rawValue)
+                    .help(appText("Sort by title, date added, or date modified. Notes without a date added use their date modified."))
+                    Picker(appText("Note Sort Direction"), selection: $sortDirectionValue) {
+                        Text(appText("Ascending")).tag(NoteSortDirection.ascending.rawValue)
+                        Text(appText("Descending")).tag(NoteSortDirection.descending.rawValue)
                     }
                     .labelsHidden()
                     .frame(width: 94)
@@ -251,15 +269,15 @@ struct LibraryView: View {
                 .padding(.bottom, 8)
                 Divider()
                 if rows.isEmpty {
-                    ContentUnavailableView(library.search.isEmpty ? "노트가 없습니다" : "검색 결과 없음", systemImage: "note.text", description: Text(library.search.isEmpty ? "새 노트를 작성해 보세요." : "다른 검색어를 입력해 보세요."))
+                    ContentUnavailableView(library.search.isEmpty ? appText("No Notes") : appText("No Results"), systemImage: "note.text", description: Text(library.search.isEmpty ? appText("Create a new note to get started.") : appText("Try a different search term.")))
                 } else {
                     List(rows, selection: $selection) { note in
                         NoteRow(note: note, showsCreatedAt: sortFieldValue == NoteSortField.createdAt.rawValue).tag(note.id)
                             .contextMenu {
-                                Button(note.isFavorite ? "즐겨찾기 해제" : "즐겨찾기") { Task { if let target = await library.session(for: note.id, waitForContent: true) { library.toggleFavorite(target) } } }
-                                Button(note.isTrashed ? "노트 복원" : "휴지통으로 이동") { Task { if let target = await library.session(for: note.id, waitForContent: true) { library.toggleTrash(target) } } }
+                                Button(note.isFavorite ? appText("Remove from Favorites") : appText("Favorites")) { Task { if let target = await library.session(for: note.id, waitForContent: true) { library.toggleFavorite(target) } } }
+                                Button(note.isTrashed ? appText("Restore Note") : appText("Move to Trash")) { Task { if let target = await library.session(for: note.id, waitForContent: true) { library.toggleTrash(target) } } }
                                 if note.isTrashed {
-                                    Button("영구 삭제…", role: .destructive) { Task { if let target = await library.session(for: note.id) { library.promptPermanentlyDelete(target) } } }
+                                    Button(appText("Delete Permanently…"), role: .destructive) { Task { if let target = await library.session(for: note.id) { library.promptPermanentlyDelete(target) } } }
                                         .disabled(!library.isConnected || library.isPushing || library.isRefreshing || (note.syncState != .synced && note.syncState != .local))
                                 }
                             }
@@ -270,7 +288,7 @@ struct LibraryView: View {
                 }
                 Divider()
                 HStack(spacing: 6) {
-                    Text("\(rows.count)개의 노트")
+                    Text(appText("Notes: %@", AppLocalization.number(rows.count)))
                     Spacer(minLength: 4)
                     if library.isCachingOffline {
                         ProgressView().controlSize(.mini)
@@ -296,7 +314,7 @@ struct LibraryView: View {
             HSplitView {
                 Group {
                     if let session { EditorView(session: session, mode: mode, inspector: $inspector, insertNoteLinkRequest: insertNoteLinkRequest).id(session.id) }
-                    else { ContentUnavailableView(library.profile.server.isEmpty ? "NAS에 연결하세요" : "노트를 선택하세요", systemImage: "externaldrive", description: Text("노트와 첨부는 NAS에 자동 동기화됩니다.")) }
+                    else { ContentUnavailableView(library.profile.server.isEmpty ? appText("Connect to the NAS") : appText("Select a Note"), systemImage: "externaldrive", description: Text(appText("Notes and attachments sync with the NAS automatically."))) }
                 }.frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
                 if inspector, let session {
                     NoteInspector(session: session).environment(library).id(session.id)
@@ -307,27 +325,27 @@ struct LibraryView: View {
     }
 
     private var filterTitle: String {
-        if case .notebook(let id) = filter { return library.notebooks.first(where: { $0.id == id })?.name ?? "노트북" }
+        if case .notebook(let id) = filter { return library.notebooks.first(where: { $0.id == id })?.name ?? appText("Notebook") }
         if case .stack(let name) = filter { return name }
-        if case .smart(let id) = filter { return library.savedSearches.first(where: { $0.id == id })?.name ?? "스마트 메모장" }
+        if case .smart(let id) = filter { return library.savedSearches.first(where: { $0.id == id })?.name ?? appText("Smart Notebook") }
         return filter.title
     }
     private var sidebar: some View {
         VStack(spacing: 0) {
             List(selection: $filter) {
                 Section {
-                    Label("전체 노트", systemImage: "note.text").tag(LibraryFilter.all)
-                    Label("즐겨찾기", systemImage: "star").tag(LibraryFilter.favorites)
-                    Label("전체 그래프", systemImage: "point.3.connected.trianglepath.dotted").tag(LibraryFilter.graph)
+                    Label(appText("All Notes"), systemImage: "note.text").tag(LibraryFilter.all)
+                    Label(appText("Favorites"), systemImage: "star").tag(LibraryFilter.favorites)
+                    Label(appText("Note Graph"), systemImage: "point.3.connected.trianglepath.dotted").tag(LibraryFilter.graph)
                 }
                 stackSection
                 if !library.savedSearches.isEmpty {
-                    Section("스마트 메모장") {
+                    Section(appText("Smart Notebook")) {
                         ForEach(library.savedSearches) { saved in
                             Label(saved.name, systemImage: "line.3.horizontal.decrease.circle")
                                 .tag(LibraryFilter.smart(saved.id))
                                 .contextMenu {
-                                    Button("스마트 메모장 삭제", role: .destructive) {
+                                    Button(appText("Delete Smart Notebook"), role: .destructive) {
                                         if filter == .smart(saved.id) { filter = .all }
                                         Task { await library.deleteSavedSearch(id: saved.id) }
                                     }
@@ -336,9 +354,9 @@ struct LibraryView: View {
                     }
                 }
                 if !library.tags.isEmpty {
-                    Section("태그") { ForEach(library.tags, id: \.self) { tag in Label(tag, systemImage: "number").tag(LibraryFilter.tag(tag)) } }
+                    Section(appText("Tags")) { ForEach(library.tags, id: \.self) { tag in Label(tag, systemImage: "number").tag(LibraryFilter.tag(tag)) } }
                 }
-                Section { Label("휴지통", systemImage: "trash").tag(LibraryFilter.trash) }
+                Section { Label(appText("Trash"), systemImage: "trash").tag(LibraryFilter.trash) }
             }
             .listStyle(.sidebar)
             .labelStyle(SidebarItemLabelStyle())
@@ -346,10 +364,8 @@ struct LibraryView: View {
 
             Divider()
             HStack(spacing: 9) {
-                Image(systemName: "externaldrive")
-                    .font(.system(size: 14)).foregroundStyle(.secondary).frame(width: 20, height: 28)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(library.profile.server.isEmpty ? "NAS 계정 연결 필요" : library.profile.username)
+                    Text(library.profile.server.isEmpty ? appText("NAS Account Required") : library.profile.username)
                         .font(.caption.weight(.medium))
                     Text(library.connectionStatus)
                         .font(.caption2)
@@ -358,25 +374,25 @@ struct LibraryView: View {
                         .help(library.connectionError ?? library.connectionStatus)
                 }
                 Spacer(minLength: 8)
-                SettingsLink { IconButtonLabel(title: "Note Station 설정", systemImage: "gearshape") }
+                SettingsLink { IconButtonLabel(title: appText("Note Station Settings"), systemImage: "gearshape") }
                     .buttonStyle(.borderless).foregroundStyle(.secondary)
-                    .help("Note Station 설정")
+                    .help(appText("Note Station Settings"))
             }
             .padding(.horizontal, 12).padding(.vertical, 10)
         }
         .navigationTitle("Note Station")
     }
     private var stackSection: some View {
-        Section("책장 · 메모장") {
+        Section(appText("Stacks and Notebooks")) {
             ForEach(library.stackNames, id: \.self) { name in stackRow(name) }
-            Label("책장 밖 메모장", systemImage: "tray")
+            Label(appText("Notebooks Outside Stacks"), systemImage: "tray")
                 .font(.caption).foregroundStyle(.secondary)
                 .dropDestination(for: String.self) { ids, _ in dropNotebooks(ids, into: "") }
             ForEach(library.notebooks.filter { $0.stack.isEmpty }) { notebook in notebookRow(notebook) }
-            Button { initialStackSelection = []; showingCreateStack = true } label: { Label("책장 만들기", systemImage: "books.vertical.fill") }
+            Button { initialStackSelection = []; showingCreateStack = true } label: { Label(appText("Create Stack"), systemImage: "books.vertical.fill") }
                 .buttonStyle(.plain).foregroundStyle(.secondary)
                 .disabled(!library.canManageNASNotebooks || library.isRefreshing || library.isPushing || library.isManagingStacks)
-            Button { library.createNotebook() } label: { Label("노트북 추가", systemImage: "plus") }
+            Button { library.createNotebook() } label: { Label(appText("Add Notebook"), systemImage: "plus") }
                 .buttonStyle(.plain).foregroundStyle(.secondary)
                 .disabled(!library.canManageNASNotebooks)
         }
@@ -394,9 +410,9 @@ struct LibraryView: View {
                 // Scope the stack menu to its header so it cannot override
                 // the context menus of notebooks inside the disclosure group.
                 .contextMenu {
-                    Button("책장 노트 보기") { filter = .stack(name) }
-                    Button("이름 변경…") { library.promptRenameStack(name) }
-                    Button("책장 삭제…", role: .destructive) { library.promptDeleteStack(name) }
+                    Button(appText("View Notes in Stack")) { filter = .stack(name) }
+                    Button(appText("Rename…")) { library.promptRenameStack(name) }
+                    Button(appText("Delete Stack…"), role: .destructive) { library.promptDeleteStack(name) }
                 }
         }
         .tag(LibraryFilter.stack(name))
@@ -404,36 +420,36 @@ struct LibraryView: View {
     }
     private func notebooksSortedByName(in stack: String) -> [Notebook] {
         library.notebooks.filter { $0.stack == stack }.sorted { lhs, rhs in
-            let leftName = lhs.name.isEmpty ? "이름 없는 메모장" : lhs.name
-            let rightName = rhs.name.isEmpty ? "이름 없는 메모장" : rhs.name
+            let leftName = lhs.name.isEmpty ? appText("Untitled Notebook") : lhs.name
+            let rightName = rhs.name.isEmpty ? appText("Untitled Notebook") : rhs.name
             let comparison = leftName.localizedStandardCompare(rightName)
             return comparison == .orderedSame ? lhs.id < rhs.id : comparison == .orderedAscending
         }
     }
     private func notebookRow(_ notebook: Notebook) -> some View {
-        Label(notebook.name.isEmpty ? "이름 없는 메모장" : notebook.name, systemImage: "book.closed")
+        Label(notebook.name.isEmpty ? appText("Untitled Notebook") : notebook.name, systemImage: "book.closed")
             .tag(LibraryFilter.notebook(notebook.id))
             .help(notebook.name)
             .draggable(notebook.id)
             .contextMenu {
-                Button("이름 변경…") { library.promptRenameNotebook(notebook) }
+                Button(appText("Rename…")) { library.promptRenameNotebook(notebook) }
                     .disabled(!library.isNASNotebook(notebook.id) || !library.canManageNASNotebooks)
-                Menu("책장으로 이동") {
+                Menu(appText("Move to Stack")) {
                     ForEach(library.stackNames.filter { $0 != notebook.stack }, id: \.self) { name in
                         Button(name) { library.promptMoveNotebook(notebook, to: name) }
                     }
-                    Button("새 책장 만들기…") {
+                    Button(appText("Create New Stack…")) {
                         initialStackSelection = [notebook.id]
                         showingCreateStack = true
                     }
                 }
                 .disabled(!library.canManageNASNotebooks || library.isRefreshing || library.isPushing || library.isManagingStacks)
                 if !notebook.stack.isEmpty {
-                    Button("책장에서 꺼내기") { library.promptMoveNotebook(notebook, to: "") }
+                    Button(appText("Remove from Stack")) { library.promptMoveNotebook(notebook, to: "") }
                         .disabled(!library.canManageNASNotebooks || library.isRefreshing || library.isPushing || library.isManagingStacks)
                 }
                 Divider()
-                Button("메모장 삭제…", role: .destructive) { library.promptDeleteNotebook(notebook) }
+                Button(appText("Delete Notebook…"), role: .destructive) { library.promptDeleteNotebook(notebook) }
                     .disabled(!library.isNASNotebook(notebook.id) || !library.canManageNASNotebooks || library.isPushing || library.isRefreshing)
             }
     }
@@ -523,9 +539,9 @@ private struct StackCreationSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("새 책장 만들기").font(.title3.weight(.semibold))
-            TextField("책장 이름", text: $name)
-            Text("책장에 넣을 메모장을 선택하세요.").foregroundStyle(.secondary)
+            Text(appText("Create New Stack")).font(.title3.weight(.semibold))
+            TextField(appText("Stack Name"), text: $name)
+            Text(appText("Choose the notebooks to put in the stack.")).foregroundStyle(.secondary)
             List(library.notebooks.filter { library.isNASNotebook($0.id) }) { notebook in
                 Toggle(isOn: Binding(
                     get: { selected.contains(notebook.id) },
@@ -533,7 +549,7 @@ private struct StackCreationSheet: View {
                         if checked { selected.insert(notebook.id) }
                         else { selected.remove(notebook.id) }
                     }
-                )) { Text(notebook.name.isEmpty ? "이름 없는 메모장" : notebook.name) }
+                )) { Text(notebook.name.isEmpty ? appText("Untitled Notebook") : notebook.name) }
             }
             .frame(minHeight: 180)
             if let errorText {
@@ -545,8 +561,8 @@ private struct StackCreationSheet: View {
             }
             HStack {
                 Spacer()
-                Button("취소") { dismiss() }
-                Button("만들기") {
+                Button(appText("Cancel")) { dismiss() }
+                Button(appText("Create")) {
                     let account = library.accountGeneration
                     let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
                     errorText = nil
@@ -588,33 +604,33 @@ private struct NoteRow: View {
                     .strokeBorder(Color.accentColor.opacity(colorScheme == .dark ? 0.35 : 0.16), lineWidth: 0.5)
             }
             .fixedSize()
-            .help("Markdown 노트")
-            .accessibilityLabel("Markdown 노트")
+            .help(appText("Markdown Note"))
+            .accessibilityLabel(appText("Markdown Note"))
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 5) {
                 if note.isFavorite { Image(systemName: "star.fill").font(.caption2).foregroundStyle(.yellow) }
-                Text(note.title.isEmpty ? "제목 없음" : note.title).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                Text(note.title.isEmpty ? appText("Untitled") : note.title).font(.system(size: 13, weight: .semibold)).lineLimit(1)
                 Spacer(minLength: 0)
-                if note.syncState == .conflict { Image(systemName: "arrow.triangle.branch").foregroundStyle(.orange).help("서로 다른 편집 확인 필요") }
-                if note.syncState == .failed { Image(systemName: "arrow.triangle.2.circlepath").foregroundStyle(.secondary).help("NAS 저장 결과 확인 중") }
+                if note.syncState == .conflict { Image(systemName: "arrow.triangle.branch").foregroundStyle(.orange).help(appText("Conflicting Edits Need Review")) }
+                if note.syncState == .failed { Image(systemName: "arrow.triangle.2.circlepath").foregroundStyle(.secondary).help(appText("Verifying NAS Save")) }
                 if note.mode == .locked { Image(systemName: "lock").foregroundStyle(.secondary) }
                 if note.mode == .markdown { markdownBadge }
             }
-            Text(note.excerpt.isEmpty ? (note.mode == .original ? "원본 서식 문서" : "내용 없음") : note.excerpt)
+            Text(note.excerpt.isEmpty ? (note.mode == .original ? appText("Original Formatted Document") : appText("No Content")) : note.excerpt)
                 .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2)
             if showsCreatedAt {
                 if let createdAt = note.createdAt {
-                    Text("추가: \(createdAt.formatted(.dateTime.month().day().hour().minute()))")
+                    Text(appText("Added: %@", createdAt.formatted(.dateTime.month().day().hour().minute().locale(AppLocalization.locale))))
                         .font(.caption2).foregroundStyle(.tertiary)
                 } else {
-                    Text("추가일 없음 · 수정: \(note.modifiedAt.formatted(.dateTime.month().day().hour().minute()))")
+                    Text(appText("Date added unavailable · Modified: %@", note.modifiedAt.formatted(.dateTime.month().day().hour().minute().locale(AppLocalization.locale))))
                         .font(.caption2).foregroundStyle(.tertiary)
                 }
             } else {
-                Text(note.modifiedAt, format: .dateTime.month().day().hour().minute()).font(.caption2).foregroundStyle(.tertiary)
+                Text(note.modifiedAt, format: .dateTime.month().day().hour().minute().locale(AppLocalization.locale)).font(.caption2).foregroundStyle(.tertiary)
             }
         }.padding(.vertical, 8).accessibilityElement(children: .combine)
     }
@@ -628,38 +644,38 @@ private struct AdvancedSearchControls: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            TextField("제목 포함", text: $library.advancedTitle)
-            TextField("태그 포함", text: $library.advancedTag)
-            Picker("메모장", selection: $library.advancedNotebookID) {
-                Text("모든 메모장").tag(nil as String?)
+            TextField(appText("Title Contains"), text: $library.advancedTitle)
+            TextField(appText("Tag Contains"), text: $library.advancedTag)
+            Picker(appText("Notebook"), selection: $library.advancedNotebookID) {
+                Text(appText("All Notebooks")).tag(nil as String?)
                 ForEach(library.notebooks) { notebook in
                     Text(notebook.name).tag(Optional(notebook.id))
                 }
             }
-            Toggle("시작 날짜", isOn: Binding(
+            Toggle(appText("Start Date"), isOn: Binding(
                 get: { library.advancedAfter != nil },
                 set: { library.advancedAfter = $0 ? (library.advancedAfter ?? .now) : nil }
             ))
             if library.advancedAfter != nil {
-                DatePicker("이후", selection: Binding(
+                DatePicker(appText("After"), selection: Binding(
                     get: { library.advancedAfter ?? .now }, set: { library.advancedAfter = $0 }
                 ), displayedComponents: .date)
             }
-            Toggle("종료 날짜", isOn: Binding(
+            Toggle(appText("End Date"), isOn: Binding(
                 get: { library.advancedBefore != nil },
                 set: { library.advancedBefore = $0 ? (library.advancedBefore ?? .now) : nil }
             ))
             if library.advancedBefore != nil {
-                DatePicker("이전", selection: Binding(
+                DatePicker(appText("Before"), selection: Binding(
                     get: { library.advancedBefore ?? .now }, set: { library.advancedBefore = $0 }
                 ), displayedComponents: .date)
             }
             HStack {
-                TextField("스마트 메모장 이름", text: $smartName)
-                Button("저장") {
+                TextField(appText("Smart Notebook Name"), text: $smartName)
+                Button(appText("Save")) {
                     Task { await library.saveCurrentSearch(name: smartName); smartName = "" }
                 }.disabled(smartName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                Button("초기화") { library.resetAdvancedFilters(); library.search = "" }
+                Button(appText("Reset")) { library.resetAdvancedFilters(); library.search = "" }
             }
         }
         .textFieldStyle(.roundedBorder)

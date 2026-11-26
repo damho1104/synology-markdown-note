@@ -6,9 +6,9 @@ public enum AttachmentError: LocalizedError {
     case missing, corrupt, invalidPath
     public var errorDescription: String? {
         switch self {
-        case .missing: return "첨부파일 사본이 없습니다. 원본 파일을 다시 추가하세요."
-        case .corrupt: return "첨부파일이 변경되었거나 손상되었습니다. 원본 파일을 다시 추가하세요."
-        case .invalidPath: return "안전하지 않은 첨부파일 경로입니다."
+        case .missing: return coreText("The attachment copy is missing. Add the original file again.")
+        case .corrupt: return coreText("The attachment was modified or damaged. Add the original file again.")
+        case .invalidPath: return coreText("The attachment path is unsafe.")
         }
     }
 }

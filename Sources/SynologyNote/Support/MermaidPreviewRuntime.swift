@@ -6,16 +6,7 @@ enum MermaidPreviewRuntime {
     }
 
     static func libraryJavaScript() throws -> String {
-        let packagedURL = Bundle.main.resourceURL?
-            .appendingPathComponent("SynologyNote_SynologyNote.bundle", isDirectory: true)
-            .appendingPathComponent("mermaid.min.js")
-        let url: URL?
-        if let packagedURL, FileManager.default.fileExists(atPath: packagedURL.path) {
-            url = packagedURL
-        } else {
-            url = Bundle.module.url(forResource: "mermaid.min", withExtension: "js")
-        }
-        guard let url else {
+        guard let url = AppLocalization.resources.url(forResource: "mermaid.min", withExtension: "js") else {
             throw CocoaError(.fileNoSuchFile)
         }
         // The library's final expression is an object that older WebKit cannot
@@ -28,6 +19,8 @@ enum MermaidPreviewRuntime {
         let themeExpression = theme == .automatic
             ? "window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default'"
             : "'\(theme.rawValue)'"
+        let message = (try? JSONEncoder().encode([appText("Could not render the Mermaid diagram.")]))
+            .map { String(decoding: $0, as: UTF8.self) } ?? #"["Could not render the Mermaid diagram."]"#
         return #"""
     (() => {
       const blocks = Array.from(document.querySelectorAll('pre > code.language-mermaid'));
@@ -37,7 +30,7 @@ enum MermaidPreviewRuntime {
         startOnLoad: false,
         securityLevel: 'strict',
         htmlLabels: false,
-        suppressErrorRendering: false,
+        suppressErrorRendering: true,
         look: '\#(style.rawValue)',
         handDrawnSeed: 42,
         theme: \#(themeExpression)
@@ -51,13 +44,19 @@ enum MermaidPreviewRuntime {
       }
 
       mermaid.run({ querySelector: '.mermaid', suppressErrors: false }).catch((error) => {
+        const [message] = \#(message);
         for (const element of document.querySelectorAll('.mermaid')) {
           if (!element.querySelector('svg')) {
-            const fallback = document.createElement('pre');
+            const fallback = document.createElement('div');
+            const status = document.createElement('p');
+            status.setAttribute('role', 'status');
+            status.textContent = message;
+            const source = document.createElement('pre');
             const code = document.createElement('code');
             code.className = 'language-mermaid';
             code.textContent = element.textContent || '';
-            fallback.appendChild(code);
+            source.appendChild(code);
+            fallback.append(status, source);
             element.replaceWith(fallback);
           }
         }

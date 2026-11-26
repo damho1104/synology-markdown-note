@@ -70,6 +70,7 @@ docker compose up -d
 | `WEB_DATA_PATH` | Optional | The `synonote-web-data` named volume. Specify an absolute path to use a host folder |
 | `NAS_CA_FILE` | Optional | Omit for normal installations. Use the configuration below only for an HTTPS NAS requiring a private CA |
 | `WEB_PUBLIC_ORIGIN` | Optional, advanced | Empty by default. Specify the exact origin when the proxy cannot preserve the browser's Host |
+| `WEB_DEFAULT_LANGUAGE` | Optional | `auto` follows browser language preferences with English as the fallback. Use `en` for English or `ko` for Korean for all visitors. |
 | `WEB_COOKIE_SECURE` | Optional, advanced | `auto`. No change needed for normal installations |
 
 ## Optional: Store data in a Synology folder

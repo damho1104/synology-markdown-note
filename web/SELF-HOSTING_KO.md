@@ -70,6 +70,7 @@ docker compose up -d
 | `WEB_DATA_PATH` | 선택 | `synonote-web-data` named volume. 호스트 폴더를 쓰려면 절대 경로 지정 |
 | `NAS_CA_FILE` | 선택 | 일반 설치에서는 생략. 사설 CA가 필요한 HTTPS NAS에서만 아래 설정 사용 |
 | `WEB_PUBLIC_ORIGIN` | 선택·고급 | 기본 빈 값. 프록시가 브라우저 Host를 보존하지 못할 때 정확한 origin 지정 |
+| `WEB_DEFAULT_LANGUAGE` | 선택 | `auto`는 브라우저 선호 언어를 따르며, 지원하는 언어가 없으면 영어를 표시합니다. 모든 접속자에게 같은 언어를 표시하려면 영어는 `en`, 한국어는 `ko`를 지정합니다. |
 | `WEB_COOKIE_SECURE` | 선택·고급 | `auto`. 일반 설치에서는 변경 불필요 |
 
 ## 선택: Synology 폴더에 데이터 보관

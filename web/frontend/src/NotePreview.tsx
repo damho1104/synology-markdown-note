@@ -1,3 +1,4 @@
+import { currentLanguage, t } from "./i18n";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { notifySessionExpired } from "./api";
 import { previewNonce, canonicalNoteLink } from "./previewSecurity";
@@ -101,7 +102,7 @@ export function NotePreview({
   const linkEnabled = !!onOpenLink;
   const frameDocument = useMemo(() => {
     const nonce = linkNonce.current;
-    return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; img-src data: blob:; font-src ${window.location.origin} data:; connect-src 'none'; form-action 'none'; base-uri 'none'"></head><body><script nonce="${nonce}">
+    return `<!doctype html><html lang="${currentLanguage()}"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; img-src data: blob:; font-src ${window.location.origin} data:; connect-src 'none'; form-action 'none'; base-uri 'none'"></head><body><script nonce="${nonce}">
       (() => {
         const nonce = '${nonce}';
         let revision = 0;
@@ -213,7 +214,7 @@ export function NotePreview({
           details.className = "note-frontmatter";
           details.setAttribute("data-source-line", "1");
           const summary = document.createElement("summary");
-          summary.textContent = "문서 정보";
+          summary.textContent = t("문서 정보");
           const pre = document.createElement("pre");
           const code = document.createElement("code");
           code.textContent = lines.slice(1, end).join("\n").replace(/^\n+|\n+$/g, "");
@@ -338,7 +339,7 @@ export function NotePreview({
             code.parentElement?.replaceWith(container);
           } catch {
             const error = document.createElement("p");
-            error.textContent = "Mermaid 문법을 확인하세요.";
+            error.textContent = t("Mermaid 문법을 확인하세요.");
             error.className = "diagram-error";
             code.parentElement?.before(error);
           }
@@ -408,7 +409,7 @@ export function NotePreview({
       const fonts = `<style>${katexCss}</style>`;
       if (active)
         setPage(
-          `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}">${fonts}<style>${css}${frontMatterCss}</style></head><body>${body.innerHTML}</body></html>`,
+          `<!doctype html><html lang="${currentLanguage()}"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}">${fonts}<style>${css}${frontMatterCss}</style></head><body>${body.innerHTML}</body></html>`,
         );
     }
     void render();
@@ -433,7 +434,7 @@ export function NotePreview({
   return (
     <iframe
       ref={frame}
-      title="노트 HTML 미리보기"
+      title={t("노트 HTML 미리보기")}
       sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
       referrerPolicy="no-referrer"
       className="note-preview"

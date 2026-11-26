@@ -137,7 +137,7 @@ extension LibraryStore {
         var books = try await repo.notebooks()
         guard generation == accountGeneration else { throw NoteStationError.connectionChanged }
         guard books.contains(where: { $0.id == id }) else { throw NoteStationError.invalidArgument("notebookID") }
-        guard isNASNotebook(id) else { throw RepositoryError(message: "이전 메모장을 NAS에 전송한 뒤 이름을 변경하세요.") }
+        guard isNASNotebook(id) else { throw RepositoryError(message: appText("Sync the notebook to the NAS before renaming it.")) }
         do {
             guard let client, canManageNASNotebooks else { throw NoteStationError.writeContractUnvalidated }
             let remote = try await client.renameNotebook(notebookID: id, name: name)
@@ -157,11 +157,11 @@ extension LibraryStore {
     func promptRenameNotebook(_ book: Notebook) {
         let generation = accountGeneration
         let alert = NSAlert()
-        alert.messageText = "노트북 이름 변경"
-        alert.informativeText = "NAS의 메모장 이름을 변경합니다."
+        alert.messageText = appText("Rename Notebook")
+        alert.informativeText = appText("Change the notebook’s name on the NAS.")
         let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
         input.stringValue = book.name; alert.accessoryView = input
-        alert.addButton(withTitle: "변경"); alert.addButton(withTitle: "취소")
+        alert.addButton(withTitle: appText("Rename")); alert.addButton(withTitle: appText("Cancel"))
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         Task {
             guard generation == accountGeneration else { return }
@@ -178,7 +178,7 @@ extension LibraryStore {
             let data = try await store.verifiedData(for: attachment)
             guard generation == accountGeneration, session.workspaceGeneration == generation else { return }
             if let source = try? SourceEnvelope.decode(data), source.documentID == (session.note.sourceDocumentID ?? session.id) {
-                throw RepositoryError(message: "Markdown 복원용 원문은 자동으로 관리되므로 직접 제거할 수 없습니다.")
+                throw RepositoryError(message: appText("The Markdown recovery source is managed automatically and cannot be removed directly."))
             }
             _ = try AttachmentManagement.removing(attachment, from: session.note)
             // Save the pre-removal edit first so even an unsaved new attachment

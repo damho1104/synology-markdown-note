@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { Workspace } from './Workspace'
+import { setLanguage } from './i18n'
 import type { Status } from './api'
 import { exportMath } from './mathExport'
 import { DEFAULT_PREFERENCES, PREFERENCES_KEY, loadPreferences } from './preferences'
@@ -25,9 +26,64 @@ beforeEach(() => {
   }))
   vi.spyOn(window, 'confirm').mockReturnValue(true)
 })
-afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); setLanguage('ko') })
 function mount(onLogout = async () => {}, workspaceStatus: Status = status) { return render(<Workspace session={session} status={workspaceStatus} onLogout={onLogout} onSessionExpired={() => {}} />) }
 async function edit() { await screen.findByLabelText('노트 제목'); const split = screen.queryByRole('button', {name: '분할'}); if (split) fireEvent.click(split); fireEvent.change(screen.getByLabelText('노트 제목'), {target: {value: '수정 제목'}}) }
+
+it('updates the NAS indicator after a failed list refresh and successful retry', async () => {
+  let unavailable = false
+  const fetcher = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation((path, init) =>
+    path === '/api/notes' && unavailable
+      ? Promise.resolve(Response.json({error: 'NAS_UNAVAILABLE'}, {status: 503}))
+      : fetcher(path, init))
+  mount()
+  await screen.findByRole('img', {name: 'NAS 연결됨'})
+  const refresh = screen.getByRole('button', {name: '새로고침'})
+  unavailable = true
+  fireEvent.click(refresh)
+  await screen.findByRole('img', {name: 'NAS 연결 안 됨'})
+  unavailable = false
+  fireEvent.click(refresh)
+  await screen.findByRole('img', {name: 'NAS 연결됨'})
+})
+
+it('formats the editor footer in English and preserves the NAS title', async () => {
+  setLanguage('en')
+  const fetcher = vi.mocked(fetch).getMockImplementation()!
+  const markdown = 'x'.repeat(1234)
+  vi.mocked(fetch).mockImplementation((path, init) => path === '/api/notes/note1'
+    ? Promise.resolve(Response.json({...note, markdown}))
+    : fetcher(path, init))
+  mount()
+  expect((await screen.findByRole('textbox', {name: 'Note title'}) as HTMLInputElement).value).toBe('기존 제목')
+  expect(screen.getByText('Characters: 1,234 · Version v1')).toBeTruthy()
+  expect(writes).toHaveLength(0)
+})
+
+it('saves an empty title with the English default in English mode', async () => {
+  setLanguage('en')
+  mount()
+  fireEvent.change(await screen.findByRole('textbox', {name: 'Note title'}), {target: {value: ''}})
+  await waitFor(() => expect(writes).toHaveLength(1), {timeout: 2000})
+  expect(writes[0]).toMatchObject({title: 'Untitled'})
+})
+
+it('opens the Markdown search panel with Korean field and button labels', async () => {
+  const fetcher = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation((path, init) => path === '/api/notes/note1'
+    ? Promise.resolve(Response.json({...note, markdown: '# 본문'}))
+    : fetcher(path, init))
+  mount()
+  await screen.findByLabelText('노트 제목')
+  fireEvent.click(screen.getByRole('button', {name: '분할'}))
+  const editor = await screen.findByRole('textbox', {name: 'Markdown 본문'})
+  editor.focus()
+  const isMac = /Mac/.test(navigator.platform)
+  fireEvent.keyDown(editor, {key: 'f', metaKey: isMac, ctrlKey: !isMac})
+  expect(await screen.findByRole('textbox', {name: /^찾기$/})).toBeTruthy()
+  expect(screen.getByRole('button', {name: '모두 바꾸기'})).toBeTruthy()
+})
 
 it('refreshes once when returning to a hidden tab after the interval', async () => {
   const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(false)

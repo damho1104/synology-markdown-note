@@ -138,7 +138,7 @@ it("displays partial read failures alongside usable data", async () => {
   );
   render(<NoteGraph onOpenNote={() => {}} />);
   expect((await screen.findByRole("alert")).textContent).toContain("b");
-  expect(screen.getByRole("alert").textContent).toContain("NAS_UNAVAILABLE");
+  expect(screen.getByRole("alert").textContent).toContain("NAS와 통신하지 못했습니다.");
   expect(screen.getByRole("group", { name: "노트 관계 그래프" })).toBeTruthy();
   const beforeRetry = vi.mocked(fetch).mock.calls.length;
   fireEvent.click(screen.getByRole('button', {name:'다시 시도'}));

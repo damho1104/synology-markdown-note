@@ -3,6 +3,7 @@ export type PreviewPreferences = {
   editorFontSize: number
   lineNumbers: boolean
   lineWrapping: boolean
+  listRefreshMinutes: number
   mermaidStyle: 'classic' | 'handDrawn'
   mermaidTheme: 'system' | 'default' | 'dark' | 'neutral' | 'forest'
 }
@@ -12,10 +13,17 @@ export const DEFAULT_PREFERENCES: PreviewPreferences = Object.freeze({
   editorFontSize: 14,
   lineNumbers: false,
   lineWrapping: false,
+  listRefreshMinutes: 5,
   mermaidStyle: 'handDrawn',
   mermaidTheme: 'system',
 })
 export const PREFERENCES_KEY = 'synonote:web-preferences'
+export const MIN_LIST_REFRESH_MINUTES = 1
+
+export function normalizeListRefreshMinutes(value: number, fallback = DEFAULT_PREFERENCES.listRefreshMinutes): number {
+  const rounded = Math.round(value)
+  return Number.isSafeInteger(rounded) ? Math.max(MIN_LIST_REFRESH_MINUTES, rounded) : fallback
+}
 
 export function validatePreferences(value: unknown): PreviewPreferences {
   const defaults = { ...DEFAULT_PREFERENCES }
@@ -27,6 +35,8 @@ export function validatePreferences(value: unknown): PreviewPreferences {
       ? Math.min(22, Math.max(11, Math.round(input.editorFontSize))) : defaults.editorFontSize,
     lineNumbers: typeof input.lineNumbers === 'boolean' ? input.lineNumbers : defaults.lineNumbers,
     lineWrapping: typeof input.lineWrapping === 'boolean' ? input.lineWrapping : defaults.lineWrapping,
+    listRefreshMinutes: typeof input.listRefreshMinutes === 'number'
+      ? normalizeListRefreshMinutes(input.listRefreshMinutes) : defaults.listRefreshMinutes,
     mermaidStyle: input.mermaidStyle === 'classic' ? 'classic' : defaults.mermaidStyle,
     mermaidTheme: input.mermaidTheme === 'default' || input.mermaidTheme === 'dark' ||
       input.mermaidTheme === 'neutral' || input.mermaidTheme === 'forest' ? input.mermaidTheme : 'system',

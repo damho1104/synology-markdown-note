@@ -7,7 +7,7 @@ afterEach(() => vi.restoreAllMocks())
 
 it('uses native defaults for missing, malformed and unsupported stored versions', () => {
   expect(loadPreferences()).toEqual({ appearance: 'system', editorFontSize: 14, lineNumbers: false,
-    lineWrapping: false, mermaidStyle: 'handDrawn', mermaidTheme: 'system' })
+    lineWrapping: false, mermaidStyle: 'handDrawn', mermaidTheme: 'system', listRefreshMinutes: 5 })
   for (const value of ['{bad', 'null', '[]', '{"version":2,"preferences":{"appearance":"dark"}}']) {
     localStorage.setItem(PREFERENCES_KEY, value)
     expect(loadPreferences()).toEqual(DEFAULT_PREFERENCES)
@@ -16,17 +16,20 @@ it('uses native defaults for missing, malformed and unsupported stored versions'
 
 it('validates each field and restricts font sizes to integer values from 11 through 22', () => {
   expect(validatePreferences({ appearance: 'unknown', editorFontSize: '18', lineNumbers: 1,
-    lineWrapping: 'true', mermaidStyle: 'script', mermaidTheme: 'unknown' })).toEqual(DEFAULT_PREFERENCES)
+    lineWrapping: 'true', mermaidStyle: 'script', mermaidTheme: 'unknown', listRefreshMinutes: '2' })).toEqual(DEFAULT_PREFERENCES)
   expect(validatePreferences({ editorFontSize: 80 }).editorFontSize).toBe(22)
   expect(validatePreferences({ editorFontSize: 1 }).editorFontSize).toBe(11)
   expect(validatePreferences({ editorFontSize: 15.6 }).editorFontSize).toBe(16)
   expect(validatePreferences({ editorFontSize: NaN }).editorFontSize).toBe(14)
   expect(validatePreferences({ editorFontSize: Infinity }).editorFontSize).toBe(14)
+  expect(validatePreferences({ listRefreshMinutes: -2 }).listRefreshMinutes).toBe(1)
+  expect(validatePreferences({ listRefreshMinutes: Infinity }).listRefreshMinutes).toBe(5)
 })
 
 it('persists and restores validated settings in a versioned browser-local record', () => {
   const preferences = { ...DEFAULT_PREFERENCES, appearance: 'dark' as const, editorFontSize: 19,
-    lineWrapping: true, lineNumbers: true, mermaidStyle: 'classic' as const, mermaidTheme: 'forest' as const }
+    lineWrapping: true, lineNumbers: true, mermaidStyle: 'classic' as const, mermaidTheme: 'forest' as const,
+    listRefreshMinutes: 8 }
   savePreferences(preferences)
   expect(JSON.parse(localStorage.getItem(PREFERENCES_KEY)!)).toEqual({ version: 1, preferences })
   expect(loadPreferences()).toEqual(preferences)

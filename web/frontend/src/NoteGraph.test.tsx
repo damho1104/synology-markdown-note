@@ -149,8 +149,8 @@ it("reports request failure and retries only on user request", async () => {
   const fetcher = vi
     .fn()
     .mockResolvedValueOnce(
-      new Response(JSON.stringify({ error: "RELOGIN_REQUIRED" }), {
-        status: 401,
+      new Response(JSON.stringify({ error: "NAS_UNAVAILABLE" }), {
+        status: 503,
       }),
     )
     .mockResolvedValueOnce(new Response(JSON.stringify(snapshot)));
@@ -163,7 +163,7 @@ it("reports request failure and retries only on user request", async () => {
     ),
   );
   render(<NoteGraph onOpenNote={() => {}} />);
-  expect((await screen.findByRole("alert")).textContent).toContain("재인증");
+  expect((await screen.findByRole("alert")).textContent).toContain("NAS와 통신하지 못했습니다");
   expect(fetcher).toHaveBeenCalledTimes(1);
   fireEvent.click(screen.getByRole("button", { name: "다시 시도" }));
   expect(
@@ -224,8 +224,7 @@ it("keeps hit targets separate in a large connected graph", async () => {
 
 it("shows initial nodes and indexing progress while bounded batches are still pending", async () => {
   let finish: (response: Response) => void = () => {};
-  const fetcher = vi.fn(async (path: string) => {
-    if (path === '/api/auth/me') return new Response(JSON.stringify({username:'test'}));
+  const fetcher = vi.fn(async (path: string, _init?: RequestInit) => {
     if (path === '/api/graph?summary=true') return new Response(JSON.stringify({...snapshot,edges:[],entries:[],pending:snapshot.nodes.map(n => n.id)}));
     return new Promise<Response>(resolve => {finish = resolve});
   });
@@ -234,7 +233,8 @@ it("shows initial nodes and indexing progress while bounded batches are still pe
   const graph = await screen.findByRole('group', {name:'노트 관계 그래프'});
   expect(within(graph).getAllByRole('button')).toHaveLength(5);
   expect(screen.getByRole('status', {name:'그래프 인덱싱 상태'}).textContent).toContain('0/5');
-  expect(fetcher).toHaveBeenCalledTimes(3);
+  expect(fetcher.mock.calls.map(([path]) => path)).toEqual(['/api/graph?summary=true', expect.stringMatching(/^\/api\/graph\/entries\?/)]);
+  expect(fetcher.mock.calls.every(([,init]) => new Headers(init?.headers).get('X-Synonote-Background') === '1')).toBe(true);
   finish(new Response(JSON.stringify({entries:snapshot.nodes.map(n => ({id:n.id,links:n.id === 'a' ? [{kind:'title',target:'이전 노트'}] : []}))})));
   await waitFor(() => expect(screen.queryByRole('status', {name:'그래프 인덱싱 상태'})).toBeNull());
   expect(within(graph).getAllByRole('button')).toHaveLength(2);

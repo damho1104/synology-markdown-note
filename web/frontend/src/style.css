@@ -1220,7 +1220,8 @@ input {
   font-size: 13px;
 }
 .settings-row + .settings-row { border-top: 1px solid var(--line); }
-.settings-row select {
+.settings-row select,
+.settings-row input[type="number"] {
   max-width: 58%;
   padding: 3px 6px;
   border: 1px solid var(--line);
@@ -1228,6 +1229,7 @@ input {
   background: var(--toolbar);
   color: var(--text);
 }
+.settings-row input[type="number"] { width: 90px; }
 .settings-size-control { display: flex; align-items: center; gap: 10px; width: 58%; }
 .settings-size-control input { width: 100%; min-width: 0; accent-color: var(--accent); }
 .settings-size-control output { min-width: 34px; color: var(--muted); font-variant-numeric: tabular-nums; }

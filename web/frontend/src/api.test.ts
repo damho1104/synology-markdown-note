@@ -1,5 +1,5 @@
 import {afterEach,expect,it,vi} from 'vitest'
-import {request} from './api'
+import {backgroundRead, request} from './api'
 afterEach(()=>vi.unstubAllGlobals())
 it('settles one shared cookie refresh before concurrent protected reads',async()=>{
  let refreshed=false;let checks=0
@@ -9,4 +9,13 @@ it('settles one shared cookie refresh before concurrent protected reads',async()
  }))
  const results=await Promise.all([request('/api/notes'),request('/api/notebooks')])
  expect(results).toEqual([{ok:true},{ok:true}]);expect(checks).toBe(1)
+})
+
+it('retries a passive read with the current cookie after a stale session response', async () => {
+  const fetcher = vi.fn()
+    .mockResolvedValueOnce(Response.json({detail: 'LOGIN_REQUIRED'}, {status: 401}))
+    .mockResolvedValueOnce(Response.json({notes: []}))
+  vi.stubGlobal('fetch', fetcher)
+  await expect(backgroundRead('/api/notes', new AbortController().signal)).resolves.toEqual({notes: []})
+  expect(fetcher.mock.calls.map(([path]) => path)).toEqual(['/api/notes', '/api/notes'])
 })

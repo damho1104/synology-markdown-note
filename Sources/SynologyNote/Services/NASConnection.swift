@@ -170,7 +170,7 @@ extension LibraryStore {
         isRefreshing = false
         trustedDeviceRemembered = false
         refreshTask?.cancel()
-        uploadTask?.cancel(); uploadLoop?.cancel(); syncCoordinator = nil; uploadTransport = nil; isPushing = false
+        uploadTask?.cancel(); uploadLoop?.cancel(); syncCoordinator = nil; uploadTransport = nil; isPushing = false; uploadProgress = nil; uploadError = nil
         let previous = client
         client = nil; isConnected = false; hasVerifiedNASLists = false; connectionStatus = appText("Disconnected from NAS")
         await previous?.disconnect()
@@ -311,21 +311,35 @@ extension LibraryStore {
         await task.value
     }
 
+    func waitForMarkdownPublication(for session: EditorSession, initialDelay: Duration = .seconds(5)) async {
+        let generation = connectionGeneration
+        var delay = initialDelay
+        while session.isWaitingForMarkdownSource, isConnected, connectionGeneration == generation {
+            do { try await Task.sleep(for: delay) } catch { return }
+            guard !Task.isCancelled, session.isWaitingForMarkdownSource, isConnected,
+                  connectionGeneration == generation else { return }
+            await fetchContent(for: session)
+            delay = min(delay * 2, .seconds(60))
+        }
+    }
+
     private func downloadContent(for session: EditorSession) async {
-        guard let client, let remoteID = session.note.remoteID, !isPushing else { return }
+        guard let client, let remoteID = session.note.remoteID else { return }
         let account = accountGeneration, connection = connectionGeneration, repo = repository, assets = attachments
         guard session.workspaceGeneration == account else { return }
         do {
-            guard try await !repo.syncAttempts().contains(where: { $0.note.id == session.id }) else { return }
+            guard let baseline = try await repo.note(id: session.id),
+                  try await !repo.syncAttempts().contains(where: { $0.note.id == session.id }) else { return }
             var incoming = try await Self.downloadedRecord(noteID: remoteID, client: client, repo: repo, assets: assets)
             incoming.id = session.id
             guard account == accountGeneration, connection == connectionGeneration, self.client === client, session.workspaceGeneration == account else { return }
             await save(session)
             guard account == accountGeneration, connection == connectionGeneration, self.client === client, session.workspaceGeneration == account else { return }
-            guard !isPushing, try await !repo.syncAttempts().contains(where: { $0.note.id == session.id }) else { return }
+            guard try await !repo.syncAttempts().contains(where: { $0.note.id == session.id }) else { return }
             let mergeGeneration = session.editGeneration
-            let merged = try await repo.mergeRemote(incoming)
+            let merged = try await repo.mergeRemote(incoming, ifUnchangedFrom: baseline)
             guard account == accountGeneration, connection == connectionGeneration, self.client === client, session.workspaceGeneration == account else { return }
+            session.isWaitingForMarkdownSource = false
             if session.editGeneration == mergeGeneration {
                 session.note = merged
             } else {
@@ -344,6 +358,9 @@ extension LibraryStore {
                 await save(session)
             }
             try await reload()
+        } catch RemoteContentPending.markdownPublication {
+            guard account == accountGeneration, connection == connectionGeneration, self.client === client else { return }
+            session.isWaitingForMarkdownSource = true
         } catch {
             guard account == accountGeneration, connection == connectionGeneration, self.client === client else { return }
             session.saveError = nil

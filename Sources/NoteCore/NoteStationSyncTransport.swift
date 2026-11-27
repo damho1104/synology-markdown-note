@@ -139,31 +139,36 @@ public actor NoteStationSyncTransport: SyncTransport {
     public func reconcile(_ attempt: SyncAttempt) async throws -> SyncReconciliation {
         guard var journal = try load(attempt.operation.id) else { return .notApplied }
         if journal.phase == .prepared { return .notApplied }
-        if journal.remoteID == nil {
-            // A title is only a candidate filter. The exact uploaded UUID marker
-            // and bytes must prove ownership before binding a recovered ID.
-            var matches: [String] = []
-            for candidate in try await client.notes() where candidate.title == attempt.note.title && candidate.notebookID == attempt.note.notebookID {
-                let note = try await read(candidate.id)
-                for file in note.attachments where file.name == journal.stageName {
-                    if try await client.download(fileID: file.id, noteID: candidate.id) == journal.stageSource { matches.append(candidate.id) }
-                }
-            }
-            guard Set(matches).count == 1, let id = matches.first else { return .unknown }
-            journal.remoteID = id; try save(journal)
-            try await repository.bindRemoteID(noteID: attempt.note.id, remoteID: id)
-            // The create acknowledgement's version was lost. Do not invent it.
-            return .unknown
+        let remote: RemoteNote
+        if let id = journal.remoteID {
+            remote = try await read(id)
+        } else {
+            // The exact staging marker identifies the create even if its receipt was lost.
+            guard let created = try await findStagedCreate(journal, note: attempt.note) else { return .unknown }
+            remote = created
+            journal.remoteID = created.summary.id
+            try save(journal)
         }
-        try await repository.bindRemoteID(noteID: attempt.note.id, remoteID: journal.remoteID!)
-        let remote = try await read(journal.remoteID!)
+        try await repository.bindRemoteID(noteID: attempt.note.id, remoteID: remote.summary.id)
         let verified = try await localAssets(attempt.note)
         if attempt.note.mode == .markdown, try await publishedSource(remote, attempt: attempt) != nil {
             return .applied(try await finishConfirmed(&journal, attempt: attempt, verified: verified))
         }
         if journal.phase == .staging {
-            if remote.summary.version == journal.baseVersion { journal.phase = .prepared; try save(journal); return .notApplied }
-            return .unknown
+            if let baseVersion = journal.baseVersion {
+                guard remote.summary.version == baseVersion else { return .unknown }
+                journal.phase = .prepared
+                try save(journal)
+                return .notApplied
+            }
+            guard try await isUntouchedStagedCreate(remote, journal: journal, note: attempt.note,
+                                                    files: userAssets(verified, documentID: journal.documentID)) else {
+                return .unknown
+            }
+            // Every subsequent write uses the observed version as its CAS condition.
+            journal.stageVersion = remote.summary.version
+            journal.phase = .staged
+            try save(journal)
         }
         if journal.phase == .body, journal.bodyVersion == nil, remote.summary.version != journal.stageVersion {
             // Content may already have reached NAS, but no acknowledged base for
@@ -171,6 +176,37 @@ public actor NoteStationSyncTransport: SyncTransport {
             return .unknown
         }
         return .applied(try await advance(&journal, attempt: attempt, verified: verified))
+    }
+
+    private func findStagedCreate(_ journal: Journal, note: NoteRecord) async throws -> RemoteNote? {
+        var match: RemoteNote?
+        for candidate in try await client.notes() where candidate.title == note.title && candidate.notebookID == note.notebookID {
+            let remote = try await read(candidate.id)
+            guard try await stagingMarker(in: remote, journal: journal) != nil else { continue }
+            guard match == nil else { return nil }
+            match = remote
+        }
+        return match
+    }
+
+    private func stagingMarker(in remote: RemoteNote, journal: Journal) async throws -> RemoteAttachment? {
+        let markers = remote.attachments.filter { $0.name == journal.stageName }
+        guard markers.count == 1, let marker = markers.first,
+              try await client.download(fileID: marker.id, noteID: remote.summary.id) == journal.stageSource else { return nil }
+        return marker
+    }
+
+    private func isUntouchedStagedCreate(_ remote: RemoteNote, journal: Journal, note: NoteRecord,
+                                         files: [(NoteAttachment, Data)]) async throws -> Bool {
+        let summary = remote.summary
+        guard summary.title == note.title, summary.notebookID == note.notebookID,
+              summary.tags.isEmpty, !summary.isFavorite, !summary.isTrashed, !summary.isLocked,
+              remote.html == journal.initialHTML, remote.attachments.count == files.count + 1,
+              let marker = try await stagingMarker(in: remote, journal: journal) else { return false }
+        var attached = remote
+        attached.attachments.removeAll { $0.id == marker.id }
+        let bindings = try await bindAndVerify(files, in: attached)
+        return Set(bindings.values) == Set(attached.attachments.map(\.id))
     }
 
     public func finish(operationID: UUID) async {

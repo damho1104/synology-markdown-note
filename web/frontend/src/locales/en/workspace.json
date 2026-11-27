@@ -178,6 +178,7 @@
   "viewMode": "View mode",
   "viewRevisionHistory": "View revision history",
   "waitingAutosave": "Waiting to autosave…",
+  "waitingForMarkdown": "Syncing…",
   "waitingForAttachments": "Waiting for attachments…",
   "writesPendingVerification": "Writes pending verification",
   "writingNewNote": "Writing a new note",

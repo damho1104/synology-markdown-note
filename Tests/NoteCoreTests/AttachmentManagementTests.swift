@@ -82,7 +82,8 @@ extension AttachmentManagementTests {
         var restored = try #require(try await f.repo.note(id: note.id))
         restored.markdown = "[파일](\(attachment.reference))"; restored.attachments.append(attachment)
         _ = try await f.repo.save(restored)
-        await pause.resume(); await push.value
+        await pause.resume()
+        #expect(await push.value == nil)
         let saved = try #require(try await f.repo.note(id: note.id))
         #expect(saved.attachments.contains { $0.id == attachment.id })
         #expect(saved.markdown == "[파일](\(attachment.reference))")

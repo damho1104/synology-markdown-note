@@ -324,10 +324,11 @@ public actor NoteRepository {
         return result
     }
 
-    @discardableResult public func mergeRemote(_ remote: NoteRecord) throws -> NoteRecord {
+    @discardableResult public func mergeRemote(_ remote: NoteRecord, ifUnchangedFrom baseline: NoteRecord? = nil) throws -> NoteRecord {
         guard let remoteID = remote.remoteID else { throw RepositoryError(message: coreText("The server note ID is missing.")) }
         guard try !isPermanentlyDeleted(remoteID: remoteID) else { throw RepositoryError(message: coreText("This note was permanently deleted.")) }
         if var local = try note(remoteID: remoteID) {
+            if let baseline, local.id != baseline.id || local.serverVersion != baseline.serverVersion { return local }
             if local.serverVersion == remote.serverVersion && local.hasRemoteContent { return local }
             let operation = try pendingOperations().first(where: { $0.noteID == local.id })
             if operation != nil {

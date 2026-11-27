@@ -346,20 +346,25 @@ struct LibraryView: View {
 
             Divider()
             HStack(spacing: 9) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(library.profile.server.isEmpty ? appText("NAS Account Required") : library.profile.username)
-                        .font(.caption.weight(.medium))
-                    HStack(spacing: 5) {
+                Image(systemName: "externaldrive")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 20, height: 28)
+                    .overlay(alignment: .bottomTrailing) {
                         Circle()
                             .fill(library.isNASAvailable ? Color.green : Color.red)
                             .frame(width: 7, height: 7)
-                            .accessibilityHidden(true)
-                        Text(library.connectionStatus)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .help(library.connectionError ?? library.connectionStatus)
+                            .overlay { Circle().stroke(.background, lineWidth: 1) }
                     }
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(library.profile.server.isEmpty ? appText("NAS Account Required") : library.profile.username)
+                        .font(.caption.weight(.medium))
+                    Text(library.connectionStatus)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .help(library.connectionError ?? library.connectionStatus)
                 }
                 Spacer(minLength: 8)
                 SettingsLink { IconButtonLabel(title: appText("Note Station Settings"), systemImage: "gearshape") }

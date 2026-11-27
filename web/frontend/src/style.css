@@ -822,19 +822,22 @@ input {
   gap: 5px;
 }
 .nas-connection-status {
+  position: relative;
   display: inline-flex;
   align-items: center;
   flex: none;
-  gap: 3px;
 }
-.nas-connection-status::after {
-  content: "";
+.nas-connection-dot {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
   width: 8px;
   height: 8px;
+  border: 1px solid var(--surface, #fff);
   border-radius: 50%;
   background: var(--nas-disconnected, #c73340);
 }
-.nas-connection-status[data-connected="true"]::after {
+.nas-connection-status[data-connected="true"] .nas-connection-dot {
   background: var(--nas-connected, #168249);
 }
 .auth-brand {

@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { Workspace } from './Workspace'
@@ -7,6 +8,8 @@ import { supportedLanguages } from './catalogs'
 import type { Status } from './api'
 import { exportMath } from './mathExport'
 import { DEFAULT_PREFERENCES, PREFERENCES_KEY, loadPreferences } from './preferences'
+
+const styles = readFileSync('src/style.css', 'utf8')
 
 vi.mock('./mathExport', () => ({ exportMath: vi.fn(async () => []) }))
 
@@ -41,6 +44,11 @@ it('updates the NAS indicator after a failed list refresh and successful retry',
   mount()
   const connected = await screen.findByRole('img', {name: 'NAS 연결됨'})
   expect(connected.querySelector('svg')).toBeTruthy()
+  expect(connected.querySelector('.nas-connection-dot')).toBeTruthy()
+  expect(styles).toMatch(/\.nas-connection-status\s*\{[^}]*position:\s*relative/s)
+  expect(styles).toMatch(/\.nas-connection-dot\s*\{[^}]*position:\s*absolute[^}]*right:\s*-2px[^}]*bottom:\s*-2px/s)
+  expect(styles).toMatch(/\.nas-connection-status\[data-connected="true"\]\s+\.nas-connection-dot\s*\{[^}]*var\(--nas-connected/s)
+  expect(styles).toMatch(/\.nas-connection-dot\s*\{[^}]*var\(--nas-disconnected/s)
   expect(connected.getAttribute('data-connected')).toBe('true')
   expect(connected.closest('.account-footer')?.textContent).toContain('NAS 연결 · 조회 가능')
   const refresh = screen.getByRole('button', {name: '새로고침'})

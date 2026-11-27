@@ -122,7 +122,7 @@ expected = {'CFBundleIdentifier': 'com.damho.SynologyMarkdown',
             'CFBundleExecutable': 'SynologyNote', 'CFBundlePackageType': 'APPL',
             'CFBundleName': 'Synology Markdown Note',
             'CFBundleDisplayName': 'Synology Markdown Note',
-            'CFBundleShortVersionString': base_version, 'CFBundleVersion': '30',
+            'CFBundleShortVersionString': base_version, 'CFBundleVersion': '31',
             'CFBundleIconFile': 'AppIcon', 'LSMinimumSystemVersion': '14.0',
             'CFBundleDevelopmentRegion': 'en', 'CFBundleLocalizations': ['en', 'ko']}
 for key, value in expected.items():

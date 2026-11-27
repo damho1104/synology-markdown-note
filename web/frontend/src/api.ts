@@ -104,7 +104,7 @@ export class WebConnectionError extends UiError {
 
 export function errorText(error: unknown, fallback: Message = "errors.unexpected"): string {
   if (error instanceof ApiFailure) return apiErrorMessage(error.code) ?? t("errors.requestFailed", String(error.status));
-  return error instanceof UiError ? error.message : t(fallback);
+  return t(error instanceof UiError ? error.messageKey : fallback);
 }
 
 export const SESSION_EXPIRED_EVENT = "synonote:session-expired";

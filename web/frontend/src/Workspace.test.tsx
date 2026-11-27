@@ -577,6 +577,29 @@ it('applies a browser language override immediately and restores the server defa
   expect(loadPreferences()).toMatchObject({language: ''})
 })
 
+it('preserves a language written by another tab before a local appearance edit', async () => {
+  mount()
+  await screen.findByLabelText('노트 제목')
+  fireEvent.click(screen.getByRole('button', {name: /^설정$/}))
+  const appearance = screen.getByLabelText('화면 모드')
+  localStorage.setItem(PREFERENCES_KEY, JSON.stringify({version: 1, preferences: {...DEFAULT_PREFERENCES, language: 'en'}}))
+  fireEvent.change(appearance, {target: {value: 'dark'}})
+  expect(loadPreferences()).toMatchObject({language: 'en', appearance: 'dark'})
+})
+
+it('retranslates an active NAS list error when the display language changes', async () => {
+  const fetcher = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation((path, init) =>
+    path === '/api/notes' ? Promise.resolve(Response.json({error: 'NAS_UNAVAILABLE'}, {status: 503})) : fetcher(path, init))
+  mount()
+  const alert = await screen.findByRole('alert')
+  expect(alert.textContent).toContain('NAS와 통신하지 못했습니다')
+  fireEvent.click(screen.getByRole('button', {name: /^설정$/}))
+  fireEvent.change(screen.getByLabelText('표시 언어'), {target: {value: 'en'}})
+  expect(within(alert).getByRole('button', {name: 'Retry'})).toBeTruthy()
+  expect(alert.textContent).toContain('Could not reach the NAS')
+})
+
 it('follows system theme changes live while keeping an explicit appearance override across reloads', async () => {
   let listener: () => void = () => {}
   const media = { matches: false, addEventListener: vi.fn((_event: string, fn: () => void) => { listener = fn }),

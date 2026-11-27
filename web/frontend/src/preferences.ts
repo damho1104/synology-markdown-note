@@ -62,10 +62,16 @@ export function loadPreferences(): PreviewPreferences {
   return { ...DEFAULT_PREFERENCES }
 }
 
-export function savePreferences(preferences: PreviewPreferences): void {
+export function savePreferences(
+  changes: Partial<PreviewPreferences>,
+  current: PreviewPreferences = DEFAULT_PREFERENCES,
+): PreviewPreferences {
   try {
-    localStorage.setItem(PREFERENCES_KEY, JSON.stringify({ version: 1, preferences: validatePreferences(preferences) }))
+    const preferences = validatePreferences({ ...loadPreferences(), ...changes })
+    localStorage.setItem(PREFERENCES_KEY, JSON.stringify({ version: 1, preferences }))
+    return preferences
   } catch {
     // Keep applying the in-memory settings if browser storage is unavailable.
+    return validatePreferences({ ...current, ...changes })
   }
 }

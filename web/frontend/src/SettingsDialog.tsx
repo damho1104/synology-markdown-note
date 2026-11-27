@@ -16,7 +16,7 @@ function languageName(language: string): string {
 
 export function SettingsDialog({ preferences, onChange, onClose }: {
   preferences: PreviewPreferences
-  onChange: (preferences: PreviewPreferences) => void
+  onChange: (changes: Partial<PreviewPreferences>) => void
   onClose: () => void
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null)
@@ -45,7 +45,7 @@ export function SettingsDialog({ preferences, onChange, onClose }: {
   }, [])
 
   function update<Key extends keyof PreviewPreferences>(key: Key, value: PreviewPreferences[Key]) {
-    onChange({ ...preferences, [key]: value })
+    onChange({ [key]: value })
   }
 
   return <dialog ref={dialogRef} className="native-settings-dialog" aria-modal="true"

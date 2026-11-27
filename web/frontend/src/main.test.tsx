@@ -118,3 +118,15 @@ it("offers a keyboard retry in the same document when early requests fail", asyn
   expect(document.getElementById("root")).toBe(root);
   expect(document.documentElement.lang).toBe("ko");
 });
+
+it("keeps startup failure and retry controls in the saved display language", async () => {
+  vi.useFakeTimers();
+  localStorage.setItem("synonote:web-preferences", JSON.stringify({version: 1, preferences: {language: "en"}}));
+  const requests = mockStartup(async () => Response.json({}, {status: 503}));
+  await act(async () => { await import("./main"); });
+  expect(screen.getByRole("status").closest("[lang]")?.getAttribute("lang")).toBe("en");
+  await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+  expect(screen.getByRole("status").textContent).toBe("Could not load web settings.");
+  expect(screen.getByRole("button", {name: "Retry"})).toBeTruthy();
+  expect(requests()).toEqual(["/api/public-config", "/api/public-config"]);
+});

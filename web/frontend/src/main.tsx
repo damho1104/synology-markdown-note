@@ -10,7 +10,8 @@ const root = ReactDOM.createRoot(document.getElementById('root')!)
 let starting = false
 
 function StartupStatus({ state }: { state: 'loading' | 'retrying' | 'failed' }) {
-  const language = browserLanguage(navigator.languages)
+  const preferred = navigator.languages
+  const language = languageForPreference(loadPreferences().language, preferred, browserLanguage(preferred))
   const failed = state === 'failed'
   return (
     <div className="auth-shell">

@@ -35,10 +35,14 @@ export function setDefaultLanguage(value: Language): void {
   defaultLanguage = value;
 }
 
-export function languageForPreference(preference: string, preferred: readonly string[]): Language {
+export function languageForPreference(
+  preference: string,
+  preferred: readonly string[],
+  fallback: Language = defaultLanguage,
+): Language {
   if (preference === "auto") return browserLanguage(preferred);
   if (isSupportedLanguage(preference)) return preference;
-  return defaultLanguage;
+  return fallback;
 }
 
 const formats = new Map<string, Intl.NumberFormat>();
@@ -69,8 +73,8 @@ export function t(message: Message, ...values: (string | number)[]): string {
 }
 
 export class UiError extends Error {
-  constructor(message: Message) {
-    super(t(message));
+  constructor(readonly messageKey: Message) {
+    super(t(messageKey));
   }
 }
 

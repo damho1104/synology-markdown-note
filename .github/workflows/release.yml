@@ -48,6 +48,11 @@ jobs:
           tag="v$base"
           if [[ "$REF_TYPE" == tag ]]; then tag="$REF_NAME"; fi
           version=$(SYNOLOGY_NOTE_RELEASE_TAG="$tag" python3 script/version_info.py)
+          notes="docs/release-notes/v$version.md"
+          if [[ ! -s "$notes" ]]; then
+            echo "::error::Release notes are missing or empty: $notes"
+            exit 1
+          fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
@@ -284,13 +289,17 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       RELEASE_TAG: ${{ needs.version.outputs.tag }}
+      RELEASE_VERSION: ${{ needs.version.outputs.version }}
     steps:
       - name: Install publishing tools
         run: |
           find /etc/apt -maxdepth 2 -type f \( -name '*.list' -o -name '*.sources' \) \
             -exec sed -Ei 's#https?://(archive|security)\.ubuntu\.com/ubuntu#https://mirror.kakao.com/ubuntu#g' {} +
           apt-get update --error-on=any
-          apt-get install -y --no-install-recommends ca-certificates gh jq
+          apt-get install -y --no-install-recommends ca-certificates gh git jq
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
           pattern: release-*
@@ -298,8 +307,6 @@ jobs:
           path: release-assets
       - name: Verify complete asset set and checksums
         working-directory: release-assets
-        env:
-          RELEASE_VERSION: ${{ needs.version.outputs.version }}
         run: |
           for platform in ubuntu-22.04-amd64 ubuntu-24.04-amd64 linux-glibc2.28-amd64 macos-arm64; do
             test -s "synonote-cli-$RELEASE_TAG-$platform"
@@ -309,14 +316,14 @@ jobs:
           test -s "SynologyMarkdownNote-$RELEASE_VERSION-arm64.zip"
       - name: Upload all assets to a draft, then publish
         run: |
+          notes="docs/release-notes/v$RELEASE_VERSION.md"
           # Resume an interrupted draft; never replace an already published release.
           if gh release view "$RELEASE_TAG" --json isDraft > release.json 2> release-error.txt; then
             test "$(jq -r .isDraft release.json)" = true
           else
             # Creation fails safely if the tag is missing or the API is unavailable.
             gh release create "$RELEASE_TAG" --verify-tag --target main --draft \
-              --title "$RELEASE_TAG" --generate-notes \
-              --notes 'macOS arm64 app and CLI; Linux x86_64 glibc 2.28+ CLI tested on Debian, Ubuntu, AlmaLinux, Rocky Linux, Fedora and openSUSE; Ubuntu 22.04/24.04 amd64 CLI. macOS app uses a dedicated self-signed release certificate and is not Apple notarized. See distribution.ko.md and SHA256SUMS-*.'
+              --title "$RELEASE_TAG" --notes-file "$notes"
           fi
           gh release upload "$RELEASE_TAG" release-assets/* --clobber
-          gh release edit "$RELEASE_TAG" --draft=false --latest
+          gh release edit "$RELEASE_TAG" --title "$RELEASE_TAG" --notes-file "$notes" --draft=false --latest

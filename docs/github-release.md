@@ -11,7 +11,7 @@
 Only an optional `v` prefix is allowed before `X.Y.Z`, as in `v1.2.17` or `1.2.17`. Short commit suffixes such as `1.2.17-abcdef0` and prerelease suffixes are not allowed. The build stops if the tag version differs from `project.version` in `cli/pyproject.toml`.
 
 1. Apply the shared version to `cli/pyproject.toml`, `web/backend/pyproject.toml`, and `web/frontend/package.json` together. Update lockfiles with `uv lock` in the CLI and web backend, and `npm install --package-lock-only` in the web frontend.
-2. Commit the changes and push to `develop`.
+2. Add the bilingual release notes at `docs/release-notes/vX.Y.Z.md`, with Korean first and English second. Commit the changes and push to `develop`.
 3. Once CI passes, update local `main` to the latest remote state, integrate with `git merge --no-ff develop`, and push `main`.
 4. Update local `main`, then create and push a version tag. The example below assumes source version `1.2.17`; do not recreate or move a tag that has already been published.
 

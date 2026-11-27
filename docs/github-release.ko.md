@@ -11,7 +11,7 @@
 `v1.2.17` 또는 `1.2.17`처럼 `X.Y.Z` 앞에 선택적으로 `v`만 붙일 수 있습니다. `1.2.17-abcdef0` 같은 short commit 접미사, 사전 릴리스 접미사는 허용하지 않습니다. 태그 버전이 `cli/pyproject.toml`의 `project.version`과 다르면 빌드를 중단합니다.
 
 1. 공통 버전을 `cli/pyproject.toml`, `web/backend/pyproject.toml`, `web/frontend/package.json`에 함께 반영합니다. CLI와 웹 백엔드에서 `uv lock`, 웹 프런트엔드에서 `npm install --package-lock-only`로 잠금 파일도 갱신합니다.
-2. 변경 사항을 커밋하고 `develop`에 푸시합니다.
+2. `docs/release-notes/vX.Y.Z.md`에 한국어, 영어 순서로 릴리스 노트를 추가합니다. 변경 사항을 커밋하고 `develop`에 푸시합니다.
 3. CI가 통과하면 로컬 `main`을 최신 원격 상태로 갱신하고 `git merge --no-ff develop`으로 통합한 뒤 `main`을 푸시합니다.
 4. 로컬 `main`을 갱신한 뒤 버전 태그를 붙여 푸시합니다. 아래는 소스 버전이 `1.2.17`일 때의 예이며, 이미 게시된 태그는 다시 만들거나 이동하지 않습니다.
 

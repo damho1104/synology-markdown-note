@@ -178,7 +178,7 @@
   "viewMode": "보기 모드",
   "viewRevisionHistory": "수정 이력 조회",
   "waitingAutosave": "자동 저장 대기 중…",
-  "waitingForMarkdown": "마크다운 동기화 대기 중",
+  "waitingForMarkdown": "동기화 중…",
   "waitingForAttachments": "첨부파일 처리 대기 중…",
   "writesPendingVerification": "저장 확인 대기 작업",
   "writingNewNote": "새 노트 작성 중",

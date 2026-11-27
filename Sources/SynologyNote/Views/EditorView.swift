@@ -64,12 +64,11 @@ struct EditorView: View {
                         .help(appText("Connect to the NAS and sync the Trash to permanently delete this note."))
                 }.padding(12).background(.quaternary)
             }
-            if session.note.syncState == .failed {
-                HStack {
-                    Label(appText("Verifying NAS Save"), systemImage: "arrow.triangle.2.circlepath")
-                    Spacer()
-                    Button(appText("Check Again")) { Task { await library.pushPendingUploads() } }.disabled(!library.isConnected || library.isPushing)
-                }.padding(12).foregroundStyle(.secondary).background(.quaternary)
+            if session.note.syncState == .failed,
+               AppLocalization.syncRequiresManualReview(session.note.lastError),
+               let message = AppLocalization.syncAttentionMessage(session.note.lastError) {
+                Label(message, systemImage: "exclamationmark.circle")
+                    .padding(12).foregroundStyle(.secondary).background(.quaternary)
             }
             Divider()
             content
@@ -144,9 +143,8 @@ struct EditorView: View {
     @ViewBuilder private var content: some View {
         if session.note.mode == .locked {
             ContentUnavailableView(appText("Encrypted Note"), systemImage: "lock", description: Text(appText("Editing encrypted notes is not supported yet. Open the note in the official app.")))
-        } else if session.note.mode == .original && session.isWaitingForMarkdownSource {
-            ContentUnavailableView(appText("Waiting for Markdown to sync"), systemImage: "arrow.triangle.2.circlepath",
-                description: Text(appText("The app will open the note when its Markdown source is available on the NAS.")))
+        } else if session.note.mode == .original && session.isWaitingForMarkdownSource && !session.note.hasRemoteContent {
+            ContentUnavailableView(appText("Syncing…"), systemImage: "arrow.triangle.2.circlepath")
         } else if session.note.mode == .original && !session.note.hasRemoteContent {
             VStack(spacing: 16) {
                 ContentUnavailableView(session.isDownloading ? appText("Downloading Note Body from NAS…") : appText("Note Body Needs Downloading"),
@@ -215,11 +213,11 @@ struct EditorView: View {
             .padding(.horizontal, 20).frame(minHeight: 34)
     }
     private var nasStatus: String {
-        if session.isWaitingForMarkdownSource { return appText("Waiting for Markdown to sync") }
+        if session.isWaitingForMarkdownSource { return appText("Syncing…") }
         switch session.note.syncState {
         case .synced: return appText("Synced with NAS")
         case .conflict: return appText("Compare Changes")
-        case .failed: return appText("Verifying NAS Save")
+        case .failed: return AppLocalization.syncRequiresManualReview(session.note.lastError) ? appText("Some Changes Need Review") : appText("Verifying NAS Save")
         case .local: return appText("Preparing NAS Upload")
         case .pending: return !library.isConnected ? appText("Waiting for NAS Connection") : library.isPushing ? appText("Uploading to the NAS…") : appText("Waiting to Upload")
         }

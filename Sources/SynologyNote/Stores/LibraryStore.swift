@@ -307,7 +307,7 @@ final class LibraryStore {
             await fetchContent(for: session)
         }
         guard session.workspaceGeneration == accountGeneration, sessions[session.id] === session else { return nil }
-        if session.note.mode == .original && session.isWaitingForMarkdownSource { return nil }
+        if session.isWaitingForMarkdownSource && !session.note.hasRemoteContent { return nil }
         guard session.note.remoteID == nil || session.note.hasRemoteContent || session.note.mode == .locked else {
             errorMessage = AppLocalization.syncErrorMessage(session.note.lastError) ?? appText("Download the note body from the NAS before editing.")
             return nil

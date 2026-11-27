@@ -64,13 +64,13 @@ extension LibraryStore {
         do {
             let queued = try await repo.pendingOperations()
             if !queued.isEmpty { logEvent(.uploadStarted, fields: ["count": String(queued.count)]) }
-            let awaitingNotebookConfirmation: Bool
+            let notebookMigrationError: NoteStationError?
             do {
                 try await migrateLegacyNotebooks()
-                awaitingNotebookConfirmation = false
+                notebookMigrationError = nil
             } catch let error as NoteStationError {
                 guard case .notebookWriteUncertain = error else { throw error }
-                awaitingNotebookConfirmation = true
+                notebookMigrationError = error
                 logEvent(.uploadFailed, error: error)
             }
             guard generation == connectionGeneration, account == accountGeneration else { return }
@@ -97,11 +97,14 @@ extension LibraryStore {
             for operation in pending {
                 logEvent(.uploadPending, noteID: operation.noteID, fields: ["state": operation.state.rawValue, "attempts": String(operation.attempts)])
             }
-            if pending.contains(where: { $0.state == .conflict }) {
+            if case .notebookWriteUncertain(objectID: nil)? = notebookMigrationError {
+                uploadStatus = NoteStationError.notebookWriteUncertain(objectID: nil).localizedDescription
+            } else if pending.contains(where: { $0.state == .conflict ||
+                ($0.state == .uncertain && AppLocalization.syncRequiresManualReview($0.error)) }) {
                 uploadStatus = appText("Some Changes Need Review")
             } else if !pending.isEmpty {
                 uploadStatus = pending.contains { $0.state == .uncertain } ? appText("Verifying NAS Save") : appText("Waiting to Upload")
-            } else if awaitingNotebookConfirmation {
+            } else if notebookMigrationError != nil {
                 uploadStatus = appText("Local notebook sync is pending. The app checks automatically.")
             } else {
                 uploadStatus = appText("Synced with NAS")

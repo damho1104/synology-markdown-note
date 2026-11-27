@@ -1142,9 +1142,10 @@ export function Workspace({
     let timer: number;
     let stopped = false;
     let inFlight: AbortController | undefined;
+    let delay = 5_000;
 
     function schedule() {
-      timer = window.setTimeout(check, 5_000);
+      timer = window.setTimeout(check, delay);
     }
     async function check() {
       if (document.hidden) { schedule(); return; }
@@ -1160,6 +1161,7 @@ export function Workspace({
         window.clearTimeout(timeout);
         inFlight = undefined;
       }
+      delay = Math.min(delay * 2, 60_000);
       if (!stopped) schedule();
     }
 

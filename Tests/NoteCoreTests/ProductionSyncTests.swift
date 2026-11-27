@@ -90,14 +90,62 @@ import SwiftSoup
         #expect(try await f.repo.syncAttempts().isEmpty)
     }
 
-    @Test func lostCreateResponseBindsOwnedMarkerButNeverCreatesAgain() async throws {
+    @Test func lostCreateResponseResumesPublicationWithoutCreatingAgain() async throws {
         let f = try await ProductionFixture.make(loseCreate: true); defer { f.close() }
-        let note = try await f.repo.save(NoteRecord(title: "생성 응답 유실", notebookID: "book", markdown: "초안"))
-        await f.coordinator.push(); await f.coordinator.push(); await f.coordinator.push()
-        #expect(f.server.counts().creates == 1)
-        #expect(try await f.repo.note(id: note.id)?.remoteID != nil)
+        var draft = NoteRecord(title: "Lost create receipt", notebookID: "book")
+        let file = try await f.assets.importData(Data("original bytes".utf8), name: "file.txt")
+        draft.attachments = [file]
+        draft.markdown = "# Draft\n\n[File](\(file.reference))"
+        let note = try await f.repo.save(draft)
+
+        await f.coordinator.push()
         #expect(try await f.repo.syncAttempts().count == 1)
-        #expect(try await f.repo.note(id: note.id)?.markdown == "초안")
+        await f.coordinator.push()
+
+        let saved = try #require(try await f.repo.note(id: note.id))
+        #expect(f.server.counts().creates == 1)
+        #expect(saved.syncState == .synced)
+        #expect(saved.markdown == draft.markdown)
+        #expect(saved.attachments.first?.remoteID != nil)
+        #expect(try await f.repo.syncAttempts().isEmpty)
+    }
+
+    @Test func lostCreateResponseDoesNotOverwriteConcurrentlyEditedStagedNote() async throws {
+        let f = try await ProductionFixture.make(loseCreate: true); defer { f.close() }
+        let draft = try await f.repo.save(NoteRecord(title: "Edited elsewhere", notebookID: "book", markdown: "# Draft"))
+        await f.coordinator.push()
+        let staged = try #require(try await f.client.notes().first)
+        let changed = "<p>Edited on another device</p>"
+        _ = try await f.client.applyWrite(NoteStationWrite(objectID: staged.id, baseVersion: staged.version, html: changed))
+
+        await f.coordinator.push()
+        await f.coordinator.push()
+
+        #expect(f.server.counts().creates == 1)
+        #expect(f.server.counts().sets == 1)
+        #expect(try await f.client.fetch(noteID: staged.id).html == changed)
+        #expect(try await f.repo.note(id: draft.id)?.markdown == "# Draft")
+        #expect(try await f.repo.syncAttempts().count == 1)
+    }
+
+    @Test func reconciliationPublishesNewerEditBeforeReportingBatchComplete() async throws {
+        let f = try await ProductionFixture.make(loseCreate: true); defer { f.close() }
+        var draft = try await f.repo.save(NoteRecord(title: "Edited while uploading", notebookID: "book", markdown: "# First"))
+        await f.coordinator.push()
+        draft.markdown = "# Latest"
+        let revised = try await f.repo.save(draft)
+        await f.coordinator.push { processed, total in
+            if processed == total {
+                let saved = try? await f.repo.note(id: revised.id)
+                #expect(saved?.syncState == .synced)
+            }
+        }
+
+        let saved = try #require(try await f.repo.note(id: revised.id))
+        #expect(saved.syncState == .synced)
+        let remote = try await f.client.fetch(noteID: try #require(saved.remoteID))
+        #expect(remote.html.contains("Latest"))
+        #expect(f.server.counts().creates == 1)
     }
 
     @Test func serverConflictDuringBodyWritePreservesLocalDraft() async throws {

@@ -41,11 +41,13 @@ enum AppLocalization {
     static func syncAttentionMessage(_ message: String?, language: String = NoteLocalization.language) -> String? {
         guard let message = syncErrorMessage(message, language: language) else { return nil }
         let bundle = NoteLocalization.localization(in: NoteLocalization.coreResources, language: language)
-        let automaticVerification = [
-            "The NAS save could not be confirmed yet. The source was kept while verification continues.",
-            "The previous upload could not be confirmed. Check the server before creating the note again."
-        ]
-        return automaticVerification.contains { NoteLocalization.text($0, arguments: [], in: bundle) == message } ? nil : message
+        let verification = "The NAS save could not be confirmed yet. The source was kept while verification continues."
+        return NoteLocalization.text(verification, arguments: [], in: bundle) == message ? nil : message
+    }
+
+    static func syncRequiresManualReview(_ message: String?) -> Bool {
+        guard let message = syncErrorMessage(message) else { return false }
+        return message == SyncError.uncertain.localizedDescription
     }
 
     // Older notes and queued operations store rendered errors. Match only

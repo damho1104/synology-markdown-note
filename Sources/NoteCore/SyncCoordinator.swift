@@ -81,7 +81,7 @@ public actor SyncCoordinator {
             var processed = 0
             if total > 0 { await progress?(processed, total) }
             // Persisted attempts may have reached the server. Reconcile them before any retry.
-            var restored: Set<UUID> = []
+            var followUp: Set<UUID> = []
             for attempt in attempts {
                 do {
                     switch try await transport.reconcile(attempt) {
@@ -89,9 +89,11 @@ public actor SyncCoordinator {
                         try verify(snapshot, attempt: attempt)
                         try await repository.completeSync(attempt, snapshot: snapshot)
                         await transport.finish(operationID: attempt.operation.id)
+                        followUp.insert(attempt.note.id)
+                        continue
                     case .notApplied:
                         try await repository.restoreRetryableAfterNotApplied(noteID: attempt.note.id)
-                        restored.insert(attempt.note.id)
+                        followUp.insert(attempt.note.id)
                         continue
                     case .unknown:
                         try await repository.fail(noteID: attempt.note.id, message: SyncError.uncertain.localizedDescription, uncertain: true)
@@ -110,10 +112,18 @@ public actor SyncCoordinator {
                 await progress?(processed, total)
             }
             let attempted = Set(attempts.map { $0.note.id })
-            let readyIDs = Set(ready.map(\.noteID)).subtracting(attempted).union(restored)
-            for operation in try await repository.pendingOperations() where readyIDs.contains(operation.noteID) {
+            let readyIDs = Set(ready.map(\.noteID)).subtracting(attempted).union(followUp)
+            let currentQueue = try await repository.pendingOperations().filter {
+                readyIDs.contains($0.noteID) && $0.state != .conflict && $0.state != .uncertain
+                    && ($0.state == .pending || $0.nextAttemptAt <= Date())
+            }
+            let completedDuringReconciliation = followUp.subtracting(currentQueue.map(\.noteID)).count
+            if completedDuringReconciliation > 0 {
+                processed += completedDuringReconciliation
+                await progress?(processed, total)
+            }
+            for operation in currentQueue {
                 guard !Task.isCancelled else { return }
-                guard operation.state != .conflict, operation.state != .uncertain else { continue }
                 await process(operation)
                 processed += 1
                 await progress?(processed, total)

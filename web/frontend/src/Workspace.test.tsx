@@ -45,14 +45,14 @@ it("waits for a Markdown note being published by another client and opens it aut
     ? Promise.resolve(Response.json(ready ? published : staged))
     : fetcher(path, init))
   mount()
-  await screen.findByRole("heading", {name: "마크다운 동기화 대기 중"})
+  await screen.findByRole("heading", {name: "동기화 중…"})
   expect(screen.queryByText("Temporary HTML from NAS")).toBeNull()
   expect(screen.queryByRole("alert")).toBeNull()
 
   ready = true
   await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([path, init]) =>
     path === "/api/notes/note1" && new Headers(init?.headers).has("X-Synonote-Background"))).toBe(true), {timeout: 6_500})
-  await waitFor(() => expect(screen.queryByRole("heading", {name: "마크다운 동기화 대기 중"})).toBeNull())
+  await waitFor(() => expect(screen.queryByRole("heading", {name: "동기화 중…"})).toBeNull())
   fireEvent.click(screen.getByRole("button", {name: "분할"}))
   expect(document.querySelector(".cm-content")?.textContent).toBe(published.markdown)
   expect(writes).toEqual([])

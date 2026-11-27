@@ -207,14 +207,8 @@ import Testing
         #expect(session.isWaitingForMarkdownSource)
         #expect(store.connectionError == nil)
 
-        let remote = try await fixture.client.fetch(noteID: staged.id)
-        let html = "<h1>New note from the first device</h1>"
-        let source = SourceEnvelope(documentID: draft.id, markdown: markdown, blocks: [], html: html).encoded()
-        _ = try await fixture.client.applyWrite(
-            NoteStationWrite(objectID: staged.id, baseVersion: remote.summary.version, html: html),
-            uploads: [NoteStationUpload(name: "synology-note-source-\(draft.id).md", mimeType: "text/markdown", bytes: source, reference: nil)],
-            deleting: remote.attachments.map(\.id)
-        )
+        await fixture.coordinator.push()
+        #expect(try await fixture.repo.note(id: draft.id)?.syncState == .synced)
         await store.refreshFromServer()
 
         #expect(session.note.hasRemoteContent)
@@ -222,6 +216,48 @@ import Testing
         #expect(session.note.mode == .markdown)
         #expect(session.note.markdown == markdown)
         #expect(try await store.repository.pendingOperations().isEmpty)
+    }
+
+    @Test func openingAndEditingAnIndependentNoteDoesNotWaitForTheUploadBatch() async throws {
+        let fixture = try await ProductionFixture.make()
+        defer { fixture.close() }
+        let store = try makeStore(fixture)
+        let receipt = try await fixture.client.createValidationNote(notebookID: "book", title: "Independent",
+                                                                    html: "<p>Independent body</p>")
+        let summary = try await fixture.client.fetch(noteID: receipt.objectID).summary
+        try await store.repository.observeRemote(LibraryStore.record(from: summary))
+        let shell = try #require(try await store.repository.note(remoteID: receipt.objectID))
+        store.isPushing = true
+        let session = try #require(await store.session(for: shell.id, waitForContent: true))
+        #expect(session.note.originalHTML.contains("Independent body"))
+        store.edit(session) { $0.originalHTML = "<p>Edited during upload</p>" }
+        await store.save(session)
+
+        #expect(try await store.repository.note(id: shell.id)?.originalHTML == "<p>Edited during upload</p>")
+        #expect(try await store.repository.pendingOperations().map(\.noteID) == [shell.id])
+        #expect(store.uploadAgain)
+        #expect(store.isPushing)
+    }
+
+    @Test func notebookCreateWithoutNASIdentityReportsReviewRatherThanAutomaticConfirmation() async throws {
+        let fixture = try await ProductionFixture.make()
+        defer { fixture.close() }
+        let store = try makeStore(fixture)
+        defer { store.uploadLoop?.cancel(); store.uploadTask?.cancel(); store.offlineTask?.cancel() }
+        let key = SHA256.hash(data: Data("local".utf8)).map { String(format: "%02x", $0) }.joined()
+        let journal = store.root.appendingPathComponent(store.profile.storageKey)
+            .appendingPathComponent("notebook-migration").appendingPathComponent(key)
+        try FileManager.default.createDirectory(at: journal, withIntermediateDirectories: true)
+        try JSONEncoder().encode(["name": "Local notebook"])
+            .write(to: journal.appendingPathComponent("notebook-create-pending.json"))
+        _ = try await store.repository.save(NoteRecord(notebookID: "local", markdown: "Local"), enqueue: false)
+        let independent = try await store.repository.save(NoteRecord(notebookID: "book", markdown: "Independent"))
+
+        await store.pushPendingUploads()
+
+        #expect(store.uploadStatus == NoteStationError.notebookWriteUncertain(objectID: nil).localizedDescription)
+        #expect(store.connectionError == nil)
+        #expect(try await store.repository.note(id: independent.id)?.syncState == .synced)
     }
 
     @Test func notebookDeletionMovesConfirmedNotesToServerTrashAndPreservesCachedCopy() async throws {

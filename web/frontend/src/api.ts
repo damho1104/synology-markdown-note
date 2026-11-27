@@ -96,6 +96,12 @@ export class ApiFailure extends Error {
   }
 }
 
+export class WebConnectionError extends UiError {
+  constructor() {
+    super("웹 서버에 연결할 수 없습니다. 네트워크를 확인하세요.");
+  }
+}
+
 export function errorText(error: unknown, fallback: Message = "요청 처리 중 오류가 발생했습니다."): string {
   if (error instanceof ApiFailure) return apiErrorMessage(error.code) ?? t("요청에 실패했습니다 ({0}).", error.status);
   return error instanceof UiError ? error.message : t(fallback);
@@ -114,8 +120,9 @@ async function rawRequest<T>(path: string, init: RequestInit = {}, notifyOnUnaut
       cache: "no-store",
       ...init,
     });
-  } catch {
-    throw new UiError("웹 서버에 연결할 수 없습니다. 네트워크를 확인하세요.");
+  } catch (error) {
+    if (init.signal?.aborted) throw error;
+    throw new WebConnectionError();
   }
   if (!response.ok) {
     if (notifyOnUnauthorized && !init.signal?.aborted && response.status === 401 &&

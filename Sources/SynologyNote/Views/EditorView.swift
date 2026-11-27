@@ -148,7 +148,7 @@ struct EditorView: View {
             VStack(spacing: 16) {
                 ContentUnavailableView(session.isDownloading ? appText("Downloading Note Body from NAS…") : appText("Note Body Needs Downloading"),
                     systemImage: "arrow.down.document",
-                    description: Text(session.note.lastError ?? appText("Connect to the NAS to download the note body and attachments.")))
+                    description: Text(AppLocalization.syncErrorMessage(session.note.lastError) ?? appText("Connect to the NAS to download the note body and attachments.")))
                 if session.isDownloading { ProgressView() }
                 else { Button(appText("Retry Note Download")) { Task { await library.fetchContent(for: session) } }.disabled(!library.isConnected) }
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -202,7 +202,7 @@ struct EditorView: View {
             } else { Text(appText("Formatted Document")).foregroundStyle(.secondary).fixedSize() }
             Divider().frame(height: 12)
             Label(nasStatus, systemImage: session.note.syncState == .synced ? "checkmark.icloud" : "externaldrive")
-                .lineLimit(1).help(session.note.lastError ?? library.uploadStatus)
+                .lineLimit(1).help(AppLocalization.syncErrorMessage(session.note.lastError) ?? library.uploadStatus)
             if session.note.syncState == .failed {
                 Button(appText("Verify")) { Task { await library.pushPendingUploads() } }.disabled(library.isPushing || !library.isConnected)
             }

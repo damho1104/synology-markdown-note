@@ -14,21 +14,47 @@ actor NotebookCreationManager {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         journalURL = directory.appendingPathComponent("notebook-create-pending.json")
     }
+
+    func migrationDestination(name: String, client: NoteStationClient) async throws -> RemoteNotebook {
+        if let pending = try readReceipt() {
+            return try await confirmReceipt(pending, client: client)
+        }
+        let candidates = try await client.notebooks().filter { $0.name == name }
+        if candidates.count == 1 {
+            let book = candidates[0]
+            // Persist the destination before moving any notes, including when
+            // this migration reuses a notebook that was already on the NAS.
+            let receipt = Pending(name: book.name, objectID: book.id)
+            try JSONEncoder().encode(receipt).write(to: journalURL, options: .withoutOverwriting)
+            return book
+        }
+        return try await create(name: name, client: client)
+    }
+
+    private func readReceipt() throws -> Pending? {
+        guard FileManager.default.fileExists(atPath: journalURL.path) else { return nil }
+        return try JSONDecoder().decode(Pending.self, from: Data(contentsOf: journalURL))
+    }
+
+    private func confirmReceipt(_ pending: Pending, client: NoteStationClient) async throws -> RemoteNotebook {
+        guard let id = pending.objectID else { throw NoteStationError.notebookWriteUncertain(objectID: nil) }
+        guard let confirmed = try await client.notebooks().first(where: { $0.id == id && $0.name == pending.name }) else {
+            throw NoteStationError.notebookWriteUncertain(objectID: id)
+        }
+        if !retainReceipt { try FileManager.default.removeItem(at: journalURL) }
+        return confirmed
+    }
+
     func create(name: String, client: NoteStationClient) async throws -> RemoteNotebook {
         guard client.capabilities.supportsWrites else { throw NoteStationError.writeContractUnvalidated }
         guard await client.isAuthenticated else { throw NoteStationError.notConnected }
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { throw NoteStationError.invalidArgument("name") }
-        if FileManager.default.fileExists(atPath: journalURL.path) {
-            let pending = try JSONDecoder().decode(Pending.self, from: Data(contentsOf: journalURL))
-            guard pending.name == name, let id = pending.objectID else {
+        if let pending = try readReceipt() {
+            guard pending.name == name else {
                 throw NoteStationError.notebookWriteUncertain(objectID: pending.objectID)
             }
-            guard let confirmed = try await client.notebooks().first(where: { $0.id == id && $0.name == name }) else {
-                throw NoteStationError.notebookWriteUncertain(objectID: id)
-            }
-            if !retainReceipt { try FileManager.default.removeItem(at: journalURL) }
-            return confirmed
+            return try await confirmReceipt(pending, client: client)
         }
         // Exclusive creation also protects separate manager instances in the
         // same workspace. A partial journal fails closed after a crash.

@@ -97,3 +97,7 @@
 "Use an HTTPS address to protect your credentials." = "인증 정보를 보호하려면 HTTPS 주소를 사용하세요.";
 "You don’t have permission to access this note." = "노트에 접근할 권한이 없습니다.";
 "Document Information" = "문서 정보";
+"A Keychain account identifier is required." = "Keychain 계정 식별자가 필요합니다.";
+"Could not read the password data from Keychain." = "Keychain 비밀번호 데이터를 읽을 수 없습니다.";
+"Keychain operation failed (%@)." = "Keychain 작업에 실패했습니다 (%@).";
+"Untitled" = "제목 없음";

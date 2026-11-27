@@ -45,6 +45,42 @@ import Testing
         #expect(NoteLocalization.text(key, arguments: ["50%", "2"], in: korean) == "본문·첨부 보관 중 50%/2")
     }
 
+    @Test func untitledManagedLinksAndCredentialErrorsUseTheCoreCatalog() throws {
+        let english = try #require(NoteLocalization.localization(in: NoteLocalization.coreResources, language: "en"))
+        let korean = try #require(NoteLocalization.localization(in: NoteLocalization.coreResources, language: "ko"))
+        #expect(english.localizedString(forKey: "Untitled", value: "missing", table: nil) == "Untitled")
+        #expect(korean.localizedString(forKey: "Untitled", value: "missing", table: nil) == "제목 없음")
+        let untitled = NoteRecord(title: "").summary
+        let link = try #require(InternalNoteLinks.addManagedLink("Body", target: untitled))
+        #expect(link.contains(InternalNoteLinks.link(coreText("Untitled"), target: untitled)))
+        #expect(CredentialStoreError.invalidAccount.localizedDescription == coreText("A Keychain account identifier is required."))
+        #expect(CredentialStoreError.invalidData.localizedDescription == coreText("Could not read the password data from Keychain."))
+        let key = "Keychain operation failed (%@)."
+        #expect(NoteLocalization.text(key, arguments: ["-25308"], in: english) == "Keychain operation failed (-25308).")
+        #expect(NoteLocalization.text(key, arguments: ["-25308"], in: korean) == "Keychain 작업에 실패했습니다 (-25308).")
+        #expect(CredentialStoreError.keychain(status: -25308).localizedDescription == coreText(key, "-25308"))
+    }
+
+    @Test func localizesPersistedSyncErrorsForDisplayWithoutRewritingNotesOrQueue() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let repository = try NoteRepository(directory: directory)
+        let note = try await repository.save(NoteRecord(notebookID: "test", markdown: "draft"))
+        let oldMessage = "이전 전송의 반영 여부를 확인할 수 없습니다. 재생성 전에 서버를 확인하세요."
+        let english = "The previous upload could not be confirmed. Check the server before creating the note again."
+        try await repository.fail(noteID: note.id, message: oldMessage, uncertain: true)
+        let reopened = try NoteRepository(directory: directory)
+        let stored = try #require(try await reopened.note(id: note.id))
+        #expect(AppLocalization.syncErrorMessage(stored.lastError, language: "en") == english)
+        #expect(AppLocalization.syncErrorMessage(english, language: "ko") == oldMessage)
+        #expect(AppLocalization.syncErrorMessage("NAS 네트워크 요청에 실패했습니다 (-1009).", language: "en") == "The NAS network request failed (-1009).")
+        let diagnostic = "NAS HTTP 요청에 실패했습니다 (upstream 503 / diagnostic A)."
+        #expect(AppLocalization.syncErrorMessage(diagnostic, language: "en") == diagnostic)
+        #expect(try await reopened.note(id: note.id)?.lastError == oldMessage)
+        #expect(try await reopened.pendingOperations().first?.error == oldMessage)
+        #expect(try await reopened.pendingOperations().first?.state == .uncertain)
+    }
+
     @Test func englishResourceValuesContainNoKoreanInterfaceText() throws {
         for resources in [AppLocalization.resources, NoteLocalization.coreResources] {
             let bundle = try #require(NoteLocalization.localization(in: resources, language: "en"))

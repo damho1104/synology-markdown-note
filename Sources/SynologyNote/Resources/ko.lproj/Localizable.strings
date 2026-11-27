@@ -505,9 +505,6 @@
 "Attach" = "첨부";
 "Attach Files or Images" = "파일 또는 이미지 첨부";
 "Math error: " = "수식 오류: ";
-"A Keychain account identifier is required." = "Keychain 계정 식별자가 필요합니다.";
-"Could not read the password data from Keychain." = "Keychain 비밀번호 데이터를 읽을 수 없습니다.";
-"Keychain operation failed (%@)." = "Keychain 작업에 실패했습니다 (%@).";
 "Original HTML" = "원본 HTML";
 "Original Table" = "원본 표";
 "Audio Attachment" = "음성 첨부";

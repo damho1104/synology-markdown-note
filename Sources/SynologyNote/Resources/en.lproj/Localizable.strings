@@ -505,9 +505,6 @@
 "Attach" = "Attach";
 "Attach Files or Images" = "Attach Files or Images";
 "Math error: " = "Math error: ";
-"A Keychain account identifier is required." = "A Keychain account identifier is required.";
-"Could not read the password data from Keychain." = "Could not read the password data from Keychain.";
-"Keychain operation failed (%@)." = "Keychain operation failed (%@).";
 "Original HTML" = "Original HTML";
 "Original Table" = "Original Table";
 "Audio Attachment" = "Audio Attachment";

@@ -27,6 +27,8 @@ final class LibraryStore {
     var connectionStatus = appText("Disconnected from NAS")
     var isRefreshing = false
     var isConnected = false
+    var hasVerifiedNASLists = false
+    var isNASAvailable: Bool { isConnected && hasVerifiedNASLists }
     var profile: ConnectionProfile
     var connectionError: String?
     var loginStorageMessage: String?
@@ -302,7 +304,7 @@ final class LibraryStore {
         }
         guard session.workspaceGeneration == accountGeneration, sessions[session.id] === session else { return nil }
         guard session.note.remoteID == nil || session.note.hasRemoteContent || session.note.mode == .locked else {
-            errorMessage = session.note.lastError ?? appText("Download the note body from the NAS before editing.")
+            errorMessage = AppLocalization.syncErrorMessage(session.note.lastError) ?? appText("Download the note body from the NAS before editing.")
             return nil
         }
         return session

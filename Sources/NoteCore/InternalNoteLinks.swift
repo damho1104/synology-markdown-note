@@ -95,7 +95,7 @@ public enum InternalNoteLinks {
     }
 
     public static func addManagedLink(_ markdown: String, target: NoteSummary) -> String? {
-        addManagedLink(markdown, label: target.title.isEmpty ? "제목 없음" : target.title,
+        addManagedLink(markdown, label: target.title.isEmpty ? coreText("Untitled") : target.title,
                        destination: destination(for: target), aliases: destinations(for: target))
     }
 

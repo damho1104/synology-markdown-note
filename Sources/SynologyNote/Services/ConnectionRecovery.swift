@@ -31,6 +31,7 @@ extension LibraryStore {
     func requestConnectionRecovery(after error: Error, immediate: Bool = false) {
         lastConnectionFailure = error
         guard Self.isRecoverableConnectionError(error) else { return }
+        hasVerifiedNASLists = false
         guard !recoveryExpired else { return }
         logEvent(.recoveryStarted, error: error)
         isConnected = false

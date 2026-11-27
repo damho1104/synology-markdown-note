@@ -114,6 +114,7 @@ extension LibraryStore {
             }
             await self.client?.disconnect()
             guard generation == connectionGeneration else { await client.disconnect(); return }
+            hasVerifiedNASLists = false
             self.client = client; self.profile = newProfile; self.profile.persist(to: preferences)
             let credentials = SavedNASCredentials(password: newProfile.rememberPassword ? password : nil,
                                                  deviceID: newProfile.rememberDevice ? await client.trustedDeviceID : nil)
@@ -132,7 +133,7 @@ extension LibraryStore {
                 loginStorageMessage = appText("The NAS accepted the sign-in, but the app could not save the details in Keychain. Sign in again next time.")
             }
             guard generation == connectionGeneration else { return }
-            isConnected = true; connectionStatus = appText("NAS Connected · Reading Available")
+            isConnected = true
             logEvent(.connectionSucceeded)
             try await reload()
             // Refresh after clearing the connect progress flag.
@@ -148,7 +149,7 @@ extension LibraryStore {
             let retainedExistingConnection = wasConnected && self.client === previousClient && profile == previousProfile
             isConnected = retainedExistingConnection
             connectionStatus = retainedExistingConnection ? appText("NAS Connected · Could Not Switch Accounts") : appText("Sign-in Required")
-            connectionError = AppLocalization.errorMessage(error)
+            connectionError = error.localizedDescription
             lastConnectionFailure = error
             logEvent(.connectionFailed, error: error)
             if retainedExistingConnection {
@@ -171,7 +172,7 @@ extension LibraryStore {
         refreshTask?.cancel()
         uploadTask?.cancel(); uploadLoop?.cancel(); syncCoordinator = nil; uploadTransport = nil; isPushing = false
         let previous = client
-        client = nil; isConnected = false; connectionStatus = appText("Disconnected from NAS")
+        client = nil; isConnected = false; hasVerifiedNASLists = false; connectionStatus = appText("Disconnected from NAS")
         await previous?.disconnect()
     }
 
@@ -189,6 +190,7 @@ extension LibraryStore {
         guard let client, isConnected, !isRefreshing, !isPushing, !isManagingStacks, deletingNotebookIDs.isEmpty, deletingNoteIDs.isEmpty else { return }
         isRefreshing = true; connectionStatus = appText("Checking NAS List…")
         let generation = accountGeneration, connection = connectionGeneration, repo = repository
+        var receivedLists = false
         defer {
             if connection == connectionGeneration, self.client === client {
                 isRefreshing = false; scheduleUpload()
@@ -200,6 +202,8 @@ extension LibraryStore {
             async let remoteNotes = client.notes()
             let (books, notes) = try await (remoteBooks, remoteNotes)
             guard generation == accountGeneration, connection == connectionGeneration, self.client === client else { return }
+            receivedLists = true
+            if !Task.isCancelled, isConnected { hasVerifiedNASLists = true }
             let localBooks = try await repo.notebooks().filter { $0.id == "local" || $0.id.hasPrefix("local-") }
             try await repo.setNotebooks(books.map { Notebook(id: $0.id, name: $0.name, stack: $0.stack) } + localBooks)
             for summary in notes {
@@ -218,6 +222,10 @@ extension LibraryStore {
             if isConnected { recoveryStartedAt = nil; recoveryExpired = false }
         } catch {
             guard generation == accountGeneration, connection == connectionGeneration, self.client === client else { return }
+            if !receivedLists, !Task.isCancelled, !(error is CancellationError),
+               let failure = error as? NoteStationError, failure != .cancelled, failure != .connectionChanged {
+                hasVerifiedNASLists = false
+            }
             connectionStatus = appText("Could not check the NAS")
             connectionError = error.localizedDescription
             logEvent(.refreshFailed, error: error)

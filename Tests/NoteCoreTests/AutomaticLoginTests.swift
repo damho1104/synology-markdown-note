@@ -56,12 +56,47 @@ import NoteCore
         await fixture.store.restoreConnectionIfNeeded()
         await fixture.store.restoreConnectionIfNeeded()
         #expect(fixture.store.isConnected)
+        #expect(fixture.store.isNASAvailable)
         #expect(fixture.store.trustedDeviceRemembered)
         let logins = fixture.server.logins()
         #expect(logins.count == 1)
         #expect(logins.first?["device_id"] == "remembered-device")
         #expect(logins.first?["otp_code"] == nil)
         #expect(await fixture.vault.saveCount == 0)
+    }
+
+    @Test func listFailureMarksNASUnavailableWithoutInvalidatingSession() async throws {
+        let fixture = try Fixture(saved: SavedNASCredentials(password: "saved"))
+        defer { fixture.cleanup() }
+        #expect(!fixture.store.isNASAvailable)
+        fixture.server.inspectNextNoteList {
+            let inspected = DispatchSemaphore(value: 0)
+            Task { @MainActor in
+                #expect(fixture.store.isConnected)
+                #expect(fixture.store.isRefreshing)
+                #expect(!fixture.store.isNASAvailable)
+                inspected.signal()
+            }
+            #expect(inspected.wait(timeout: .now() + 5) == .success)
+        }
+        fixture.server.rejectNextNoteList(code: 105)
+        await fixture.store.restoreConnectionIfNeeded()
+        #expect(fixture.store.isConnected)
+        #expect(!fixture.store.isNASAvailable)
+        #expect(fixture.store.recoveryTask == nil)
+        #expect(await fixture.store.client?.isAuthenticated == true)
+
+        await fixture.store.refreshFromServer()
+        #expect(fixture.store.isNASAvailable)
+        fixture.server.rejectNextNoteList(code: 105)
+        await fixture.store.refreshFromServer()
+        #expect(fixture.store.isConnected && !fixture.store.isNASAvailable)
+        #expect(fixture.store.recoveryTask == nil)
+        await fixture.store.refreshFromServer()
+        #expect(fixture.store.isNASAvailable)
+        #expect(fixture.server.logins().count == 1)
+        await fixture.store.disconnect()
+        #expect(!fixture.store.isNASAvailable)
     }
 
     @Test func disabledAutoLoginAndMissingPasswordNeverAttemptAuthentication() async throws {
@@ -214,8 +249,13 @@ private final class AutoLoginServer: @unchecked Sendable {
     let otpRequired: Bool
     private let lock = NSLock()
     private var attempts: [[String: String]] = []
-    private var expiredNoteLists = 0
-    func expireNextNoteList() { lock.lock(); expiredNoteLists += 1; lock.unlock() }
+    private var noteListErrors: [Int] = []
+    private var nextNoteListInspection: (@Sendable () -> Void)?
+    func expireNextNoteList() { rejectNextNoteList(code: 119) }
+    func rejectNextNoteList(code: Int) { lock.lock(); noteListErrors.append(code); lock.unlock() }
+    func inspectNextNoteList(_ inspect: @escaping @Sendable () -> Void) {
+        lock.lock(); nextNoteListInspection = inspect; lock.unlock()
+    }
     init(otpRequired: Bool) {
         self.otpRequired = otpRequired
         let configuration = URLSessionConfiguration.ephemeral
@@ -238,14 +278,17 @@ private final class AutoLoginServer: @unchecked Sendable {
         if form["method"] == "list" {
             if form["api"] == "SYNO.NoteStation.Note" {
                 lock.lock()
-                let expired = expiredNoteLists > 0
-                if expired { expiredNoteLists -= 1 }
+                let error = noteListErrors.isEmpty ? nil : noteListErrors.removeFirst()
+                let inspect = nextNoteListInspection
+                nextNoteListInspection = nil
                 lock.unlock()
-                if expired { return #"{"success":false,"error":{"code":119}}"# }
+                inspect?()
+                if let error { return #"{"success":false,"error":{"code":\#(error)}}"# }
             }
             let key = form["api"] == "SYNO.NoteStation.Notebook" ? "notebooks" : form["api"] == "SYNO.NoteStation.Shortcut" ? "shortcuts" : "notes"
             return "{\"success\":true,\"data\":{\"offset\":0,\"total\":0,\"\(key)\":[]}}"
         }
+        if form["method"] == "logout" { return #"{"success":true}"# }
         Issue.record("Unexpected automatic login request")
         return #"{"success":false,"error":{"code":120}}"#
     }

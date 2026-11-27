@@ -9,13 +9,19 @@ it.each([
   ["auto", ["ja-JP", "fr-FR"], "en"],
   ["auto", [], "en"],
   ["ko", ["en-US"], "ko"],
-  ["unsupported", ["ko-KR"], "ko"],
 ])("resolves %s with preferences %j to %s", async (default_language, preferences, expected) => {
   vi.stubGlobal("fetch", vi.fn(async () => Response.json({default_language})));
   await expect(loadLanguage(preferences)).resolves.toBe(expected);
 });
 
-it("uses the normal auto policy when public config cannot be fetched", async () => {
-  vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("Network unavailable"); }));
-  await expect(loadLanguage(["ja-JP", "ko-KR"])).resolves.toBe("ko");
+it.each([
+  ["a missing language", () => Response.json({})],
+  ["an unsupported language", () => Response.json({default_language: "ja"})],
+  ["invalid JSON", () => new Response("<html>")],
+  ["a missing endpoint", () => Response.json({}, {status: 404})],
+  ["a server error", () => Response.json({default_language: "auto"}, {status: 503})],
+  ["a network failure", () => { throw new TypeError("Network unavailable"); }],
+])("keeps the language unresolved after %s", async (_failure, respond) => {
+  vi.stubGlobal("fetch", vi.fn(async () => respond()));
+  await expect(loadLanguage(["ja-JP", "ko-KR"])).rejects.toThrow();
 });

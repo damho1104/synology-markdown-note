@@ -97,3 +97,7 @@
 "Use an HTTPS address to protect your credentials." = "Use an HTTPS address to protect your credentials.";
 "You don’t have permission to access this note." = "You don’t have permission to access this note.";
 "Document Information" = "Document Information";
+"A Keychain account identifier is required." = "A Keychain account identifier is required.";
+"Could not read the password data from Keychain." = "Could not read the password data from Keychain.";
+"Keychain operation failed (%@)." = "Keychain operation failed (%@).";
+"Untitled" = "Untitled";

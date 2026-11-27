@@ -38,14 +38,48 @@ enum AppLocalization {
         }
     }
 
-    // CredentialStore.swift also builds the standalone, signed Keychain helper.
-    static func errorMessage(_ error: Error) -> String {
-        guard let credentialError = error as? CredentialStoreError else { return error.localizedDescription }
-        switch credentialError {
-        case .invalidAccount: return appText("A Keychain account identifier is required.")
-        case .invalidData: return appText("Could not read the password data from Keychain.")
-        case .keychain(let status): return appText("Keychain operation failed (%@).", String(status))
+    // Older notes and queued operations store rendered errors. Match only
+    // known messages so repository and server diagnostics stay intact.
+    static func syncErrorMessage(_ message: String?, language: String = NoteLocalization.language) -> String? {
+        guard let message else { return nil }
+        let coreKeys = [
+            "Check the references to preserved blocks.",
+            "The NAS save could not be confirmed yet. The source was kept while verification continues.",
+            "The previous upload could not be confirmed. Check the server before creating the note again.",
+            "The note changed on the NAS first. Review both versions.",
+            "The official app changed this note. Review both versions.",
+            "The math image renderer is unavailable. The source was preserved.",
+            "Another local edit exists for the same NAS note.",
+            "Another local edit exists for the same NAS note. The edits cannot be merged automatically.",
+            "The NAS note association changed during upload.",
+            "Sign in to the NAS first.",
+            "The NAS session expired. Sign in again.",
+            "You don’t have permission to access this note.",
+            "The Note Station response did not match the expected format.",
+            "The note changed on the NAS first. The server rejected the older version (1064)."
+        ]
+        let appKey = "This note changed on this Mac while its body was downloading. Review both versions."
+        let sourceLanguage = language == "ko" ? "en" : "ko"
+        let coreSource = NoteLocalization.localization(in: NoteLocalization.coreResources, language: sourceLanguage)
+        let coreTarget = NoteLocalization.localization(in: NoteLocalization.coreResources, language: language)
+        if let key = coreKeys.first(where: { NoteLocalization.text($0, arguments: [], in: coreSource) == message }) {
+            return NoteLocalization.text(key, arguments: [], in: coreTarget)
         }
+        let appSource = NoteLocalization.localization(in: resources, language: sourceLanguage)
+        if NoteLocalization.text(appKey, arguments: [], in: appSource) == message {
+            let appTarget = NoteLocalization.localization(in: resources, language: language)
+            return NoteLocalization.text(appKey, arguments: [], in: appTarget)
+        }
+        for key in ["The NAS HTTP request failed (%@).", "The NAS network request failed (%@).", "The Note Station API request failed (%@)."] {
+            let format = NoteLocalization.text(key, arguments: [], in: coreSource)
+            let parts = format.components(separatedBy: "%@")
+            guard parts.count == 2, message.hasPrefix(parts[0]), message.hasSuffix(parts[1]),
+                  message.count > parts[0].count + parts[1].count else { continue }
+            let code = message.dropFirst(parts[0].count).dropLast(parts[1].count)
+            guard Int(code) != nil else { continue }
+            return NoteLocalization.text(key, arguments: [String(code)], in: coreTarget)
+        }
+        return message
     }
 }
 

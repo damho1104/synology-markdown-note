@@ -46,6 +46,7 @@ import {
 import { AppIcon } from "./AppIcon";
 import {
   ApiFailure,
+  WebConnectionError,
   backgroundRead,
   errorText,
   jsonRequest,
@@ -178,6 +179,7 @@ type Draft = {
   resume_paused?: boolean;
   key: string;
   title: string;
+  initialTitle?: string;
   html: string;
   notebook_id: string;
   version?: string;
@@ -187,7 +189,7 @@ type Draft = {
 type EditorCommand = {historyDirection: "undo" | "redo"} | {structureEdit: StructureEdit};
 type FormattedSnapshot = {html:string; title:string; version?:string; writeId?:string};
 type FormattedWrite = {id:string; result:FormattedSnapshot} &
-  ({changes:TextChange[]; verify:boolean} | {edit:StructureEdit} | {restore:Pick<FormattedSnapshot,"writeId" | "version">});
+  ({changes:TextChange[]; verify:boolean; inputTitle?:string} | {edit:StructureEdit} | {restore:Pick<FormattedSnapshot,"writeId" | "version">});
 type FormattedHistory = {id:string; undo:FormattedSnapshot[]; redo:FormattedSnapshot[]};
 
 function appendFormattedWrite(draft: Draft, write: FormattedWrite) {
@@ -221,7 +223,7 @@ function sealFormattedText(note: NoteDetail, draft: Draft) {
   if (!draft.text_changes || (!draft.text_changes.length && matchesDraftTitle(draft.title, before.title))) return null;
   const id = requestId();
   const result = {html:exportHtml(note,draft),title,writeId:id};
-  const write: FormattedWrite = {id,result,changes:draft.text_changes,verify:!!draft.projected};
+  const write: FormattedWrite = {id,result,changes:draft.text_changes,verify:!!draft.projected,inputTitle:draft.title};
   const changes = new Map(draft.text_changes.map(change => [change.index,change.text]));
   let delta = 0;
   const shifted = (draft.text_blocks ?? note.html_text_blocks)?.map(block => {
@@ -417,7 +419,8 @@ export function Workspace({
   const [libraryReady, setLibraryReady] = useState(false);
   const graphRevision = useMemo(() => JSON.stringify(notes.map(note => [note.id, note.version, note.locked, note.trashed])), [notes]);
   const [listError, setListError] = useState("");
-  const nasConnected = libraryReady && !listError;
+  const [nasConnected, setNasConnected] = useState(false);
+  const nasFailureGeneration = useRef(0);
   const [noteError, setNoteError] = useState("");
   const [noteActionNotice, setNoteActionNotice] = useState("");
   const [detail, setDetail] = useState<NoteDetail | null>(null);
@@ -536,11 +539,11 @@ export function Workspace({
     draft &&
     activeKey === draft.key &&
     (route.compose
-      ? draft.title.trim().length > 0 ||
+      ? (draft.title.trim().length > 0 && draft.title !== draft.initialTitle) ||
         draft.html !== BLANK_HTML ||
         !!draft.markdown
       : original &&
-        (original.title !== draft.title ||
+        ((draft.text_changes === undefined ? original.title !== draft.title : !matchesDraftTitle(draft.title, original.title)) ||
           original.html !== draft.html ||
           original.markdown !== draft.markdown ||
            !!draft.text_changes?.length || !!draft.formattedWrites?.length ||
@@ -807,13 +810,21 @@ export function Workspace({
     setCompare(null);
   }
 
+  const markNasUnavailable = useCallback(() => {
+    nasFailureGeneration.current += 1;
+    setNasConnected(false);
+  }, []);
+
   const handleError = useCallback(
     (error: unknown, setter: (text: string) => void) => {
       setter(errorText(error));
+      if (error instanceof WebConnectionError ||
+          (error instanceof ApiFailure && ["NAS_UNAVAILABLE", "NAS_ADDRESS_BLOCKED"].includes(error.code)))
+        markNasUnavailable();
       if (error instanceof ApiFailure && error.status === 401)
         onSessionExpired();
     },
-    [onSessionExpired],
+    [markNasUnavailable, onSessionExpired],
   );
   const searchNoteBody = useCallback((query: string, signal: AbortSignal) =>
     request<BodySearchResult>("/api/search/body", {
@@ -821,6 +832,7 @@ export function Workspace({
     }), [session.csrf_token]);
 
   const loadLists = useCallback(async (background?: AbortSignal) => {
+    const failureGeneration = nasFailureGeneration.current;
     const version = background ? listRequestVersion.current : ++listRequestVersion.current;
     const mutation = listMutationVersion.current;
     // A background snapshot must not replace a newer foreground load or local write.
@@ -843,15 +855,19 @@ export function Workspace({
       setNotes(all.notes);
       setLibraryReady(true);
       setListError("");
+      if (failureGeneration === nasFailureGeneration.current) setNasConnected(true);
     } catch (error) {
-      if (isCurrent()) handleError(signal.aborted ? new UiError("NAS 목록 조회 시간이 초과되었습니다.") : error, setListError);
+      if (isCurrent()) {
+        markNasUnavailable();
+        handleError(signal.aborted ? new UiError("NAS 목록 조회 시간이 초과되었습니다.") : error, setListError);
+      }
     } finally {
       window.clearTimeout(timeout);
       background?.removeEventListener("abort", abort);
       abort();
       if (!background && version === listRequestVersion.current) setListLoading(false);
     }
-  }, [handleError]);
+  }, [handleError, markNasUnavailable]);
 
   const loadPending = useCallback(async () => {
     try {
@@ -1008,8 +1024,9 @@ export function Workspace({
     if (route.compose) {
       setNoteLoading(false);
       const restored = draftRead(activeDraftKey);
+      const newNoteTitle = t("새 노트");
       const initial: Draft = restored ? {...restored, attachments: restoreUploads(restored.attachments, restored.review_required)} : {
-        key:activeKey, title:"", html:BLANK_HTML, markdown:"", notebook_id:route.notebook!,
+        key:activeKey, title:newNoteTitle, initialTitle:newNoteTitle, html:BLANK_HTML, markdown:"", notebook_id:route.notebook!,
         client_request_id:requestId(),
       };
       // Legacy compose drafts must also receive a durable key before a request.
@@ -1031,9 +1048,11 @@ export function Workspace({
     setNoteLoading(true);
     setDraft(null);
     setEditing(false);
+    const failureGeneration = nasFailureGeneration.current;
     void request<NoteDetail>(`/api/notes/${encodeURIComponent(route.note!)}`)
       .then((note) => {
         if (!active) return;
+        if (failureGeneration === nasFailureGeneration.current) setNasConnected(true);
         setDetail(note);
         const saved = draftRead(activeDraftKey);
         if (
@@ -1346,11 +1365,12 @@ export function Workspace({
       sent = {...writing, review_required:true, recovery_acknowledged:false, pending_upload_ids: sentUploads,
         ...(isNew ? {client_request_id:writing.client_request_id ?? requestId(),
           create_sent:{title:writing.title,html:writing.html,markdown:writing.markdown}} : {})};
+      const fallbackTitle = isNew ? (writing.initialTitle ?? t("새 노트")) : t("제목 없음");
       const next = await request<NoteDetail>(
         url,
         jsonRequest(
           {
-            title: head?.result.title ?? (writing.title.trim() || t("제목 없음")),
+            title: head?.result.title ?? (writing.title.trim() || fallbackTitle),
             ...(isNew ? {client_request_id:sent.client_request_id} : {}),
             ...(restore ? {restore_version:restore.version}
               : head && "edit" in head ? {structure_edit:head.edit, text_layout:writing.text_layout,
@@ -1402,7 +1422,7 @@ export function Workspace({
         ...latest, version:next.version, review_required:false, recovery_acknowledged:false, resume_paused:false,
         attachments, pending_upload_ids:undefined, formattedWrites:remaining,
         text_layout:next.html_text_layout,
-        title:matchesDraftTitle(latest.title, next.title) ? next.title : latest.title,
+        title:"changes" in head && latest.title === head.inputTitle ? next.title : latest.title,
         // Keep the projected editor and text coordinates while later edits
         // depend on it. The latest verified response becomes the base version.
         ...(remaining?.length || latest.text_changes?.length ? {} : {
@@ -1422,7 +1442,8 @@ export function Workspace({
           next.html_text_blocks?.find(block => block.index === change.index)?.text !== change.text),
       };
       const rebasedReferences = attachments ? uploadReferences(rebased.markdown) : new Set<string>();
-      saveHasMore.current = rebased.title !== next.title || rebased.html !== next.html || rebased.markdown !== next.markdown || !!rebased.text_changes?.length || !!remaining?.length ||
+      const titlePending = head ? !matchesDraftTitle(rebased.title, next.title) : rebased.title !== next.title;
+      saveHasMore.current = titlePending || rebased.html !== next.html || rebased.markdown !== next.markdown || !!rebased.text_changes?.length || !!remaining?.length ||
         !!attachments?.items.some(item => uploadBlocksSave(item, rebasedReferences, false, next.attachment_bindings));
       draftDelete(sentStorageKey);
       if (!unchanged || saveHasMore.current || attachments?.items.some(item => item.phase !== "committed")) draftStore(draftPrefix + key, rebased);
@@ -2694,7 +2715,7 @@ export function Workspace({
               )}
               {savingAction !== "note" && !route.compose && draft?.review_required && !recoveredDetail && (
                 <div className="workspace-alert warning">
-                  {t("NAS 확인본을 읽기 전까지 자동 저장을 중단합니다.")}
+                  {t("NAS 확인본을 다시 불러와 보관한 편집본과 비교하세요. 저장을 재개하기 전까지 자동 저장은 중단됩니다.")}
                   <button className="native-button" onClick={() => void reviewAcknowledged()}>{t("NAS 확인본 다시 불러오기")}</button>
                 </div>
               )}

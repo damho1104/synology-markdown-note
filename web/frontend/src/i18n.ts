@@ -43,6 +43,14 @@ export function storedErrorText(previous: string): string {
   return status ? t("요청에 실패했습니다 ({0}).", status[1]) : t("요청 처리 중 오류가 발생했습니다.");
 }
 
+export function browserLanguage(preferred: readonly string[]): Language {
+  for (const tag of preferred) {
+    const language = tag.toLowerCase().split("-")[0];
+    if (language === "en" || language === "ko") return language;
+  }
+  return "en";
+}
+
 export async function loadLanguage(preferred: readonly string[]): Promise<Language> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 3000);
@@ -52,19 +60,15 @@ export async function loadLanguage(preferred: readonly string[]): Promise<Langua
       cache: "no-store",
       signal: controller.signal,
     });
-    if (response.ok) {
-      const config = await response.json();
-      if (config?.default_language === "en" || config?.default_language === "ko")
-        return config.default_language;
-    }
-  } catch {
-    // Older deployments and transient network failures use the normal auto policy.
+    if (!response.ok) throw new Error(`Public config request failed (${response.status}).`);
+
+    const config = await response.json();
+    const mode: unknown = config?.default_language;
+    if (mode === "en" || mode === "ko") return mode;
+    if (mode !== "auto") throw new Error("Invalid default language in public config.");
+
+    return browserLanguage(preferred);
   } finally {
     clearTimeout(timeout);
   }
-  for (const tag of preferred) {
-    const language = tag.toLowerCase().split("-")[0];
-    if (language === "en" || language === "ko") return language;
-  }
-  return "en";
 }

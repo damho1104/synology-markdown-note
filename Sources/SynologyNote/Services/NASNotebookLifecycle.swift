@@ -18,16 +18,8 @@ extension LibraryStore {
             logEvent(.notebookMigrating, notebookID: oldBook.id)
             let name = oldBook.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? appText("My Notebook") : oldBook.name
             let key = SHA256.hash(data: Data(oldBook.id.utf8)).map { String(format: "%02x", $0) }.joined()
-            let receiptDirectory = directory.appendingPathComponent(key)
-            let receiptExists = FileManager.default.fileExists(atPath: receiptDirectory.appendingPathComponent("notebook-create-pending.json").path)
-            let remote: RemoteNotebook
-            let candidates = try await client.notebooks().filter { $0.name == name }
-            if !receiptExists, candidates.count == 1 {
-                remote = candidates[0]
-            } else {
-                let manager = try NotebookCreationManager(directory: receiptDirectory, retainReceipt: true)
-                remote = try await manager.create(name: name, client: client)
-            }
+            let manager = try NotebookCreationManager(directory: directory.appendingPathComponent(key), retainReceipt: true)
+            let remote = try await manager.migrationDestination(name: name, client: client)
             guard generation == accountGeneration, connection == connectionGeneration, self.client === client else { throw NoteStationError.connectionChanged }
             for row in try await repo.listNotes() where row.notebookID == oldBook.id {
                 guard generation == accountGeneration, connection == connectionGeneration else { throw NoteStationError.connectionChanged }

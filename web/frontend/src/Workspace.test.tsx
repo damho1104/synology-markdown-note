@@ -48,6 +48,48 @@ it('updates the NAS indicator after a failed list refresh and successful retry',
   await screen.findByRole('img', {name: 'NAS 연결됨'})
 })
 
+it('shows a failed note connection even when the NAS list had already loaded', async () => {
+  const fetcher = vi.mocked(fetch).getMockImplementation()!
+  let rejectDetail!: (response: Response) => void
+  vi.mocked(fetch).mockImplementation((path, init) => path === '/api/notes/note1'
+    ? new Promise(resolve => { rejectDetail = resolve })
+    : fetcher(path, init))
+  mount()
+  await screen.findByRole('img', {name: 'NAS 연결됨'})
+  rejectDetail(Response.json({error: 'NAS_UNAVAILABLE'}, {status: 503}))
+  await screen.findByRole('img', {name: 'NAS 연결 안 됨'})
+})
+
+it('does not let an older successful list request hide a newer connection failure', async () => {
+  const fetcher = vi.mocked(fetch).getMockImplementation()!
+  let finishList!: (response: Response) => void
+  vi.mocked(fetch).mockImplementation((path, init) => {
+    if (path === '/api/notes') return new Promise(resolve => { finishList = resolve })
+    if (path === '/api/notes/note1') return Promise.resolve(Response.json({error: 'NAS_UNAVAILABLE'}, {status: 503}))
+    return fetcher(path, init)
+  })
+  mount()
+  await screen.findByText('NAS와 통신하지 못했습니다. 주소·포트·인증서·방화벽을 확인하세요.')
+  await act(async () => finishList(Response.json({notes: [note]})))
+  expect(screen.getByRole('img', {name: 'NAS 연결 안 됨'})).toBeTruthy()
+})
+
+it('keeps a title cleared while a formatted title save is in flight', async () => {
+  const fetcher = vi.mocked(fetch).getMockImplementation()!
+  const formatted = {...note, html_text_preview: '<p>original</p>', html_text_token: 'token',
+    html_text_blocks: [{index: 0, text: 'original', start: 3, end: 11}]}
+  vi.mocked(fetch).mockImplementation((path, init) => path === '/api/notes/note1' && !init?.method
+    ? Promise.resolve(Response.json(formatted))
+    : fetcher(path, init))
+  mount()
+  const input = await screen.findByRole<HTMLInputElement>('textbox', {name: '노트 제목'})
+  fireEvent.change(input, {target: {value: 'Untitled'}})
+  await waitFor(() => expect(writes).toHaveLength(1), {timeout: 2000})
+  fireEvent.change(input, {target: {value: ''}})
+  await act(async () => resolveSave(Response.json({...formatted, title: 'Untitled', version: 'v2'})))
+  expect(input.value).toBe('')
+})
+
 it('formats the editor footer in English and preserves the NAS title', async () => {
   setLanguage('en')
   const fetcher = vi.mocked(fetch).getMockImplementation()!
@@ -61,12 +103,49 @@ it('formats the editor footer in English and preserves the NAS title', async () 
   expect(writes).toHaveLength(0)
 })
 
-it('saves an empty title with the English default in English mode', async () => {
+it.each([
+  ['en', 'New Note', 'Note title', 'Markdown body'],
+  ['ko', '새 노트', '노트 제목', 'Markdown 본문'],
+] as const)(
+  'prefills the %s default title and saves it when the new note is edited',
+  async (language, expectedTitle, titleLabel, bodyLabel) => {
+    setLanguage(language)
+    window.history.replaceState({}, '', '/?n=book1&new=1')
+    const fetcher = vi.mocked(fetch).getMockImplementation()!
+    const create = vi.fn()
+    vi.mocked(fetch).mockImplementation((path, init) => {
+      if (path !== '/api/notes' || init?.method !== 'POST') return fetcher(path, init)
+      const payload = JSON.parse(init.body as string)
+      create(payload)
+      return Promise.resolve(Response.json({...note, id: 'new1', title: payload.title, markdown: payload.markdown}))
+    })
+    mount()
+    expect((await screen.findByRole<HTMLInputElement>('textbox', {name: titleLabel})).value).toBe(expectedTitle)
+    await act(async () => new Promise(resolve => setTimeout(resolve, 900)))
+    expect(create).not.toHaveBeenCalled()
+    const editor = await screen.findByRole('textbox', {name: bodyLabel})
+    const {EditorView} = await import('@codemirror/view')
+    const view = EditorView.findFromDOM(editor.closest('.cm-editor') as HTMLElement)!
+    act(() => view.dispatch({changes: {from: 0, insert: 'New body'}}))
+    await waitFor(() => expect(create).toHaveBeenCalledOnce(), {timeout: 2000})
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({title: expectedTitle, markdown: 'New body'}))
+  },
+)
+
+it('keeps the previously saved Korean default title when editing the body in English', async () => {
   setLanguage('en')
+  const fetcher = vi.mocked(fetch).getMockImplementation()!
+  const saved = {...note, title: '제목 없음'}
+  vi.mocked(fetch).mockImplementation((path, init) => path === '/api/notes/note1' && !init?.method
+    ? Promise.resolve(Response.json(saved))
+    : fetcher(path, init))
   mount()
-  fireEvent.change(await screen.findByRole('textbox', {name: 'Note title'}), {target: {value: ''}})
+  const title = await screen.findByRole<HTMLInputElement>('textbox', {name: 'Note title'})
+  expect(title.value).toBe('제목 없음')
+  fireEvent.click(screen.getByRole('button', {name: 'Split'}))
+  fireEvent.change(screen.getByLabelText('HTML body'), {target: {value: '<p>edited body</p>'}})
   await waitFor(() => expect(writes).toHaveLength(1), {timeout: 2000})
-  expect(writes[0]).toMatchObject({title: 'Untitled'})
+  expect(writes[0]).toMatchObject({title: '제목 없음', html: '<p>edited body</p>'})
 })
 
 it('opens the Markdown search panel with Korean field and button labels', async () => {

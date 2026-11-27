@@ -129,13 +129,13 @@ struct LibraryView: View {
                     Spacer()
                     Text("NAS").font(.caption2).foregroundStyle(.secondary)
                     Circle()
-                        .fill(library.isConnected ? Color.green : Color.red)
+                        .fill(library.isNASAvailable ? Color.green : Color.red)
                         .frame(width: 8, height: 8)
                 }
                 .padding(.horizontal, 12)
                 .frame(height: 25)
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel(appText(library.isConnected ? "Connected to NAS" : "Disconnected from NAS"))
+                .accessibilityLabel(appText(library.isNASAvailable ? "Connected to NAS" : "Disconnected from NAS"))
                 .help(library.connectionStatus)
             }
             .background(.bar)

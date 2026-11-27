@@ -4,7 +4,7 @@ import { useGraphIndex, type Graph, type Node } from './GraphIndex'
 import './graph.css'
 
 export type GraphNotebook = {id: string; name: string}
-export const graphTitle = (node: Node) => node.title || t("제목 없음")
+export const graphTitle = (node: Node) => node.title || t("common.untitled")
 const compare = (a: Node, b: Node) => graphTitle(a).localeCompare(graphTitle(b), currentLanguage(), {numeric: true}) || a.id.localeCompare(b.id)
 
 export type NavigationState = {
@@ -130,34 +130,34 @@ export function GraphNavigationContent({notebooks = [], onOpenNote, navigation, 
     aria-label={graphTitle(node)} aria-pressed={state.selectedId === node.id}
     onClick={() => select(node.id)} onDoubleClick={() => onOpenNote(node.id)}>
     <span className="graph-swatch" style={{background:graphNotebookColor(node.notebook_id)}} aria-hidden="true" />
-    <span>{graphTitle(node)}</span>{ranked && <small aria-label={t("연결 수")}>{formatNumber(visible.degree.get(node.id) ?? 0)}</small>}
+    <span>{graphTitle(node)}</span>{ranked && <small aria-label={t("graph.connectionCount")}>{formatNumber(visible.degree.get(node.id) ?? 0)}</small>}
   </button>
   return <>
-    <header><h2>{t("노트 연결 지도")}</h2><p className="graph-muted">{t("노트 {0}개 · 연결 {1}개", visible.nodes.length, visible.edges.length)}</p></header>
-    {state.query.trim() ? <section aria-label={t("검색 결과")}>
-      <h3>{t("검색 결과 · {0}개", matches.length)}</h3>
+    <header><h2>{t("graph.noteConnectionMap")}</h2><p className="graph-muted">{t("graph.notesConnections", visible.nodes.length, visible.edges.length)}</p></header>
+    {state.query.trim() ? <section aria-label={t("graph.searchResults")}>
+      <h3>{t("graph.searchResultCount", matches.length)}</h3>
       {matches.slice(0,100).map(n => row(n))}
-      {!matches.length && <p className="graph-muted">{t("검색 결과가 없습니다")}</p>}
-      {matches.length > 100 && <p className="graph-muted">{t("처음 100개 표시")}</p>}
+      {!matches.length && <p className="graph-muted">{t("graph.noResultsFound")}</p>}
+      {matches.length > 100 && <p className="graph-muted">{t("common.showingFirst100")}</p>}
     </section> : selected ? <>
-      <section aria-label={t("선택한 노트 연결")}>
+      <section aria-label={t("graph.connectionsForSelectedNote")}>
         <h3>{graphTitle(selected)}</h3><p className="graph-muted">{books.get(selected.notebook_id) ?? selected.notebook_id}</p>
         {!!selected.tags?.length && <p className="graph-muted">{selected.tags.map(t => `#${t}`).join(' ')}</p>}
-        <div className="graph-actions"><button onClick={() => onOpenNote(selected.id)}>{t("노트 열기")}</button>
-          <button onClick={() => focus(selected.id)}>{t("주변만 보기")}</button></div>
+        <div className="graph-actions"><button onClick={() => onOpenNote(selected.id)}>{t("graph.openNote")}</button>
+          <button onClick={() => focus(selected.id)}>{t("graph.showNearbyNotes")}</button></div>
       </section>
       {(['outgoing','incoming'] as const).map(direction => {
         const nodes = connections(direction)
-        return <section key={direction} aria-label={direction === 'outgoing' ? t("나가는 링크") : t("백링크")}>
-          <h3 className={`graph-${direction}`}>{direction === 'outgoing' ? t("나가는 연결 → · {0}개", nodes.length) : t("← 들어오는 연결 · {0}개", nodes.length)}</h3>
-          {nodes.length ? nodes.map(n => row(n)) : <p className="graph-muted">{t("연결 없음")}</p>}
+        return <section key={direction} aria-label={direction === 'outgoing' ? t("graph.outgoingLinks") : t("graph.backlinks")}>
+          <h3 className={`graph-${direction}`}>{direction === 'outgoing' ? t("graph.outgoingConnections", nodes.length) : t("graph.incomingConnections", nodes.length)}</h3>
+          {nodes.length ? nodes.map(n => row(n)) : <p className="graph-muted">{t("graph.noConnections")}</p>}
         </section>
       })}
-    </> : <section aria-label={t("주요 노트")}><h3>{t("주요 노트")}</h3><p className="graph-muted">{t("연결 수가 많은 순서")}</p>
+    </> : <section aria-label={t("graph.topNotes")}><h3>{t("graph.topNotes")}</h3><p className="graph-muted">{t("graph.orderedByConnectionCount")}</p>
       {ranked.map(n => row(n,true))}
-      {!ranked.length && <p className="graph-muted">{t("표시할 노트가 없습니다")}</p>}
+      {!ranked.length && <p className="graph-muted">{t("graph.noNotesDisplay")}</p>}
     </section>}
-    <section aria-label={t("메모장 색상")}><h3>{t("메모장 색상")}</h3>
+    <section aria-label={t("graph.notebookColors")}><h3>{t("graph.notebookColors")}</h3>
       {[...counts].map(([id,count]) => <div className="graph-legend-row" key={id}>
         <span className="graph-swatch" style={{background:graphNotebookColor(id)}} aria-hidden="true" />
         <span>{books.get(id) ?? id}</span><small>{formatNumber(count)}</small>
@@ -169,6 +169,6 @@ export function GraphNavigationPanel({notebooks = [], onOpenNote}: {notebooks?: 
   const {graph,loading} = useGraphIndex()
   const {navigation} = useGraphNavigation()
   const model = useGraphModel(graph,loading,navigation)
-  return <nav aria-label={t("그래프 탐색")} className="graph-navigation"><GraphNavigationContent
+  return <nav aria-label={t("graph.graphNavigation")} className="graph-navigation"><GraphNavigationContent
     notebooks={notebooks} onOpenNote={onOpenNote} navigation={navigation} model={model} /></nav>
 }

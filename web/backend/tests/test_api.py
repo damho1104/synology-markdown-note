@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 import uuid
@@ -9,6 +10,7 @@ import pytest
 
 from fastapi.testclient import TestClient
 
+from synonote_web import settings as settings_module
 from synonote_web.main import create_app
 from synonote_web.nas import NasClient, NasError, NasLogin
 from synonote_web.settings import Settings
@@ -63,9 +65,26 @@ def test_public_config_exposes_deployment_language(tmp_path, monkeypatch, value,
     assert response.headers["Cache-Control"] == "no-store"
 
 
+def test_registered_locale_is_accepted_by_settings_and_public_config(tmp_path, monkeypatch):
+    registry = tmp_path / "locales.json"
+    registry.write_text(json.dumps({"fallback": "en", "languages": ["en", "ko", "ja"]}), encoding="utf-8")
+    monkeypatch.setattr(settings_module, "files", lambda package: tmp_path)
+    monkeypatch.setenv("WEB_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("WEB_DEFAULT_LANGUAGE", " JA ")
+
+    settings = Settings.from_env()
+    client = TestClient(create_app(settings, FakeNas()))
+    response = client.get("/api/public-config")
+    assert response.status_code == 200
+    assert response.json() == {"default_language": "ja"}
+    assert response.headers["Cache-Control"] == "no-store"
+    with pytest.raises(ValueError, match="WEB_DEFAULT_LANGUAGE must be auto, en, ko or ja"):
+        Settings(data_dir=tmp_path, default_language="fr")
+
+
 def test_invalid_deployment_language_has_actionable_configuration_error(monkeypatch):
-    monkeypatch.setenv("WEB_DEFAULT_LANGUAGE", "ja")
-    with pytest.raises(ValueError, match="WEB_DEFAULT_LANGUAGE must be auto, en or ko"):
+    monkeypatch.setenv("WEB_DEFAULT_LANGUAGE", "invalid_locale")
+    with pytest.raises(ValueError, match="WEB_DEFAULT_LANGUAGE must be auto"):
         Settings.from_env()
 
 

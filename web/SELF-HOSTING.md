@@ -73,6 +73,14 @@ docker compose up -d
 | `WEB_DEFAULT_LANGUAGE` | Optional | `auto` follows browser language preferences with English as the fallback. Use `en` for English or `ko` for Korean for all visitors. |
 | `WEB_COOKIE_SECURE` | Optional, advanced | `auto`. No change needed for normal installations |
 
+## Adding a UI language from source
+
+1. Use `web/frontend/src/locales/en/` as a template. Add a translated JSON file for each feature under `web/frontend/src/locales/<language>/<feature>.json`, keeping the keys and interpolation variables.
+2. Add the language code to `languages` in `web/backend/synonote_web/locales.json`. Keep `fallback` set to `en`.
+3. Rebuild and deploy the web image. With `WEB_DEFAULT_LANGUAGE=auto`, browsers that prefer the new language can select it. Set `WEB_DEFAULT_LANGUAGE` to the new code to use it for all visitors.
+
+For messages with a numeric count in the first interpolation variable `{{0}}`, i18next selects the locale's plural form. Keep the base key and add variants such as `selectRemainingFilesContinue_one` or `selectRemainingFilesContinue_few` as needed.
+
 ## Optional: Store data in a Synology folder
 
 This step is unnecessary when using the default named volume. To mount a NAS folder directly, prepare a **new dedicated folder**.

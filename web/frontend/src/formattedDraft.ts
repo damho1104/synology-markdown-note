@@ -130,7 +130,7 @@ export function annotateFormattedDraft(source: string, token: string) {
 }
 
 function unsupported(): never {
-  throw new UiError("이 위치에는 선택한 편집 명령을 적용할 수 없습니다.");
+  throw new UiError("errors.thisEditingCommandCannotBeAppliedHere");
 }
 
 function inlinePatch(source: string, edit: StructureEdit & {start:number;end:number}, block: Block, elements: ElementSpan[]) {

@@ -2,7 +2,8 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { Workspace } from './Workspace'
-import { setLanguage } from './i18n'
+import { setLanguage, translate } from './i18n'
+import { supportedLanguages } from './catalogs'
 import type { Status } from './api'
 import { exportMath } from './mathExport'
 import { DEFAULT_PREFERENCES, PREFERENCES_KEY, loadPreferences } from './preferences'
@@ -88,6 +89,24 @@ it('keeps a title cleared while a formatted title save is in flight', async () =
   fireEvent.change(input, {target: {value: ''}})
   await act(async () => resolveSave(Response.json({...formatted, title: 'Untitled', version: 'v2'})))
   expect(input.value).toBe('')
+})
+
+it.each(supportedLanguages)('retains the saved %s default title when restoring a blank formatted draft', async language => {
+  setLanguage('en')
+  const fetcher = vi.mocked(fetch).getMockImplementation()!
+  const formatted = {...note, title: translate(language, 'common.untitled'),
+    html_text_preview: '<p>original</p>', html_text_token: 'token',
+    html_text_blocks: [{index: 0, text: 'original', start: 3, end: 11}]}
+  vi.mocked(fetch).mockImplementation((path, init) => path === '/api/notes/note1' && !init?.method
+    ? Promise.resolve(Response.json(formatted))
+    : fetcher(path, init))
+  sessionStorage.setItem('synonote:web-draft:["https://nas.example","alice"]:note:note1',
+    JSON.stringify({key: 'note:note1', title: '', html: note.html, text_changes: [],
+      notebook_id: note.notebook_id, version: note.version}))
+  mount()
+  expect((await screen.findByRole<HTMLInputElement>('textbox', {name: 'Note title'})).value).toBe('')
+  await act(async () => new Promise(resolve => setTimeout(resolve, 900)))
+  expect(writes).toHaveLength(0)
 })
 
 it('formats the editor footer in English and preserves the NAS title', async () => {

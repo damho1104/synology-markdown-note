@@ -1,0 +1,12 @@
+{
+  "confirm": "Confirm",
+  "delete": "Delete",
+  "name": "Name",
+  "noDate": "No date",
+  "notebooksAddStack": "Notebooks to add to the stack",
+  "operationFailed": "The operation failed.",
+  "tagsCommaSeparated": "Tags (comma-separated)",
+  "thisDeletesNotebookNasAndMovesItsNotes": "This deletes the notebook from the NAS and moves its notes to the trash.",
+  "thisRemovesStackGroupingAndKeepsItsNotebooks": "This removes the stack grouping and keeps its notebooks and notes.",
+  "working": "Working…"
+}

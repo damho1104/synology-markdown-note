@@ -8,13 +8,18 @@ export type DatedNote = {
   modified_at?: number | null;
 };
 const sortOptions = { numeric: true, sensitivity: "base" } as const;
-const collators = { en: new Intl.Collator("en", sortOptions), ko: new Intl.Collator("ko", sortOptions) };
+const collators = new Map<string, Intl.Collator>();
 export function sortNotes<T extends DatedNote>(
   notes: T[],
   field: SortField,
   direction: SortDirection,
 ): T[] {
-  const collator = collators[currentLanguage()];
+  const language = currentLanguage();
+  let collator = collators.get(language);
+  if (!collator) {
+    collator = new Intl.Collator(language, sortOptions);
+    collators.set(language, collator);
+  }
   return [...notes].sort((a, b) => {
     const cmp =
       field === "title"
@@ -52,7 +57,7 @@ export function dateLabel(value?: number | null): string {
         hour: "2-digit",
         minute: "2-digit",
       })
-    : t("날짜 없음");
+    : t("library.noDate");
 }
 
 export function remoteNoteLink(label: string, id: string): string {

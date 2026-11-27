@@ -48,7 +48,7 @@ export function useUploadQueue(uploads: DraftUploads | undefined, csrf: string,
         } catch (error) {
           if (canceling && error instanceof ApiFailure && error.status === 404) return null;
           return {...item, phase: canceling ? "cancelFailed" : "uncertain",
-            error: errorText(error, "첨부파일 요청 결과를 확인할 수 없습니다.")} satisfies DraftUpload;
+            error: errorText(error, "attachments.couldNotVerifyAttachmentRequest")} satisfies DraftUpload;
         }
       };
       void run().then(result => {

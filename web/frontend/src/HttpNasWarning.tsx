@@ -21,10 +21,10 @@ export function HttpNasWarning({ nasUrl }: { nasUrl: string | null }) {
 
   if (!nasUrl?.startsWith("http://") || (state.url === nasUrl && state.dismissed)) return null;
   return (
-    <div className="workspace-alert warning http-nas-warning" role="region" aria-label={t("NAS HTTP 연결 경고")}>
+    <div className="workspace-alert warning http-nas-warning" role="region" aria-label={t("auth.nasHttpConnectionWarning")}>
       <AlertTriangle size={14} aria-hidden="true" />
-      <span>{t("NAS 연결이 HTTP입니다. 계정 정보와 노트가 암호화되지 않습니다.")}</span>
-      <button type="button" className="icon-button" aria-label={t("NAS HTTP 연결 경고 닫기")}
+      <span>{t("auth.nasUsesHttpCredentialsAndNotesTransmittedWithout")}</span>
+      <button type="button" className="icon-button" aria-label={t("auth.dismissNasHttpConnectionWarning")}
         onClick={() => setState({ url: nasUrl, dismissed: true })}>
         <X size={14} aria-hidden="true" />
       </button>

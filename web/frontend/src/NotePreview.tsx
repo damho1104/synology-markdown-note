@@ -214,7 +214,7 @@ export function NotePreview({
           details.className = "note-frontmatter";
           details.setAttribute("data-source-line", "1");
           const summary = document.createElement("summary");
-          summary.textContent = t("문서 정보");
+          summary.textContent = t("editor.documentInformation");
           const pre = document.createElement("pre");
           const code = document.createElement("code");
           code.textContent = lines.slice(1, end).join("\n").replace(/^\n+|\n+$/g, "");
@@ -339,7 +339,7 @@ export function NotePreview({
             code.parentElement?.replaceWith(container);
           } catch {
             const error = document.createElement("p");
-            error.textContent = t("Mermaid 문법을 확인하세요.");
+            error.textContent = t("editor.checkMermaidSyntax");
             error.className = "diagram-error";
             code.parentElement?.before(error);
           }
@@ -434,7 +434,7 @@ export function NotePreview({
   return (
     <iframe
       ref={frame}
-      title={t("노트 HTML 미리보기")}
+      title={t("editor.noteHtmlPreview")}
       sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
       referrerPolicy="no-referrer"
       className="note-preview"

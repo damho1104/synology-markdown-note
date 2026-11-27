@@ -57,16 +57,16 @@ export function SettingsDialog({ preferences, onChange, onClose }: {
     }}>
     <div className="settings-window">
       <header className="settings-titlebar">
-        <button type="button" className="settings-close" aria-label={t("설정 닫기")} onClick={onClose}><X size={11} /></button>
-        <h2 id={titleId}>{t("설정")}</h2>
-        <span className="settings-tab"><SlidersHorizontal size={18} />{t("일반")}</span>
+        <button type="button" className="settings-close" aria-label={t("settings.closeSettings")} onClick={onClose}><X size={11} /></button>
+        <h2 id={titleId}>{t("common.settings")}</h2>
+        <span className="settings-tab"><SlidersHorizontal size={18} />{t("settings.general")}</span>
       </header>
       <div className="settings-content">
-        <p id={descriptionId} className="settings-description">{t("변경한 설정은 바로 적용되며 이 브라우저에 저장됩니다.")}</p>
+        <p id={descriptionId} className="settings-description">{t("settings.changesTakeEffectImmediatelyAndSavedThisBrowser")}</p>
         <section aria-labelledby={`${titleId}-sync`}>
-          <h3 id={`${titleId}-sync`}>{t("동기화")}</h3>
+          <h3 id={`${titleId}-sync`}>{t("settings.sync")}</h3>
           <div className="settings-group">
-            <label className="settings-row">{t("목록 갱신 주기 (분)")}
+            <label className="settings-row">{t("settings.listRefreshIntervalMinutes")}
               <input type="number" min={MIN_LIST_REFRESH_MINUTES} step="1" value={refreshInput}
                 onChange={({ currentTarget: input }) => {
                   setRefreshInput(input.value)
@@ -81,46 +81,46 @@ export function SettingsDialog({ preferences, onChange, onClose }: {
                 }} />
             </label>
           </div>
-          <p className="settings-help">{t("메모장과 메모 목록의 NAS 변경을 자동으로 확인합니다. 기본 5분, 최소 1분입니다.")}</p>
+          <p className="settings-help">{t("settings.automaticallyChecksNasForChangesNotebooksAndNotes")}</p>
         </section>
         <section aria-labelledby={`${titleId}-editor`}>
-          <h3 id={`${titleId}-editor`}>{t("편집기")}</h3>
+          <h3 id={`${titleId}-editor`}>{t("settings.editor")}</h3>
           <div className="settings-group">
-            <label className="settings-row">{t("글꼴 크기")}
-              <span className="settings-size-control"><input aria-label={t("글꼴 크기")} type="range" min="11" max="22" step="1"
+            <label className="settings-row">{t("settings.fontSize")}
+              <span className="settings-size-control"><input aria-label={t("settings.fontSize")} type="range" min="11" max="22" step="1"
                 value={preferences.editorFontSize} onChange={event => update('editorFontSize', Number(event.target.value))} />
                 <output>{formatNumber(preferences.editorFontSize)}px</output></span>
             </label>
-            <label className="settings-row">{t("화면 모드")}<select aria-label={t("화면 모드")} value={preferences.appearance}
+            <label className="settings-row">{t("settings.appearance")}<select aria-label={t("settings.appearance")} value={preferences.appearance}
               onChange={event => update('appearance', event.target.value as PreviewPreferences['appearance'])}>
-              <option value="system">{t("시스템 설정")}</option><option value="light">{t("라이트")}</option><option value="dark">{t("다크")}</option>
+              <option value="system">{t("settings.systemSetting")}</option><option value="light">{t("settings.light")}</option><option value="dark">{t("settings.dark")}</option>
             </select></label>
-            <label className="settings-row settings-toggle">{t("줄 번호 표시")}<input type="checkbox" checked={preferences.lineNumbers}
+            <label className="settings-row settings-toggle">{t("settings.showLineNumbers")}<input type="checkbox" checked={preferences.lineNumbers}
               onChange={event => update('lineNumbers', event.target.checked)} /></label>
-            <label className="settings-row settings-toggle">{t("자동 줄바꿈")}<input type="checkbox" checked={preferences.lineWrapping}
+            <label className="settings-row settings-toggle">{t("settings.wrapLines")}<input type="checkbox" checked={preferences.lineWrapping}
               onChange={event => update('lineWrapping', event.target.checked)} /></label>
           </div>
-          <p className="settings-help">{t("글꼴 크기는 본문 편집기에, 줄 번호와 자동 줄바꿈은 Markdown 편집기에 적용됩니다.")}</p>
+          <p className="settings-help">{t("settings.fontSizeAppliesBodyEditorsLineNumbersAnd")}</p>
         </section>
         <section aria-labelledby={`${titleId}-mermaid`}>
-          <h3 id={`${titleId}-mermaid`}>{t("Mermaid 다이어그램")}</h3>
+          <h3 id={`${titleId}-mermaid`}>{t("settings.mermaidDiagrams")}</h3>
           <div className="settings-group">
-            <label className="settings-row">{t("그리기 스타일")}<select aria-label={t("그리기 스타일")} value={preferences.mermaidStyle}
+            <label className="settings-row">{t("settings.drawingStyle")}<select aria-label={t("settings.drawingStyle")} value={preferences.mermaidStyle}
               onChange={event => update('mermaidStyle', event.target.value as PreviewPreferences['mermaidStyle'])}>
-              <option value="classic">{t("기본")}</option><option value="handDrawn">{t("스케치")}</option>
+              <option value="classic">{t("settings.classic")}</option><option value="handDrawn">{t("settings.handDrawn")}</option>
             </select></label>
-            <label className="settings-row">{t("색상 테마")}<select aria-label={t("색상 테마")} value={preferences.mermaidTheme}
+            <label className="settings-row">{t("settings.colorTheme")}<select aria-label={t("settings.colorTheme")} value={preferences.mermaidTheme}
               onChange={event => update('mermaidTheme', event.target.value as PreviewPreferences['mermaidTheme'])}>
-              <option value="system">{t("화면 모드에 맞춤")}</option><option value="default">{t("라이트")}</option><option value="dark">{t("다크")}</option>
-              <option value="neutral">{t("무채색")}</option><option value="forest">{t("포레스트")}</option>
+              <option value="system">{t("settings.matchAppearance")}</option><option value="default">{t("settings.light")}</option><option value="dark">{t("settings.dark")}</option>
+              <option value="neutral">{t("settings.neutral")}</option><option value="forest">{t("settings.forest")}</option>
             </select></label>
           </div>
-          <p className="settings-help">{t("스케치는 지원되는 다이어그램의 도형과 선을 손으로 그린 듯 표시합니다.")}</p>
+          <p className="settings-help">{t("settings.handDrawnStyleChangesShapesAndLinesSupported")}</p>
         </section>
         <section aria-labelledby={`${titleId}-about`}>
-          <h3 id={`${titleId}-about`}>{t("앱 정보")}</h3>
+          <h3 id={`${titleId}-about`}>{t("settings.about")}</h3>
           <div className="settings-group">
-            <div className="settings-row"><span>{t("버전")}</span><span>{__APP_VERSION__}</span></div>
+            <div className="settings-row"><span>{t("settings.version")}</span><span>{__APP_VERSION__}</span></div>
           </div>
         </section>
       </div>
@@ -128,8 +128,8 @@ export function SettingsDialog({ preferences, onChange, onClose }: {
         <button type="button" className="native-button" onClick={() => {
           setRefreshInput(String(DEFAULT_PREFERENCES.listRefreshMinutes))
           onChange({ ...DEFAULT_PREFERENCES })
-        }}>{t("기본값 복원")}</button>
-        <button type="button" className="native-button primary" onClick={onClose}>{t("완료")}</button>
+        }}>{t("settings.restoreDefaults")}</button>
+        <button type="button" className="native-button primary" onClick={onClose}>{t("settings.done")}</button>
       </footer>
     </div>
   </dialog>

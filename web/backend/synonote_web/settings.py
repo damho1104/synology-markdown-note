@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
+from importlib.resources import files
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -33,8 +35,11 @@ class Settings:
     default_language: str = "auto"
 
     def __post_init__(self) -> None:
-        if self.default_language not in {"auto", "en", "ko"}:
-            raise ValueError("WEB_DEFAULT_LANGUAGE must be auto, en or ko")
+        registry = json.loads(files(__package__).joinpath("locales.json").read_text(encoding="utf-8"))
+        modes = ["auto", *registry["languages"]]
+        if self.default_language not in modes:
+            allowed = ", ".join(modes[:-1]) + " or " + modes[-1]
+            raise ValueError(f"WEB_DEFAULT_LANGUAGE must be {allowed}")
         if self.public_origin:
             parsed = urlsplit(self.public_origin)
             if (parsed.scheme not in {"https", "http"} or not parsed.netloc

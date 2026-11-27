@@ -64,12 +64,12 @@ export function NoteRevisionDialog({noteId, currentVersion, dark, canRestore, on
   return <dialog ref={dialog} className="native-settings-dialog note-revision-dialog" aria-labelledby={titleId}
     onCancel={event => {event.preventDefault(); if (!restoring) onClose();}}>
     <header>
-      <h2 id={titleId}>{t("노트 수정 이력")}</h2>
-      <button type="button" className="native-button" disabled={restoring} onClick={onClose}>{t("닫기")}</button>
+      <h2 id={titleId}>{t("editor.noteRevisionHistory")}</h2>
+      <button type="button" className="native-button" disabled={restoring} onClick={onClose}>{t("common.close")}</button>
     </header>
     {error && <p role="alert">{error}</p>}
-    {!revisions && !error && <p role="status">{t("NAS 수정 이력을 불러오는 중…")}</p>}
-    {revisions?.length === 0 && <p>{t("NAS에 표시할 수정 이력이 없습니다.")}</p>}
+    {!revisions && !error && <p role="status">{t("editor.loadingNasRevisionHistory")}</p>}
+    {revisions?.length === 0 && <p>{t("editor.noRevisionsAvailableOnNas")}</p>}
     {!!revisions?.length && <ul className="note-revision-list">
       {revisions.map(revision => <li key={revision.version}>
         <button type="button" className="native-button" aria-pressed={selected === revision.version}
@@ -77,24 +77,24 @@ export function NoteRevisionDialog({noteId, currentVersion, dark, canRestore, on
             if (selected === revision.version && preview) return;
             setError(""); setConfirming(false); setSelection({version:revision.version});
           }}>
-          {t("{0} · 버전 {1}", new Date(revision.modified_at * 1000).toLocaleString(currentLanguage()), revision.version)}
-          {revision.version === currentVersion && " " + t("· 현재")}
+          {t("editor.version", new Date(revision.modified_at * 1000).toLocaleString(currentLanguage()), revision.version)}
+          {revision.version === currentVersion && " " + t("editor.current")}
         </button>
       </li>)}
     </ul>}
-    {selected && preview?.version !== selected && !error && <p role="status">{t("과거 버전을 불러오는 중…")}</p>}
+    {selected && preview?.version !== selected && !error && <p role="status">{t("editor.loadingEarlierVersion")}</p>}
     {preview?.version === selected && <section>
-      <h3>{preview.title || t("제목 없음")}</h3>
+      <h3>{preview.title || t("common.untitled")}</h3>
       <div className="note-revision-preview"><NotePreview html={preview.html} dark={dark} /></div>
-      {!canRestore && !restoring && <p>{t("편집본과 진행 중인 저장을 먼저 확인하세요.")}</p>}
+      {!canRestore && !restoring && <p>{t("common.reviewDraftAndAnyPendingSaveFirst")}</p>}
       {preview.version !== currentVersion && (confirming ? <div className="note-revision-confirm">
-        <p>{t("이전 버전의 제목과 내용으로 현재 노트를 바꿀까요?")}</p>
+        <p>{t("editor.replaceCurrentNoteWithTitleAndContentsThis")}</p>
         <button type="button" className="native-button" disabled={restoring}
-          onClick={() => setConfirming(false)}>{t("취소")}</button>
+          onClick={() => setConfirming(false)}>{t("common.cancel")}</button>
         <button type="button" className="native-button" disabled={!canRestore || restoring}
-          onClick={() => void restore()}>{restoring ? t("복원 중…") : t("복원 확인")}</button>
+          onClick={() => void restore()}>{restoring ? t("editor.restoring") : t("editor.confirmRestore")}</button>
       </div> : <button type="button" className="native-button"
-        disabled={!canRestore} onClick={() => setConfirming(true)}>{t("이 버전으로 복원")}</button>)}
+        disabled={!canRestore} onClick={() => setConfirming(true)}>{t("editor.restoreThisVersion")}</button>)}
     </section>}
   </dialog>;
 }

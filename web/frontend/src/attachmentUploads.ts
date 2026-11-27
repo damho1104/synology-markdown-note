@@ -53,15 +53,15 @@ async function lookup(path: string, signal: AbortSignal) {
     if (metadata?.status !== "receiving") return metadata;
     if (attempt < 4) await new Promise<void>(resolve => window.setTimeout(resolve, 1000));
   }
-  throw new UiError("서버가 아직 파일을 받고 있습니다. 잠시 후 다시 확인하세요.");
+  throw new UiError("errors.serverStillReceivingFileCheckAgainMoment");
 }
 
 function confirmedUpload(item: DraftUpload, metadata: UploadMetadata): DraftUpload {
   if (metadata.upload_id !== item.id || !["ready", "pinned", "reviewed", "committed"].includes(metadata.status) ||
       !/^[0-9a-f]{64}$/.test(metadata.sha256) || typeof metadata.image !== "boolean" || typeof metadata.name !== "string")
-    throw new UiError("서버의 첨부 확인 정보가 올바르지 않습니다.");
+    throw new UiError("errors.serverReturnedInvalidAttachmentVerificationInformation");
   if (metadata.status === "pinned") return {...item, phase: "uncertain", metadata,
-    error: t("NAS 저장 결과를 확인해야 합니다.")};
+    error: t("attachments.verifyWhetherNasSavedChanges")};
   if (metadata.status === "reviewed") return {...item, phase: "reviewed", metadata, error: undefined};
   return {...item, phase: metadata.status === "committed" ? "committed" : "ready", metadata, error: undefined};
 }
@@ -75,7 +75,7 @@ export async function transferUpload(draftId: string, item: DraftUpload, file: F
     if (lookupOnly || item.metadata?.status === "pinned" || item.metadata?.status === "reviewed")
       return {...item, phase: "missing", recoveryOnly: true, metadata: undefined, error: undefined};
   }
-  if (!file) return {...item, phase: "missing", error: t("임시 파일을 찾을 수 없습니다. 취소한 뒤 파일을 다시 선택하세요.")};
+  if (!file) return {...item, phase: "missing", error: t("attachments.temporaryFileNotFoundCancelAndSelectFile")};
   try {
     const metadata = await request<UploadMetadata>(path, {
       method: "PUT", signal, body: file,
@@ -93,7 +93,7 @@ export async function transferUpload(draftId: string, item: DraftUpload, file: F
       return {...item, phase: "failed", error: error.message};
   }
   const found = await lookup(path, signal);
-  return found ? confirmedUpload(item, found) : {...item, phase: "failed", error: t("전송을 확인하지 못했습니다. 다시 시도하세요.")};
+  return found ? confirmedUpload(item, found) : {...item, phase: "failed", error: t("attachments.couldNotVerifyUploadTryAgain")};
 }
 
 export function uploadMarkdown(metadata: UploadMetadata) {

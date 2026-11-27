@@ -1,0 +1,17 @@
+{
+  "allSearchResults": "전체 검색 결과",
+  "bodyIndex": "· 본문 색인 {{0}}/{{1}}",
+  "closeSearch": "검색 닫기",
+  "confirmThatCurrentNoteWasSavedThenTry": "현재 노트의 저장을 확인한 뒤 다시 선택해 주세요.",
+  "couldNotOpenNoteSelectItAgainRetry": "노트를 열지 못했습니다. 다시 선택해 주세요.",
+  "couldNotSearchNoteBodies": "· 본문 검색 실패",
+  "noResultsFound": "검색 결과가 없습니다.",
+  "notebookLink": "연결할 메모장",
+  "results": "검색 결과 {{0}}개{{1}}",
+  "search": "검색",
+  "searchesTitlesBodiesAndTagsAllNotesOutside": "휴지통을 제외한 노트의 제목·본문·태그를 검색합니다.",
+  "searchForNoteLink": "연결할 노트 검색",
+  "searchingNoteBodies": "· 본문 검색 중…",
+  "searchNoteTitlesBodiesAndTags": "노트 제목·본문·태그 검색",
+  "searchQueryForAllNotes": "전체 노트 검색어"
+}

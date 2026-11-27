@@ -1,9 +1,24 @@
-import { english } from "./messages";
+import { createInstance } from "i18next";
+import {
+  fallbackLanguage, isSupportedLanguage, resources, supportedLanguages, type Message,
+} from "./catalogs";
 
-export type Language = "en" | "ko";
-export type Message = keyof typeof english;
+export type { Message } from "./catalogs";
+export type Language = string;
 
-let language: Language = "en";
+const translator = createInstance();
+void translator.init({
+  resources,
+  lng: fallbackLanguage,
+  fallbackLng: fallbackLanguage,
+  supportedLngs: supportedLanguages,
+  load: "currentOnly",
+  lowerCaseLng: true,
+  initAsync: false,
+  interpolation: { escapeValue: false, skipOnVariables: true },
+});
+
+let language = fallbackLanguage;
 
 export function setLanguage(value: Language): void {
   language = value;
@@ -14,18 +29,31 @@ export function currentLanguage(): Language {
   return language;
 }
 
-const numberFormat = {en: new Intl.NumberFormat("en"), ko: new Intl.NumberFormat("ko")};
+const formats = new Map<string, Intl.NumberFormat>();
+
+function formatForLanguage(value: number, locale: Language): string {
+  let formatter = formats.get(locale);
+  if (!formatter) {
+    formatter = new Intl.NumberFormat(locale);
+    formats.set(locale, formatter);
+  }
+  return formatter.format(value);
+}
 
 export function formatNumber(value: number): string {
-  return numberFormat[language].format(value);
+  return formatForLanguage(value, language);
+}
+
+export function translate(locale: Language, message: Message, ...values: (string | number)[]): string {
+  const replace = Object.fromEntries(values.map((value, index) => [
+    index, typeof value === "number" ? formatForLanguage(value, locale) : value,
+  ]));
+  const count = typeof values[0] === "number" ? values[0] : undefined;
+  return translator.t(message, { lng: locale, count, replace, nest: false });
 }
 
 export function t(message: Message, ...values: (string | number)[]): string {
-  const pattern = language === "ko" ? message : english[message];
-  return pattern.replace(/\{(\d+)\}/g, (slot, index) => {
-    const value = values[Number(index)];
-    return typeof value === "number" ? formatNumber(value) : value ?? slot;
-  });
+  return translate(language, message, ...values);
 }
 
 export class UiError extends Error {
@@ -34,21 +62,41 @@ export class UiError extends Error {
   }
 }
 
-// Attachment drafts can survive a reload after the deployment language changes.
+// Existing drafts persist rendered errors, so recognize strings from every shipped catalog.
+const previousMessages = new Map<string, Message>();
+const requestFailureTemplates: [string, string][] = [];
+for (const { translation } of Object.values(resources)) {
+  const [prefix, suffix] = translation.errors.requestFailed.split("{{0}}");
+  requestFailureTemplates.push([prefix, suffix]);
+  for (const [feature, values] of Object.entries(translation)) {
+    for (const [key, text] of Object.entries(values)) {
+      if (!previousMessages.has(text)) previousMessages.set(text, `${feature}.${key}` as Message);
+    }
+  }
+}
+
 export function storedErrorText(previous: string): string {
-  if (Object.hasOwn(english, previous)) return t(previous as Message);
-  const match = (Object.keys(english) as Message[]).find(message => english[message] === previous);
-  if (match) return t(match);
-  const status = previous.match(/^(?:Request failed|요청에 실패했습니다) \((\d{3})\)\.$/);
-  return status ? t("요청에 실패했습니다 ({0}).", status[1]) : t("요청 처리 중 오류가 발생했습니다.");
+  const message = previousMessages.get(previous);
+  if (message) return t(message);
+  for (const [prefix, suffix] of requestFailureTemplates) {
+    if (!previous.startsWith(prefix) || !previous.endsWith(suffix)) continue;
+    const status = previous.slice(prefix.length, previous.length - suffix.length);
+    if (/^\d{3}$/.test(status)) return t("errors.requestFailed", status);
+  }
+  return t("errors.unexpected");
 }
 
 export function browserLanguage(preferred: readonly string[]): Language {
   for (const tag of preferred) {
-    const language = tag.toLowerCase().split("-")[0];
-    if (language === "en" || language === "ko") return language;
+    let candidate = tag.toLowerCase();
+    while (candidate) {
+      if (isSupportedLanguage(candidate)) return candidate;
+      const separator = candidate.lastIndexOf("-");
+      if (separator === -1) break;
+      candidate = candidate.slice(0, separator);
+    }
   }
-  return "en";
+  return fallbackLanguage;
 }
 
 export async function loadLanguage(preferred: readonly string[]): Promise<Language> {
@@ -64,10 +112,9 @@ export async function loadLanguage(preferred: readonly string[]): Promise<Langua
 
     const config = await response.json();
     const mode: unknown = config?.default_language;
-    if (mode === "en" || mode === "ko") return mode;
-    if (mode !== "auto") throw new Error("Invalid default language in public config.");
-
-    return browserLanguage(preferred);
+    if (mode === "auto") return browserLanguage(preferred);
+    if (typeof mode === "string" && isSupportedLanguage(mode)) return mode;
+    throw new Error("Invalid default language in public config.");
   } finally {
     clearTimeout(timeout);
   }

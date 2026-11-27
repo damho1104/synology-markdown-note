@@ -10,22 +10,22 @@ import {
 } from "lucide-react";
 export type TextChange = { index: number; text: string };
 const formats = {
-  bold:["굵게", Bold], italic:["기울임", Italic], underline:["밑줄", Underline],
-  strike:["취소선", Strikethrough], subscript:["아래 첨자", Subscript], superscript:["위 첨자", Superscript],
+  bold:["editor.bold", Bold], italic:["editor.italic", Italic], underline:["editor.underline", Underline],
+  strike:["editor.strikethrough", Strikethrough], subscript:["editor.subscript", Subscript], superscript:["editor.superscript", Superscript],
 } as const;
 const tableCommands = {
-  row_before:["위에 행 추가", PanelTopOpen], row_after:["아래에 행 추가", PanelBottomOpen],
-  column_before:["왼쪽에 열 추가", PanelLeftOpen], column_after:["오른쪽에 열 추가", PanelRightOpen],
-  delete_row:["행 삭제", PanelTopClose], delete_column:["열 삭제", PanelLeftClose], delete_table:["표 삭제", Trash2],
+  row_before:["editor.insertRowAbove", PanelTopOpen], row_after:["editor.insertRowBelow", PanelBottomOpen],
+  column_before:["editor.insertColumnLeft", PanelLeftOpen], column_after:["editor.insertColumnRight", PanelRightOpen],
+  delete_row:["editor.deleteRow", PanelTopClose], delete_column:["editor.deleteColumn", PanelLeftClose], delete_table:["editor.deleteTable", Trash2],
 } as const;
 const alignmentCommands = [
-  ["왼쪽 정렬", AlignLeft, "left"], ["가운데 정렬", AlignCenter, "center"],
-  ["오른쪽 정렬", AlignRight, "right"], ["양쪽 정렬", AlignJustify, "justify"],
+  ["editor.alignLeft", AlignLeft, "left"], ["editor.center", AlignCenter, "center"],
+  ["editor.alignRight", AlignRight, "right"], ["editor.justify", AlignJustify, "justify"],
 ] as const;
 const layoutCommands = [
-  ["글머리 목록", List, "list", "bullet"], ["번호 목록", ListOrdered, "list", "number"],
-  ["체크리스트", ListChecks, "list", "check"], ["들여쓰기", IndentIncrease, "indent", undefined],
-  ["내어쓰기", IndentDecrease, "outdent", undefined],
+  ["editor.bulletedList", List, "list", "bullet"], ["editor.numberedList", ListOrdered, "list", "number"],
+  ["editor.checklist", ListChecks, "list", "check"], ["editor.increaseIndent", IndentIncrease, "indent", undefined],
+  ["editor.decreaseIndent", IndentDecrease, "outdent", undefined],
 ] as const;
 type FormatKind = keyof typeof formats;
 type ValueKind = "font_family" | "font_size" | "text_color" | "highlight_color" | "link";
@@ -331,51 +331,51 @@ export function OriginalEditor({
   }
   return (
     <>
-    {editable && onStructureEdit && <div role="group" aria-label={t("본문 서식과 표")}
+    {editable && onStructureEdit && <div role="group" aria-label={t("editor.bodyFormattingAndTables")}
       className="original-structure-toolbar" data-expanded={showMore} onMouseDown={event=>{
         if ((event.target as Element).closest("button")) event.preventDefault();
       }}>
       <div className="original-toolbar-group">
-        <ToolbarSelect label={t("문단")} icon={Pilcrow} disabled={blockDisabled}
+        <ToolbarSelect label={t("editor.paragraph")} icon={Pilcrow} disabled={blockDisabled}
           onChange={value=>activeBlock !== undefined && onStructureEdit({kind:"paragraph",index:activeBlock,value})}>
-          {Object.entries({p:t("본문"),h1:t("제목 1"),h2:t("제목 2"),h3:t("제목 3"),blockquote:t("인용"),pre:t("코드")})
+          {Object.entries({p:t("editor.body"),h1:t("editor.heading1"),h2:t("editor.heading2"),h3:t("editor.heading3"),blockquote:t("editor.quote"),pre:t("editor.code")})
             .map(([value,label])=><option key={value} value={value}>{label}</option>)}
         </ToolbarSelect>
         {(["bold","italic","underline"] as const).map(formatButton)}
       </div>
       <div className="original-toolbar-group">
-        <ToolbarButton label={t("링크")} icon={Link2} disabled={selectionDisabled} onClick={()=>{
+        <ToolbarButton label={t("editor.link")} icon={Link2} disabled={selectionDisabled} onClick={()=>{
           if (!selected) return;
-          const value = window.prompt(t("링크 주소"), "https://");
+          const value = window.prompt(t("editor.linkUrl"), "https://");
           if (value && value !== "https://") onStructureEdit({kind:"link",value,index:selected.index,start:selected.start,end:selected.end});
         }}/>
-        {onAttach && <ToolbarButton label={t("첨부")} icon={Paperclip} onClick={onAttach}/>}
-        {onUndo && <ToolbarButton label={t("실행 취소")} icon={Undo2} disabled={structureDisabled || !canUndo} onClick={onUndo}/>}
-        {onRedo && <ToolbarButton label={t("다시 실행")} icon={Redo2} disabled={structureDisabled || !canRedo} onClick={onRedo}/>}
+        {onAttach && <ToolbarButton label={t("editor.attach")} icon={Paperclip} onClick={onAttach}/>}
+        {onUndo && <ToolbarButton label={t("editor.undo")} icon={Undo2} disabled={structureDisabled || !canUndo} onClick={onUndo}/>}
+        {onRedo && <ToolbarButton label={t("editor.redo")} icon={Redo2} disabled={structureDisabled || !canRedo} onClick={onRedo}/>}
       </div>
       <button className="original-toolbar-button original-toolbar-more" type="button"
-        aria-label={t("편집 도구 더보기")} title={t("편집 도구 더보기")} aria-controls={moreId}
+        aria-label={t("editor.moreEditingTools")} title={t("editor.moreEditingTools")} aria-controls={moreId}
         aria-expanded={showMore} onClick={()=>setShowMore(current=>!current)}>
         <Ellipsis size={19} aria-hidden="true"/>
       </button>
       <div className="original-toolbar-secondary" id={moreId}>
         <div className="original-toolbar-group">
-          <ToolbarSelect label={t("글꼴")} icon={Type} disabled={selectionDisabled}
+          <ToolbarSelect label={t("editor.font")} icon={Type} disabled={selectionDisabled}
             onChange={value=>selected && onStructureEdit({kind:"font_family",value,index:selected.index,start:selected.start,end:selected.end})}>
-            {fonts.map(font=><option key={font} value={font}>{font === "system-ui" ? t("시스템") : font}</option>)}
+            {fonts.map(font=><option key={font} value={font}>{font === "system-ui" ? t("editor.system") : font}</option>)}
           </ToolbarSelect>
-          <ToolbarSelect label={t("글자 크기")} icon={CaseSensitive} disabled={selectionDisabled}
+          <ToolbarSelect label={t("editor.textSize")} icon={CaseSensitive} disabled={selectionDisabled}
             onChange={value=>selected && onStructureEdit({kind:"font_size",value,index:selected.index,start:selected.start,end:selected.end})}>
             {[10,12,14,16,18,24,32,48,72].map(size=><option key={size} value={size}>{formatNumber(size)} px</option>)}
           </ToolbarSelect>
           {(["strike","subscript","superscript"] as const).map(formatButton)}
-          {([["text_color",t("글자 색"),Baseline,"#000000"],["highlight_color",t("강조 색"),Highlighter,"#ffff00"]] as const)
+          {([["text_color",t("editor.textColor"),Baseline,"#000000"],["highlight_color",t("editor.highlightColor"),Highlighter,"#ffff00"]] as const)
             .map(([kind,label,Icon,color])=><label key={kind} className="original-toolbar-color" title={label}>
               <Icon size={17} strokeWidth={1.75} aria-hidden="true"/>
               <input type="color" aria-label={label} defaultValue={color} disabled={selectionDisabled}
                 onChange={event=>selected && onStructureEdit({kind,value:event.target.value,index:selected.index,start:selected.start,end:selected.end})}/>
             </label>)}
-          <ToolbarButton label={t("서식 지우기")} icon={RemoveFormatting} disabled={selectionDisabled}
+          <ToolbarButton label={t("editor.clearFormatting")} icon={RemoveFormatting} disabled={selectionDisabled}
             onClick={()=>selected && onStructureEdit({kind:"clear_format",index:selected.index,start:selected.start,end:selected.end})}/>
         </div>
         <div className="original-toolbar-group">
@@ -387,10 +387,10 @@ export function OriginalEditor({
             disabled={blockDisabled} onClick={()=>activeBlock !== undefined && onStructureEdit({kind,index:activeBlock,value})}/>)}
         </div>
         <div className="original-toolbar-group">
-          <ToolbarButton label={t("링크 해제")} icon={Unlink2} disabled={selectionDisabled}
+          <ToolbarButton label={t("editor.removeLink")} icon={Unlink2} disabled={selectionDisabled}
             onClick={()=>selected && onStructureEdit({kind:"unlink",index:selected.index,start:selected.start,end:selected.end})}/>
-          <ToolbarButton label={t("본문 끝에 표 추가")} icon={Table2} disabled={structureDisabled} onClick={()=>{
-            const input = window.prompt(t("행 × 열 (최대 30 × 20)"), "2x2");
+          <ToolbarButton label={t("editor.insertTableEnd")} icon={Table2} disabled={structureDisabled} onClick={()=>{
+            const input = window.prompt(t("editor.tableSizeHint"), "2x2");
             const size = input?.match(/^\s*(\d+)\s*[x×]\s*(\d+)\s*$/i);
             if (!size) return;
             const rows = Number(size[1]), columns = Number(size[2]);
@@ -402,7 +402,7 @@ export function OriginalEditor({
           {(Object.keys(tableCommands) as TableKind[]).map(kind => {
             const [label,icon] = tableCommands[kind];
             return <ToolbarButton key={kind} label={t(label)} icon={icon} disabled={structureDisabled} onClick={()=>{
-              if (kind.startsWith("delete_") && !window.confirm(t("선택한 {0} 작업을 적용할까요?", t(label)))) return;
+              if (kind.startsWith("delete_") && !window.confirm(t("editor.applySelectedAction", t(label)))) return;
               onStructureEdit({kind,index:selectedCell.index,row:selectedCell.row,column:selectedCell.column});
             }}/>;
           })}
@@ -412,7 +412,7 @@ export function OriginalEditor({
     <div
       ref={root}
       role="textbox"
-      aria-label={t("본문 편집기")}
+      aria-label={t("editor.noteBodyEditor")}
       aria-multiline="true"
       aria-readonly={!editable}
       className="original-text-editor"

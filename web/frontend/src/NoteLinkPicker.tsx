@@ -43,24 +43,24 @@ export function NoteLinkPicker({
         className="native-modal"
         role="dialog"
         aria-modal="true"
-        aria-label={t("노트 연결")}
+        aria-label={t("common.linkNote")}
       >
-        <h2>{t("노트 연결")}</h2>
+        <h2>{t("common.linkNote")}</h2>
         <label>
-          {t("검색")}
+          {t("search.search")}
           <input
             autoFocus
-            aria-label={t("연결할 노트 검색")}
+            aria-label={t("search.searchForNoteLink")}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
         </label>
         <select
-          aria-label={t("연결할 메모장")}
+          aria-label={t("search.notebookLink")}
           value={book}
           onChange={(e) => setBook(e.target.value)}
         >
-          <option value="">{t("모든 메모장")}</option>
+          <option value="">{t("common.allNotebooks")}</option>
           {notebooks.map((b) => (
             <option value={b.id} key={b.id}>
               {b.name}
@@ -75,16 +75,16 @@ export function NoteLinkPicker({
                 key={n.id}
                 onClick={() => onSelect(n)}
               >
-                {n.title || t("제목 없음")}
+                {n.title || t("common.untitled")}
               </button>
             ))
           ) : (
-            <p>{t("검색 결과 없음")}</p>
+            <p>{t("common.noResults")}</p>
           )}
         </div>
         <div className="native-dialog-buttons">
           <button className="native-button" onClick={onClose}>
-            {t("취소")}
+            {t("common.cancel")}
           </button>
         </div>
       </section>

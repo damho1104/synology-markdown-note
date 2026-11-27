@@ -1,4 +1,4 @@
-import { currentLanguage, t } from "./i18n";
+import { currentLanguage, translate } from "./i18n";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { notifySessionExpired } from "./api";
 import { previewNonce, canonicalNoteLink } from "./previewSecurity";
@@ -100,6 +100,7 @@ export function NotePreview({
   const frame = useRef<HTMLIFrameElement>(null);
   const linkNonce = useRef(previewNonce());
   const linkEnabled = !!onOpenLink;
+  const language = currentLanguage();
   const frameDocument = useMemo(() => {
     const nonce = linkNonce.current;
     return `<!doctype html><html lang="${currentLanguage()}"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; img-src data: blob:; font-src ${window.location.origin} data:; connect-src 'none'; form-action 'none'; base-uri 'none'"></head><body><script nonce="${nonce}">
@@ -129,6 +130,15 @@ export function NotePreview({
           await document.fonts.ready;
           await Promise.all([...next.images].map(img => img.decode().catch(() => {})));
           if (current !== revision) return;
+          const previousMetadata = document.body.firstElementChild;
+          const nextMetadata = next.body.firstElementChild;
+          if (document.documentElement.lang !== next.documentElement.lang &&
+              previousMetadata?.matches('details.note-frontmatter') &&
+              nextMetadata?.matches('details.note-frontmatter') &&
+              previousMetadata.querySelector('code')?.isEqualNode(nextMetadata.querySelector('code'))) {
+            nextMetadata.open = previousMetadata.open;
+          }
+          document.documentElement.lang = next.documentElement.lang;
           const offset = scrollY;
           const old = [...document.body.childNodes];
           const fresh = [...next.body.childNodes];
@@ -214,7 +224,7 @@ export function NotePreview({
           details.className = "note-frontmatter";
           details.setAttribute("data-source-line", "1");
           const summary = document.createElement("summary");
-          summary.textContent = t("editor.documentInformation");
+          summary.textContent = translate(language, "editor.documentInformation");
           const pre = document.createElement("pre");
           const code = document.createElement("code");
           code.textContent = lines.slice(1, end).join("\n").replace(/^\n+|\n+$/g, "");
@@ -339,7 +349,7 @@ export function NotePreview({
             code.parentElement?.replaceWith(container);
           } catch {
             const error = document.createElement("p");
-            error.textContent = t("editor.checkMermaidSyntax");
+            error.textContent = translate(language, "editor.checkMermaidSyntax");
             error.className = "diagram-error";
             code.parentElement?.before(error);
           }
@@ -409,7 +419,7 @@ export function NotePreview({
       const fonts = `<style>${katexCss}</style>`;
       if (active)
         setPage(
-          `<!doctype html><html lang="${currentLanguage()}"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}">${fonts}<style>${css}${frontMatterCss}</style></head><body>${body.innerHTML}</body></html>`,
+          `<!doctype html><html lang="${language}"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}">${fonts}<style>${css}${frontMatterCss}</style></head><body>${body.innerHTML}</body></html>`,
         );
     }
     void render();
@@ -430,11 +440,12 @@ export function NotePreview({
     stagedImages,
     stagedDownloads,
     linkEnabled,
+    language,
   ]);
   return (
     <iframe
       ref={frame}
-      title={t("editor.noteHtmlPreview")}
+      title={translate(language, "editor.noteHtmlPreview")}
       sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
       referrerPolicy="no-referrer"
       className="note-preview"

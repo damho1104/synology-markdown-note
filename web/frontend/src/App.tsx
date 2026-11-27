@@ -140,7 +140,7 @@ function App() {
           ) : (
             <>
               <div className="mb-6 flex items-center gap-3"><div className="rounded-xl bg-mist p-3 text-marine"><KeyRound size={24} /></div><div><p className="text-xs font-semibold text-marine">NOTE STATION</p><h3 className="text-xl font-bold">{t("auth.signInTitle")}</h3></div></div>
-              <div className="mb-7 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3"><p className="text-[11px] font-semibold text-slate-500">{t("auth.currentNasLabel")}{" "}{status.read_only ? t("auth.environmentConfiguration") : t("auth.configurationSavedOnWeb")}</p><p className="mt-1 break-all text-sm font-medium">{status.nas_url}</p></div>
+              <div className="mb-7 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3"><p className="flex items-center gap-2 text-[11px] font-semibold text-slate-500"><NasConnectionStatus connected={false} /><span>{t("auth.currentNasLabel")}{" "}{status.read_only ? t("auth.environmentConfiguration") : t("auth.configurationSavedOnWeb")}</span></p><p className="mt-1 break-all text-sm font-medium">{status.nas_url}</p></div>
               {status.nas_url?.toLowerCase().startsWith('http://') && <div className="mb-5"><InsecureNasWarning /></div>}
               <form className="space-y-5" onSubmit={e => void submitLogin(e)}>
                 <div><label className="field-label" htmlFor="username">{t("auth.username")}</label><input className="field" id="username" required autoComplete="username" value={username} onChange={e => setUsername(e.target.value)} /></div>
@@ -155,7 +155,6 @@ function App() {
           {error && <div className="mt-5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm leading-6 text-rose-700" role="alert">{error}</div>}
         </section>
       </main>
-      <NasConnectionStatus connected={false} />
     </div>
   )
 }

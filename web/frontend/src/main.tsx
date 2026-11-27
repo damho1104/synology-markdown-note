@@ -2,14 +2,16 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
 import { Button } from './components/ui/button'
-import { browserLanguage, loadLanguage, setLanguage, translate, type Language } from './i18n'
+import { browserLanguage, languageForPreference, loadLanguage, setDefaultLanguage, setLanguage, translate, type Language } from './i18n'
+import { loadPreferences } from './preferences'
 import './style.css'
 
 const root = ReactDOM.createRoot(document.getElementById('root')!)
 let starting = false
 
 function StartupStatus({ state }: { state: 'loading' | 'retrying' | 'failed' }) {
-  const language = browserLanguage(navigator.languages)
+  const preferred = navigator.languages
+  const language = languageForPreference(loadPreferences().language, preferred, browserLanguage(preferred))
   const failed = state === 'failed'
   return (
     <div className="auth-shell">
@@ -34,16 +36,17 @@ async function start(retrying = false) {
   root.render(<StartupStatus state={retrying ? 'retrying' : 'loading'} />)
 
   try {
-    let language: Language
+    let serverLanguage: Language
     try {
-      language = await loadLanguage(navigator.languages)
+      serverLanguage = await loadLanguage(navigator.languages)
     } catch {
       // Give a transient startup failure one automatic retry in this document.
       await new Promise(resolve => setTimeout(resolve, 1000))
-      language = await loadLanguage(navigator.languages)
+      serverLanguage = await loadLanguage(navigator.languages)
     }
 
-    setLanguage(language)
+    setDefaultLanguage(serverLanguage)
+    setLanguage(languageForPreference(loadPreferences().language, navigator.languages))
     root.render(<React.StrictMode><App /></React.StrictMode>)
   } catch {
     root.render(<StartupStatus state="failed" />)

@@ -122,24 +122,6 @@ struct LibraryView: View {
         } detail: {
             editorContent
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            VStack(spacing: 0) {
-                Divider()
-                HStack(spacing: 6) {
-                    Spacer()
-                    Text("NAS").font(.caption2).foregroundStyle(.secondary)
-                    Circle()
-                        .fill(library.isNASAvailable ? Color.green : Color.red)
-                        .frame(width: 8, height: 8)
-                }
-                .padding(.horizontal, 12)
-                .frame(height: 25)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(appText(library.isNASAvailable ? "Connected to NAS" : "Disconnected from NAS"))
-                .help(library.connectionStatus)
-            }
-            .background(.bar)
-        }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button(action: goBack) { IconButtonLabel(title: appText("Go Back"), systemImage: "chevron.backward") }
@@ -364,6 +346,17 @@ struct LibraryView: View {
 
             Divider()
             HStack(spacing: 9) {
+                Image(systemName: "externaldrive")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 20, height: 28)
+                    .overlay(alignment: .bottomTrailing) {
+                        Circle()
+                            .fill(library.isNASAvailable ? Color.green : Color.red)
+                            .frame(width: 7, height: 7)
+                            .overlay { Circle().stroke(.background, lineWidth: 1) }
+                    }
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(library.profile.server.isEmpty ? appText("NAS Account Required") : library.profile.username)
                         .font(.caption.weight(.medium))

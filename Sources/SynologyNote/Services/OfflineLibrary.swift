@@ -76,18 +76,43 @@ extension LibraryStore {
         let remote = try await client.fetch(noteID: noteID)
         var incoming = Self.record(from: remote.summary)
         incoming.originalHTML = remote.html; incoming.hasRemoteContent = true; incoming.listedVersion = remote.summary.version
-        let existing = try await repo.note(remoteID: noteID)
+        let markdownFiles = remote.attachments.filter { $0.name.hasSuffix(".md") }
+        let managedFiles = markdownFiles.filter {
+            $0.name.hasPrefix("synology-note-upload-") || $0.name.hasPrefix("synology-note-source-")
+        }
+        let managedIDs = Set(managedFiles.map(\.id))
+        var prefetched: [String: Data] = [:]
         var sources: [SourceEnvelope] = []
-        var hasStagedSource = false
-        for file in remote.attachments {
+        var stagedIDs: Set<String> = []
+
+        func inspect(_ file: RemoteAttachment) async throws {
             try Task.checkCancellation()
             let bytes = try await client.download(fileID: file.id, noteID: noteID)
-            if file.name.hasSuffix(".md"), let source = try? SourceEnvelope.decode(bytes) {
+            if let source = try? SourceEnvelope.decode(bytes) {
                 if source.isStaging {
-                    hasStagedSource = true
-                    continue
+                    stagedIDs.insert(file.id)
+                    return
                 }
                 if source.matches(html: remote.html) { sources.append(source) }
+            }
+            prefetched[file.id] = bytes
+        }
+
+        // Check protocol attachments before touching user files. Fresh staged
+        // notes have no published source, so there is nothing to cache yet.
+        for file in managedFiles { try await inspect(file) }
+        if !stagedIDs.isEmpty && sources.isEmpty { throw RemoteContentPending.markdownPublication }
+        for file in markdownFiles where !managedIDs.contains(file.id) { try await inspect(file) }
+        if !stagedIDs.isEmpty && sources.count != 1 { throw RemoteContentPending.markdownPublication }
+
+        let existing = try await repo.note(remoteID: noteID)
+        for file in remote.attachments where !stagedIDs.contains(file.id) {
+            try Task.checkCancellation()
+            let bytes: Data
+            if let inspected = prefetched.removeValue(forKey: file.id) {
+                bytes = inspected
+            } else {
+                bytes = try await client.download(fileID: file.id, noteID: noteID)
             }
             var attachment: NoteAttachment
             if let cached = existing?.attachments.first(where: { $0.remoteID == file.id }),
@@ -101,7 +126,7 @@ extension LibraryStore {
         if sources.count == 1, let source = sources.first, let restored = try? source.restoredAttachments(from: incoming.attachments) {
             incoming.attachments = restored; incoming.sourceDocumentID = source.documentID
             incoming.markdown = source.markdown; incoming.blocks = source.blocks; incoming.mode = .markdown
-        } else if hasStagedSource {
+        } else if !stagedIDs.isEmpty {
             // Keep the cached document until the final source becomes readable.
             throw RemoteContentPending.markdownPublication
         }

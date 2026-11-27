@@ -22,10 +22,11 @@ extension LibraryStore {
         let transport = try NoteStationSyncTransport(client: client, repository: repository, assets: attachments,
             directory: root.appendingPathComponent(profile.storageKey).appendingPathComponent("upload-journal"))
         uploadTransport = transport
+        uploadError = nil
         let account = String(profile.storageKey.prefix(12))
         syncCoordinator = SyncCoordinator(repository: repository, attachments: attachments, transport: transport, mathRenderer: MathImageRenderer(),
             reportError: { [weak self] noteID, error in
-                await self?.logEvent(.uploadFailed, noteID: noteID, fields: ["account": account], error: error)
+                if let noteID { await self?.logEvent(.uploadFailed, noteID: noteID, fields: ["account": account], error: error) }
             })
     }
     func scheduleUpload() {
@@ -78,9 +79,10 @@ extension LibraryStore {
             for operation in try await repo.pendingOperations() {
                 if let note = try await repo.note(id: operation.noteID), isNASNotebook(note.notebookID) { eligible.insert(note.id) }
             }
-            await coordinator.push(noteIDs: eligible) { [weak self] processed, total in
+            let batchError = await coordinator.push(noteIDs: eligible) { [weak self] processed, total in
                 await self?.showUploadProgress(processed, total: total, generation: generation)
             }
+            if let batchError { throw batchError }
             guard generation == connectionGeneration, account == accountGeneration else { return }
             for session in Array(sessions.values) {
                 let editing = session.editGeneration, saving = session.savedGeneration
@@ -91,6 +93,7 @@ extension LibraryStore {
             try await reload()
             let remaining = try await repo.pendingOperations()
             guard generation == connectionGeneration, account == accountGeneration else { return }
+            uploadError = nil
             pendingUploadCount = remaining.count
             let pending = remaining.filter { eligible.contains($0.noteID) }
             if !eligible.isEmpty { logEvent(.uploadCompleted, fields: ["count": String(eligible.count), "pending": String(pending.count)]) }
@@ -112,7 +115,15 @@ extension LibraryStore {
             if let client, !(await client.isAuthenticated) { requestConnectionRecovery(after: NoteStationError.sessionExpired) }
             else { startOfflineDownload() }
         } catch {
-            uploadStatus = appText("Waiting to Upload")
+            guard generation == connectionGeneration, account == accountGeneration, !Task.isCancelled,
+                  !(error is CancellationError), (error as? NoteStationError) != .cancelled else { return }
+            if Self.isRecoverableConnectionError(error) {
+                uploadStatus = appText("Waiting to Upload")
+                requestConnectionRecovery(after: error)
+            } else {
+                uploadStatus = appText("NAS Upload Needs Review")
+                uploadError = error.localizedDescription
+            }
             logEvent(.uploadFailed, error: error)
         }
     }

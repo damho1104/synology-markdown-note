@@ -197,6 +197,9 @@ struct SettingsView: View {
                     Text(appText("Edits are kept on this Mac while offline and uploaded after reconnection. Conflicting changes are preserved."))
                         .font(.caption).foregroundStyle(.secondary)
                     Text(library.uploadStatus).font(.caption).foregroundStyle(.secondary)
+                    if let uploadError = library.uploadError {
+                        Text(uploadError).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                    }
                     if let queueStatus = library.uploadQueueStatus {
                         Text(queueStatus).font(.caption).monospacedDigit().foregroundStyle(.secondary)
                     }

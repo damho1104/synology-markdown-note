@@ -42,6 +42,7 @@ final class LibraryStore {
     var deletingNoteIDs: Set<UUID> = []
     var pendingUploadCount = 0
     var uploadProgress: String?
+    var uploadError: String?
     var uploadStatus = appText("Automatic Sync After NAS Connection")
     @ObservationIgnored var uploadTask: Task<Void, Never>?
     @ObservationIgnored var uploadLoop: Task<Void, Never>?

@@ -170,7 +170,7 @@ extension LibraryStore {
         isRefreshing = false
         trustedDeviceRemembered = false
         refreshTask?.cancel()
-        uploadTask?.cancel(); uploadLoop?.cancel(); syncCoordinator = nil; uploadTransport = nil; isPushing = false; uploadProgress = nil
+        uploadTask?.cancel(); uploadLoop?.cancel(); syncCoordinator = nil; uploadTransport = nil; isPushing = false; uploadProgress = nil; uploadError = nil
         let previous = client
         client = nil; isConnected = false; hasVerifiedNASLists = false; connectionStatus = appText("Disconnected from NAS")
         await previous?.disconnect()
@@ -309,6 +309,18 @@ extension LibraryStore {
         session.downloadTask = task
         defer { session.downloadTask = nil; session.isDownloading = false }
         await task.value
+    }
+
+    func waitForMarkdownPublication(for session: EditorSession, initialDelay: Duration = .seconds(5)) async {
+        let generation = connectionGeneration
+        var delay = initialDelay
+        while session.isWaitingForMarkdownSource, isConnected, connectionGeneration == generation {
+            do { try await Task.sleep(for: delay) } catch { return }
+            guard !Task.isCancelled, session.isWaitingForMarkdownSource, isConnected,
+                  connectionGeneration == generation else { return }
+            await fetchContent(for: session)
+            delay = min(delay * 2, .seconds(60))
+        }
     }
 
     private func downloadContent(for session: EditorSession) async {

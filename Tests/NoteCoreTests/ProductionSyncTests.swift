@@ -300,6 +300,8 @@ final class ProductionNAS: @unchecked Sendable {
     private var creates = 0, sets = 0, fileCounter = 0
     private var normalizeCode = false, damageCode = false, loseDelete = false, keepDelete = false, deletes = 0
     private var reads = 0
+    private var downloads: [String] = []
+    func downloadedNames() -> [String] { lock.lock(); defer { lock.unlock() }; return downloads }
     func readCount() -> Int { lock.lock(); defer { lock.unlock() }; return reads }
     func normalizeCodeBlocksOnWrite(damageContent: Bool = false) { lock.lock(); normalizeCode = true; damageCode = damageContent; lock.unlock() }
     func loseNextDeleteResponse() { lock.lock(); loseDelete = true; lock.unlock() }
@@ -365,6 +367,7 @@ final class ProductionNAS: @unchecked Sendable {
         if method == "list" { return response(["offset":0, "total":notes.count, "notes":notes.values.map(\.row)]) }
         if method == "get", let id = string("object_id"), let note = notes[id] { reads += 1; return response(note.row) }
         if method == "download", let id = string("object_id"), let file = string("file_id"), let asset = notes[id]?.files[file] {
+            downloads.append(asset.name)
             if downloadFailures.contains(id) { return error(114) }
             return (asset.bytes, false)
         }

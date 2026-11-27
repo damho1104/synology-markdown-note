@@ -66,18 +66,16 @@ public actor SyncCoordinator {
         self.reportError = reportError
         self.mathRenderer = mathRenderer
     }
-    public func push(noteIDs: Set<UUID>? = nil, progress: (@Sendable (Int, Int) async -> Void)? = nil) async {
-        guard !running else { return }
+    @discardableResult public func push(noteIDs: Set<UUID>? = nil, progress: (@Sendable (Int, Int) async -> Void)? = nil) async -> Error? {
+        guard !running else { return nil }
         running = true
         defer { running = false }
         do {
             let attempts = try await repository.syncAttempts().filter { noteIDs?.contains($0.note.id) ?? true }
-            let queue = try await repository.pendingOperations().filter { noteIDs?.contains($0.noteID) ?? true }
-            let now = Date()
-            let ready = queue.filter {
-                $0.state != .conflict && $0.state != .uncertain && ($0.state == .pending || $0.nextAttemptAt <= now)
-            }
-            let total = Set(attempts.map { $0.note.id }).union(ready.map(\.noteID)).count
+            let initialQueue = try await repository.pendingOperations()
+            var total = Set(attempts.map { $0.note.id }).union(initialQueue.filter {
+                (noteIDs?.contains($0.noteID) ?? true) && Self.isUploadReady($0)
+            }.map(\.noteID)).count
             var processed = 0
             if total > 0 { await progress?(processed, total) }
             // Persisted attempts may have reached the server. Reconcile them before any retry.
@@ -111,28 +109,33 @@ public actor SyncCoordinator {
                 processed += 1
                 await progress?(processed, total)
             }
-            let attempted = Set(attempts.map { $0.note.id })
-            let readyIDs = Set(ready.map(\.noteID)).subtracting(attempted).union(followUp)
+            let unresolved = Set(attempts.map { $0.note.id }).subtracting(followUp)
             let currentQueue = try await repository.pendingOperations().filter {
-                readyIDs.contains($0.noteID) && $0.state != .conflict && $0.state != .uncertain
-                    && ($0.state == .pending || $0.nextAttemptAt <= Date())
+                (noteIDs?.contains($0.noteID) ?? true) && !unresolved.contains($0.noteID) && Self.isUploadReady($0)
             }
             let completedDuringReconciliation = followUp.subtracting(currentQueue.map(\.noteID)).count
-            if completedDuringReconciliation > 0 {
+            let actualTotal = processed + completedDuringReconciliation + currentQueue.count
+            if actualTotal != total || completedDuringReconciliation > 0 {
+                total = actualTotal
                 processed += completedDuringReconciliation
-                await progress?(processed, total)
+                if total > 0 { await progress?(processed, total) }
             }
             for operation in currentQueue {
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled else { return nil }
                 await process(operation)
                 processed += 1
                 await progress?(processed, total)
             }
         } catch {
             await reportError?(nil, error)
-            // A repository failure cannot be reclassified as a successful sync.
-            // Note-specific failures are persisted by process; the caller can retry the coordinator.
+            return error
         }
+        return nil
+    }
+
+    private static func isUploadReady(_ operation: PendingOperation) -> Bool {
+        operation.state != .conflict && operation.state != .uncertain
+            && (operation.state == .pending || operation.nextAttemptAt <= Date())
     }
 
     private func process(_ operation: PendingOperation) async {

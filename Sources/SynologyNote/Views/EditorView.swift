@@ -75,6 +75,9 @@ struct EditorView: View {
             Divider()
             statusBar
         }
+        .task(id: session.isWaitingForMarkdownSource && library.isConnected) {
+            await library.waitForMarkdownPublication(for: session)
+        }
         .navigationTitle(session.note.title.isEmpty ? appText("Untitled") : session.note.title)
         .sheet(isPresented: $comparing) { ConflictView(session: session) }
         .sheet(isPresented: $showingLinkPicker) {

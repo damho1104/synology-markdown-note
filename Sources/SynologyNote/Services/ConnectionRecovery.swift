@@ -31,12 +31,13 @@ extension LibraryStore {
     func requestConnectionRecovery(after error: Error, immediate: Bool = false) {
         lastConnectionFailure = error
         guard Self.isRecoverableConnectionError(error) else { return }
+        hasVerifiedNASLists = false
         guard !recoveryExpired else { return }
         logEvent(.recoveryStarted, error: error)
         isConnected = false
         cancelOfflineDownload()
         connectionError = error.localizedDescription
-        connectionStatus = "오프라인 · 연결 복구 대기"
+        connectionStatus = appText("Offline · Waiting to Reconnect")
         guard recoveryAllowed, !recoveryBlocked, profile.autoConnect, profile.rememberPassword,
               !profile.server.isEmpty, !profile.username.isEmpty, recoveryTask == nil else { return }
         let id = UUID(), savedProfile = profile, account = accountGeneration
@@ -54,7 +55,7 @@ extension LibraryStore {
                 let remaining = clock.now.duration(to: started.advanced(by: self.recoveryWindow))
                 guard remaining > .zero else {
                     self.recoveryExpired = true
-                    self.connectionStatus = "자동 재연결 종료 · 30분 경과"
+                    self.connectionStatus = appText("Automatic reconnection stopped after 30 minutes")
                     return
                 }
                 let delay = immediate && attempt == 0 ? Duration.zero : self.recoveryDelay(attempt)
@@ -63,12 +64,12 @@ extension LibraryStore {
                 guard !Task.isCancelled, self.recoveryID == id else { return }
                 guard clock.now < started.advanced(by: self.recoveryWindow) else {
                     self.recoveryExpired = true
-                    self.connectionStatus = "자동 재연결 종료 · 30분 경과"
+                    self.connectionStatus = appText("Automatic reconnection stopped after 30 minutes")
                     return
                 }
                 if self.isPushing || self.isRefreshing { attempt += 1; continue }
                 let generation = self.connectionGeneration
-                self.connectionStatus = "저장된 계정으로 재연결 중…"
+                self.connectionStatus = appText("Reconnecting with the saved account…")
                 let credentials: SavedNASCredentials?
                 do { credentials = try await self.credentialAccess.load(savedProfile.storageKey) }
                 catch {
@@ -80,8 +81,9 @@ extension LibraryStore {
                 guard self.recoveryID == id, generation == self.connectionGeneration,
                       self.accountGeneration == account, !Task.isCancelled else { return }
                 guard let password = credentials?.password, !password.isEmpty else {
-                    self.recoveryBlocked = true; self.connectionStatus = "로그인 필요"
-                    self.loginStorageMessage = "저장된 비밀번호가 없습니다. 설정에서 로그인하세요."
+                    self.recoveryBlocked = true; self.connectionStatus = appText("Sign-in Required")
+                    self.loginStorageIssue = .missingPassword
+                    self.loginStorageMessage = appText("No saved password. Sign in from Settings.")
                     return
                 }
                 await self.connect(profile: self.profile, password: password, automatic: true, storedCredentials: credentials)
@@ -91,7 +93,7 @@ extension LibraryStore {
                     self.recoveryBlocked = true
                     return
                 }
-                self.connectionStatus = "오프라인 · 연결 복구 대기"
+                self.connectionStatus = appText("Offline · Waiting to Reconnect")
                 attempt += 1
             }
         }

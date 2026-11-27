@@ -205,7 +205,7 @@ def test_link_percent_encoding_markdown_parser_and_missing_target():
     html_content = render(md)
     assert "href=" in html_content
     indexing.validate_links({"00-전체 인덱스": md}, {title})
-    with pytest.raises(CLIError, match="대상이 없습니다"):
+    with pytest.raises(CLIError, match="An internal index link has no target"):
         indexing.validate_links({"00-전체 인덱스": md}, set())
     assert any(t.type == "link_open" for token in PARSER.parse(md) for t in token.children or [])
 

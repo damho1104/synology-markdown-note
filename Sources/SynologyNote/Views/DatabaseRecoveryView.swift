@@ -16,21 +16,21 @@ struct DatabaseRecoveryView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Label("로컬 데이터베이스를 열 수 없습니다", systemImage: "externaldrive.badge.exclamationmark")
+            Label(appText("Could Not Open the Local Database"), systemImage: "externaldrive.badge.exclamationmark")
                 .font(.title2.bold())
             Text(failure)
                 .foregroundStyle(.secondary)
-            Text("노트와 동기화 대기 작업을 보호하기 위해 저장소를 자동 초기화하지 않았습니다. 아래 백업에서 복구할 수 있습니다.")
+            Text(appText("To protect your notes and pending changes, the app kept the existing storage. You can recover it from a backup below."))
             if snapshots.isEmpty {
-                ContentUnavailableView("복구할 자동 백업이 없습니다", systemImage: "clock.arrow.circlepath", description: Text("원본 DB와 첨부파일은 그대로 있습니다. 저장소 폴더를 보존하고 문제를 확인해 주세요."))
+                ContentUnavailableView(appText("No Automatic Backups Available"), systemImage: "clock.arrow.circlepath", description: Text(appText("The original database and attachments are still in place. Keep the storage folder while you investigate.")))
             } else {
-                Text("이 계정의 자동 백업").font(.headline)
+                Text(appText("Automatic Backups for This Account")).font(.headline)
                 List(snapshots, selection: $selected) { item in
                     HStack {
                         Image(systemName: "externaldrive")
-                        Text(item.date, format: .dateTime.year().month().day().hour().minute())
+                        Text(item.date, format: .dateTime.year().month().day().hour().minute().locale(AppLocalization.locale))
                         Spacer()
-                        Text(ByteCountFormatter.string(fromByteCount: item.size, countStyle: .file))
+                        Text(item.size.formatted(.byteCount(style: .file).locale(AppLocalization.locale)))
                             .foregroundStyle(.secondary)
                     }
                     .tag(item.url)
@@ -41,11 +41,11 @@ struct DatabaseRecoveryView: View {
                 Text(recoveryError).foregroundStyle(.red)
             }
             HStack {
-                Button("저장소 폴더 보기") {
+                Button(appText("Show Storage Folder")) {
                     NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: directory.path)
                 }
                 Spacer()
-                Button("선택한 백업으로 복구…") { confirming = true }
+                Button(appText("Restore from Selected Backup…")) { confirming = true }
                     .buttonStyle(.borderedProminent)
                     .disabled(selected == nil)
             }
@@ -53,15 +53,15 @@ struct DatabaseRecoveryView: View {
         .padding(28)
         .frame(maxWidth: 660)
         .onAppear { selected = snapshots.first?.url }
-        .alert("백업으로 복구하시겠습니까?", isPresented: $confirming) {
-            Button("취소", role: .cancel) {}
-            Button("백업 복구", role: .destructive) {
+        .alert(appText("Restore from Backup?"), isPresented: $confirming) {
+            Button(appText("Cancel"), role: .cancel) {}
+            Button(appText("Restore Backup"), role: .destructive) {
                 guard let selected else { return }
                 do { try restore(selected) }
                 catch { recoveryError = error.localizedDescription }
             }
         } message: {
-            Text("백업 시점 이후의 로컬 편집 및 NAS 전송 대기 내용은 복구본에 없을 수 있습니다. 현재 DB와 WAL 파일은 recovery 폴더에 보존되며, 첨부파일은 삭제하지 않습니다.")
+            Text(appText("Local edits and pending uploads made after the backup may be missing from the restored copy. The current database and WAL files are kept in the recovery folder, and attachments are kept."))
         }
     }
 }

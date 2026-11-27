@@ -1,5 +1,6 @@
+import { t, UiError } from "./i18n";
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { backgroundRead, request } from './api'
+import { backgroundRead, errorText, request } from './api'
 export type Node = { id: string; title: string; notebook_id: string; tags?: string[]; version?: string }
 export type Edge = { source: string; target: string }
 export type Graph = { nodes: Node[]; edges: Edge[]; failures: { id: string; error: string }[] }
@@ -69,7 +70,7 @@ function useGraphLoader(enabled: boolean, revision = ''): GraphIndexState {
       activeRead = false;
       try { return await (active ? request<T>(url, {signal: page.signal}) : backgroundRead<T>(url, page.signal)); }
       catch (failure) {
-        if (page.signal.aborted && !controller.signal.aborted) throw new Error('NAS 그래프 조회 시간이 초과되었습니다. 확인된 노트는 표시하며 다시 시도할 수 있습니다.');
+        if (page.signal.aborted && !controller.signal.aborted) throw new UiError("errors.nasGraphRequestTimedOutVerifiedNotesStill");
         throw failure;
       } finally { clearTimeout(timer); controller.signal.removeEventListener('abort', abort); }
     };
@@ -79,7 +80,7 @@ function useGraphLoader(enabled: boolean, revision = ''): GraphIndexState {
         scannedRevision = latestRevision.current;
         const first = await read<Graph & {pending?: string[]; entries?: Entry[]}>('/api/graph?summary=true');
         if (controller.signal.aborted) return;
-        if (!Array.isArray(first.nodes) || !Array.isArray(first.edges) || !Array.isArray(first.failures)) throw new Error('링크 인덱스 응답을 확인할 수 없습니다.');
+        if (!Array.isArray(first.nodes) || !Array.isArray(first.edges) || !Array.isArray(first.failures)) throw new UiError("errors.couldNotVerifyLinkIndexResponse");
         setGraph(first.pending ? mergeGraph(first.nodes, first.entries ?? []) : first);
         if (!first.pending) break;
         const entries: Entry[] = [...first.entries ?? []];
@@ -97,7 +98,7 @@ function useGraphLoader(enabled: boolean, revision = ''): GraphIndexState {
         }
       } while (!controller.signal.aborted && scannedRevision !== latestRevision.current);
     })().catch((failure: unknown) => {
-      if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : '그래프를 불러오지 못했습니다.');
+      if (!controller.signal.aborted) setError(errorText(failure, "graph.couldNotLoadGraph"));
     }).finally(() => { if (!controller.signal.aborted) { running.current = false; setLoading(false) } });
     return () => { running.current = false; controller.abort() }
   }, [attempt, enabled])
@@ -122,7 +123,7 @@ export function useIndexedNoteCount() {
 export function GraphIndexStatus() {
   const index = useContext(GraphIndexContext)
   if (!index || (!index.loading && !index.error && !index.graph.failures.length)) return null
-  return <span role="status" aria-label="백그라운드 인덱싱 상태" title={index.error || '화면을 이동해도 링크 인덱싱을 계속합니다.'}>
-    {index.error ? <>링크 인덱싱 중단 <button onClick={index.retry}>다시 시도</button></> : !index.loading && index.graph.failures.length ? <>링크 인덱싱 일부 실패 ({index.graph.failures.length}개) <button onClick={index.retry}>다시 시도</button></> : `링크 인덱싱 ${index.progress.done}/${index.progress.total}`}
+  return <span role="status" className="graph-index-status" aria-label={t("graph.backgroundIndexingStatus")} title={index.error || t("graph.linkIndexingContinuesAsYouNavigate")}>
+    {index.error ? <>{t("graph.linkIndexingStopped")}{" "}<button onClick={index.retry}>{t("common.tryAgain")}</button></> : !index.loading && index.graph.failures.length ? <>{t("graph.someLinksCouldNotBeIndexed", index.graph.failures.length)}{" "}<button onClick={index.retry}>{t("common.tryAgain")}</button></> : t("graph.indexingLinks", index.progress.done, index.progress.total)}
   </span>
 }

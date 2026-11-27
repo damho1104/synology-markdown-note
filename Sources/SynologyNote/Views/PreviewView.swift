@@ -57,7 +57,7 @@ struct HTMLPreview: NSViewRepresentable {
         let web = WKWebView(frame: .zero, configuration: configuration)
         context.coordinator.handler = handler
         web.navigationDelegate = context.coordinator
-        web.setAccessibilityLabel("문서 미리보기")
+        web.setAccessibilityLabel(appText("Document Preview"))
         return web
     }
     func updateNSView(_ web: WKWebView, context: Context) {

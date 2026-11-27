@@ -55,18 +55,18 @@ def _inline(children) -> str:
         elif typ == "html_inline":
             result += t.content
         else:
-            raise CLIError("UNSUPPORTED_MARKDOWN_FEATURE", f"지원하지 않는 Markdown 인라인 형식: {typ}")
+            raise CLIError("UNSUPPORTED_MARKDOWN_FEATURE", f"Unsupported Markdown inline token: {typ}")
     return result
 
 
 def render(markdown: str, blocks: list[dict] | None = None, math_images: dict | None = None) -> str:
     blocks = blocks or []
     if not validate_blocks(markdown, blocks):
-        raise CLIError("INVALID_SOURCE", "보존 블록과 Markdown 토큰이 일치하지 않습니다.")
+        raise CLIError("INVALID_SOURCE", "The preserved blocks do not match the Markdown tokens.")
     preserved = {block["id"]: block["html"] for block in blocks}
     masked, formulas = math_plan(markdown)
     if formulas and math_images is None:
-        raise CLIError("UNSUPPORTED_MARKDOWN_FEATURE", "수식 이미지를 준비하세요.")
+        raise CLIError("UNSUPPORTED_MARKDOWN_FEATURE", "Prepare the formula images before saving.")
     tokens = PARSER.parse(masked)
     chunks: list[str] = []
     index = 0
@@ -133,13 +133,13 @@ def render(markdown: str, blocks: list[dict] | None = None, math_images: dict | 
         elif typ in ("table_close", "thead_close", "tbody_close", "tr_close", "th_close", "td_close"):
             chunks.append("</" + token.tag + ">" + ("\n" if typ == "table_close" else ""))
         else:
-            raise CLIError("UNSUPPORTED_MARKDOWN_FEATURE", f"지원하지 않는 Markdown 블록 형식: {typ}")
+            raise CLIError("UNSUPPORTED_MARKDOWN_FEATURE", f"Unsupported Markdown block token: {typ}")
         index += 1
     result = "".join(chunks)
     for formula in formulas:
         asset = (math_images or {}).get(formula['key'])
         if not asset:
-            raise CLIError("UNSUPPORTED_MARKDOWN_FEATURE", "수식 이미지가 없습니다.")
+            raise CLIError("UNSUPPORTED_MARKDOWN_FEATURE", "The formula image is missing.")
         delimiter = '$$' if formula['display'] else '$'
         image = f'<img ref="{escaped(asset["ref"])}" alt="{escaped(delimiter + formula["tex"] + delimiter)}" width="{int(asset["width"])}" height="{int(asset["height"])}" style="{"display:block;" if formula["display"] else ""}max-width:100%;vertical-align:middle">'
         result = result.replace(formula['token'], image)

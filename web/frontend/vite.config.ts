@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite'
+import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import { execFileSync } from 'node:child_process'
 import { version } from './package.json'
@@ -18,6 +18,7 @@ function displayVersion() {
 export default defineConfig({
   define: { __APP_VERSION__: JSON.stringify(displayVersion()) },
   plugins: [react()],
+  test: { setupFiles: ['./src/testSetup.ts'] },
   server: {
     proxy: {
       '/api': {

@@ -49,7 +49,7 @@ public enum DatabaseMaintenance {
         guard sqlite3_open_v2(pending.path, &target, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nil) == SQLITE_OK,
               let target else {
             if let target { sqlite3_close(target) }
-            throw RepositoryError(message: "백업 파일을 만들 수 없습니다.")
+            throw RepositoryError(message: coreText("Could not create the backup file."))
         }
         var result: Int32 = SQLITE_ERROR
         if let transfer = sqlite3_backup_init(target, "main", database, "main") {
@@ -59,7 +59,7 @@ public enum DatabaseMaintenance {
         }
         let close = sqlite3_close(target)
         guard result == SQLITE_OK, close == SQLITE_OK else {
-            throw RepositoryError(message: "SQLite 백업이 완료되지 않았습니다 (\(result)).")
+            throw RepositoryError(message: coreText("The SQLite backup did not complete (%@).", "\(result)"))
         }
         try validateBackup(at: pending)
         try FileManager.default.moveItem(at: pending, to: final)
@@ -71,12 +71,12 @@ public enum DatabaseMaintenance {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, "PRAGMA quick_check(1)", -1, &statement, nil) == SQLITE_OK else {
             let path = sqlite3_db_filename(database, "main").map(String.init(cString:)) ?? "(unknown)"
-            throw RepositoryError(message: "로컬 데이터베이스 무결성 검사를 시작할 수 없습니다 [\(path)]: \(String(cString: sqlite3_errmsg(database)))")
+            throw RepositoryError(message: coreText("Could not start the local database integrity check [%1$@]: %2$@", "\(path)", "\(String(cString: sqlite3_errmsg(database)))"))
         }
         defer { sqlite3_finalize(statement) }
         guard sqlite3_step(statement) == SQLITE_ROW,
               let message = sqlite3_column_text(statement, 0), String(cString: message) == "ok" else {
-            throw RepositoryError(message: "로컬 데이터베이스 무결성 검사에 실패했습니다. 백업으로 복구할 수 있습니다.")
+            throw RepositoryError(message: coreText("The local database failed its integrity check. You can restore it from a backup."))
         }
     }
 
@@ -88,18 +88,18 @@ public enum DatabaseMaintenance {
         let immutableURL = url.absoluteString + "?immutable=1"
         guard sqlite3_open_v2(immutableURL, &handle, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil) == SQLITE_OK, let handle else {
             if let handle { sqlite3_close(handle) }
-            throw RepositoryError(message: "백업을 열 수 없습니다.")
+            throw RepositoryError(message: coreText("Could not open the backup."))
         }
         defer { sqlite3_close(handle) }
         try checkIntegrity(handle)
         var statement: OpaquePointer?
         let required = ["notes", "revisions", "operations", "sync_attempts", "search_documents"]
         guard sqlite3_prepare_v2(handle, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('notes','revisions','operations','sync_attempts','search_documents')", -1, &statement, nil) == SQLITE_OK else {
-            throw RepositoryError(message: "백업의 데이터 구조를 검사할 수 없습니다.")
+            throw RepositoryError(message: coreText("Could not inspect the backup’s data structure."))
         }
         defer { sqlite3_finalize(statement) }
         guard sqlite3_step(statement) == SQLITE_ROW, sqlite3_column_int(statement, 0) == Int32(required.count) else {
-            throw RepositoryError(message: "필수 데이터 구조가 누락된 백업입니다.")
+            throw RepositoryError(message: coreText("The backup is missing required data structures."))
         }
     }
 
@@ -112,7 +112,7 @@ public enum DatabaseMaintenance {
     private static func restoreFiles(_ selected: URL, in directory: URL) throws -> URL {
         let available = snapshots(in: directory)
         guard available.contains(where: { $0.url.standardizedFileURL == selected.standardizedFileURL }) else {
-            throw RepositoryError(message: "해당 계정의 백업 목록에 없는 파일입니다.")
+            throw RepositoryError(message: coreText("This file is not in the backup list for this account."))
         }
         try validateBackup(at: selected)
         let fm = FileManager.default
@@ -146,11 +146,11 @@ public enum DatabaseMaintenance {
                     do { try fm.moveItem(at: saved, to: destination) }
                     catch { rollbackFailures.append("\(file): \(error.localizedDescription)") }
                 } else {
-                    rollbackFailures.append("\(file): 원래 위치에 다른 파일이 있습니다")
+                    rollbackFailures.append(coreText("%@: another file is already at the original location", "\(file)"))
                 }
             }
             if !rollbackFailures.isEmpty {
-                throw RepositoryError(message: "복구 도중 오류가 발생했고 원본 파일 일부를 되돌리지 못했습니다. \(quarantine.path) 폴더를 보존하세요: \(rollbackFailures.joined(separator: "; "))")
+                throw RepositoryError(message: coreText("Recovery failed and some original files could not be restored. Keep the %1$@ folder: %2$@", "\(quarantine.path)", "\(rollbackFailures.joined(separator: "; "))"))
             }
             throw error
         }
@@ -165,11 +165,11 @@ public enum DatabaseMaintenance {
     private static func rollbackFiles(in directory: URL, from quarantine: URL) throws {
         let recovery = directory.appendingPathComponent("recovery", isDirectory: true).standardizedFileURL
         guard quarantine.deletingLastPathComponent().standardizedFileURL == recovery else {
-            throw RepositoryError(message: "복구 원본의 위치가 올바르지 않습니다.")
+            throw RepositoryError(message: coreText("The original recovery files are in an invalid location."))
         }
         let fm = FileManager.default
         guard fm.fileExists(atPath: quarantine.appendingPathComponent(filename).path) else {
-            throw RepositoryError(message: "되돌릴 원본 DB가 격리 폴더에 없습니다. 현재 DB를 유지하고 \(quarantine.path) 폴더를 확인하세요.")
+            throw RepositoryError(message: coreText("The original database is missing from quarantine. Keep the current database and check the %@ folder.", "\(quarantine.path)"))
         }
         let failed = recovery.appendingPathComponent("failed-restore-\(UUID().uuidString)", isDirectory: true)
         try fm.createDirectory(at: failed, withIntermediateDirectories: true)
@@ -195,14 +195,14 @@ public enum DatabaseMaintenance {
             var rollbackFailures: [String] = []
             for name in restoredOriginal.reversed() {
                 do { try fm.moveItem(at: directory.appendingPathComponent(name), to: quarantine.appendingPathComponent(name)) }
-                catch { rollbackFailures.append("격리 파일 \(name): \(error.localizedDescription)") }
+                catch { rollbackFailures.append(coreText("Quarantined file %1$@: %2$@", "\(name)", "\(error.localizedDescription)")) }
             }
             for name in movedFailed.reversed() {
                 do { try fm.moveItem(at: failed.appendingPathComponent(name), to: directory.appendingPathComponent(name)) }
-                catch { rollbackFailures.append("복구 파일 \(name): \(error.localizedDescription)") }
+                catch { rollbackFailures.append(coreText("Recovered file %1$@: %2$@", "\(name)", "\(error.localizedDescription)")) }
             }
             if !rollbackFailures.isEmpty {
-                throw RepositoryError(message: "DB 복구 되돌리기에 실패했습니다. 원본은 \(quarantine.path), 복구본은 \(failed.path)에서 보존하세요: \(rollbackFailures.joined(separator: "; "))")
+                throw RepositoryError(message: coreText("Could not undo database recovery. Keep the originals in %1$@ and the recovered files in %2$@: %3$@", "\(quarantine.path)", "\(failed.path)", "\(rollbackFailures.joined(separator: "; "))"))
             }
             throw originalError
         }

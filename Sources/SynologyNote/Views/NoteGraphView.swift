@@ -108,15 +108,15 @@ struct NoteGraphExplorer: View {
         VStack(spacing: 10) {
             if !compact {
                 HStack(spacing: 8) {
-                    TextField("노트 제목 검색", text: $state.query)
+                    TextField(appText("Search Note Titles"), text: $state.query)
                         .textFieldStyle(.roundedBorder)
-                        .accessibilityLabel("그래프 노트 검색")
-                    Picker("메모장", selection: $state.notebookID) {
-                        Text("모든 메모장").tag("")
+                        .accessibilityLabel(appText("Search Notes in Graph"))
+                    Picker(appText("Notebook"), selection: $state.notebookID) {
+                        Text(appText("All Notebooks")).tag("")
                         ForEach(notebooks) { book in Text(book.name).tag(book.id) }
                     }.frame(maxWidth: 175)
-                    Picker("태그", selection: $state.tag) {
-                        Text("모든 태그").tag("")
+                    Picker(appText("Tags"), selection: $state.tag) {
+                        Text(appText("All Tags")).tag("")
                         ForEach(Array(Set(graph.nodes.flatMap(\.tags))).sorted(), id: \.self) { item in
                             Text("#" + item).tag(item)
                         }
@@ -125,52 +125,52 @@ struct NoteGraphExplorer: View {
             }
             HStack {
                 if let focusID = nav.focusID {
-                    Text("로컬 그래프").font(.subheadline.weight(.semibold))
-                    Picker("연결 깊이", selection: $state.depth) {
-                        ForEach(1...3, id: \.self) { Text("\($0)단계").tag($0) }
+                    Text(appText("Local Graph")).font(.subheadline.weight(.semibold))
+                    Picker(appText("Link Depth"), selection: $state.depth) {
+                        ForEach(1...3, id: \.self) { Text(appText("%@", AppLocalization.number($0))).tag($0) }
                     }.pickerStyle(.menu).fixedSize()
                     if !compact {
-                        Button("전체 그래프") { nav.showAll() }
-                            .help("전체 노트 연결 보기")
+                        Button(appText("Note Graph")) { nav.showAll() }
+                            .help(appText("View All Note Links"))
                     }
                     // Keep the source of the local graph discoverable.
                     if !compact, let node = graph.nodes.first(where: { $0.id == focusID }) {
                         Text(node.title).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     }
                 } else {
-                    Text("전체 그래프").font(.subheadline.weight(.semibold))
+                    Text(appText("Note Graph")).font(.subheadline.weight(.semibold))
                 }
                 Spacer(minLength: 2)
                 if !compact && nav.focusID == nil {
-                    Toggle("연결 없는 노트", isOn: $state.includeIsolated)
+                    Toggle(appText("Unlinked Notes"), isOn: $state.includeIsolated)
                         .toggleStyle(.checkbox).font(.caption)
                 }
-                Text("노트 \(visible.nodes.count) · 연결 \(visible.edges.count)")
+                Text(appText("Notes: %1$@ · Links: %2$@", AppLocalization.number(visible.nodes.count), AppLocalization.number(visible.edges.count)))
                     .font(.caption).foregroundStyle(.secondary).monospacedDigit()
                 if hiddenCount > 0 {
-                    Text("(미연결 \(hiddenCount)개 숨김)").font(.caption2).foregroundStyle(.tertiary)
+                    Text(appText("(Unlinked notes hidden: %@)", AppLocalization.number(hiddenCount))).font(.caption2).foregroundStyle(.tertiary)
                 }
             }
             if visible.nodes.isEmpty {
-                ContentUnavailableView("표시할 노트가 없습니다", systemImage: "point.3.connected.trianglepath.dotted",
-                                       description: Text("필터를 변경하거나 노트 간 링크를 추가해 보세요."))
+                ContentUnavailableView(appText("No Notes to Display"), systemImage: "point.3.connected.trianglepath.dotted",
+                                       description: Text(appText("Change the filters or add links between notes.")))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 NoteGraphCanvas(graph: visible, positions: positions, navigation: nav,
                                 onOpen: onOpen, onFocus: { id in nav.focus(on: id) })
                     .frame(minHeight: compact ? 175 : 350)
                     .background(.quaternary.opacity(0.18), in: RoundedRectangle(cornerRadius: 9))
-                    .accessibilityLabel("노트 관계 그래프. 노드를 두 번 클릭하면 노트를 엽니다.")
+                    .accessibilityLabel(appText("Note relationship graph. Double-click a node to open its note."))
             }
             if let selected {
                 HStack(spacing: 8) {
                     Text(selected.title).font(.caption).lineLimit(1)
                     Spacer(minLength: 4)
-                    Button("노트 열기") { onOpen(selected.id) }.buttonStyle(.borderless)
-                    if !compact { Button("연결만 보기") { nav.focus(on: selected.id) }.buttonStyle(.borderless) }
+                    Button(appText("Open Note")) { onOpen(selected.id) }.buttonStyle(.borderless)
+                    if !compact { Button(appText("Show Links Only")) { nav.focus(on: selected.id) }.buttonStyle(.borderless) }
                 }
             } else if !compact {
-                Text("노드 선택 · 두 번 클릭해 노트 열기 · 드래그로 이동 · 핀치 또는 +/-로 확대")
+                Text(appText("Select nodes · Double-click to open notes · Drag to pan · Pinch or use +/− to zoom"))
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -251,10 +251,10 @@ struct NoteGraphNavigationPanel: View {
         Button { navigation.select(node.id) } label: {
             HStack(spacing: 7) {
                 Circle().fill(graphNotebookColor(node.notebookID)).frame(width: 7, height: 7)
-                Text(node.title.isEmpty ? "제목 없음" : node.title)
+                Text(node.title.isEmpty ? appText("Untitled") : node.title)
                     .lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
                 if let connectionCount {
-                    Text("\(connectionCount)").font(.caption2).foregroundStyle(.secondary)
+                    Text(AppLocalization.number(connectionCount)).font(.caption2).foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
                 if navigation.selectedID == node.id {
@@ -265,17 +265,17 @@ struct NoteGraphNavigationPanel: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("그래프에서 이 노트 선택")
+        .help(appText("Select This Note in the Graph"))
     }
 
     private func connectionSection(_ title: String, nodes: [NoteGraphNode], color: Color) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Circle().fill(color).frame(width: 7, height: 7)
-                Text("\(title) · \(nodes.count)개").font(.subheadline.weight(.semibold))
+                Text(appText("%1$@ · %2$@", title, AppLocalization.number(nodes.count))).font(.subheadline.weight(.semibold))
             }
             if nodes.isEmpty {
-                Text("연결 없음").font(.caption).foregroundStyle(.tertiary)
+                Text(appText("No Links")).font(.caption).foregroundStyle(.tertiary)
             } else {
                 ForEach(nodes) { note in noteRow(note) }
             }
@@ -285,24 +285,24 @@ struct NoteGraphNavigationPanel: View {
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 14) {
-                Label("노트 연결 지도", systemImage: "point.3.connected.trianglepath.dotted")
+                Label(appText("Note Link Map"), systemImage: "point.3.connected.trianglepath.dotted")
                     .font(.headline)
-                Text("노트 \(visible.nodes.count)개 · 연결 \(visible.edges.count)개")
+                Text(appText("Notes: %1$@ · Links: %2$@", AppLocalization.number(visible.nodes.count), AppLocalization.number(visible.edges.count)))
                     .font(.caption).foregroundStyle(.secondary)
                 if !navigation.query.isEmpty {
                     Divider()
                     let matches = visible.nodes.filter {
                         $0.title.localizedCaseInsensitiveContains(navigation.query)
                     }.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
-                    Text("검색 결과 · \(matches.count)개")
+                    Text(appText("Results: %@", AppLocalization.number(matches.count)))
                         .font(.subheadline.weight(.semibold))
                     ForEach(Array(matches.prefix(100))) { note in noteRow(note) }
                     if matches.count > 100 {
-                        Text("처음 100개 표시").font(.caption).foregroundStyle(.secondary)
+                        Text(appText("Showing the First 100")).font(.caption).foregroundStyle(.secondary)
                     }
                 } else if let selected {
                     Divider()
-                    Text(selected.title.isEmpty ? "제목 없음" : selected.title)
+                    Text(selected.title.isEmpty ? appText("Untitled") : selected.title)
                         .font(.headline).textSelection(.enabled)
                     Text(notebookTitle(selected.notebookID))
                         .font(.caption).foregroundStyle(.secondary)
@@ -311,25 +311,25 @@ struct NoteGraphNavigationPanel: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     HStack {
-                        Button("노트 열기") { onOpen(selected.id) }
-                        Button("주변만 보기") { navigation.focus(on: selected.id) }
+                        Button(appText("Open Note")) { onOpen(selected.id) }
+                        Button(appText("Show Neighbors Only")) { navigation.focus(on: selected.id) }
                     }
                     .controlSize(.small)
                     Divider()
                     let connections = visible.connections(of: selected.id)
-                    connectionSection("나가는 연결 →", nodes: connections.outgoing, color: .cyan)
+                    connectionSection(appText("Outgoing Links →"), nodes: connections.outgoing, color: .cyan)
                     Divider()
-                    connectionSection("← 들어오는 연결", nodes: connections.incoming, color: .orange)
+                    connectionSection(appText("← Incoming Links"), nodes: connections.incoming, color: .orange)
                 } else {
                     Divider()
-                    Text("주요 노트").font(.subheadline.weight(.semibold))
-                    Text("연결 수가 많은 순서").font(.caption).foregroundStyle(.secondary)
+                    Text(appText("Top Notes")).font(.subheadline.weight(.semibold))
+                    Text(appText("Most Linked First")).font(.caption).foregroundStyle(.secondary)
                     ForEach(Array(ranked.prefix(16))) { note in
                         noteRow(note, connectionCount: degreeCounts[note.id, default: 0])
                     }
                 }
                 Divider()
-                Text("메모장 색상").font(.subheadline.weight(.semibold))
+                Text(appText("Notebook Colors")).font(.subheadline.weight(.semibold))
                 ForEach(notebooks.filter({ book in visible.nodes.contains(where: { $0.notebookID == book.id }) })) { book in
                     HStack(spacing: 8) {
                         Circle().fill(graphNotebookColor(book.id)).frame(width: 9, height: 9)
@@ -339,13 +339,13 @@ struct NoteGraphNavigationPanel: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                Text("파랑: 선택 노트에서 나감 · 주황: 선택 노트로 들어옴")
+                Text(appText("Blue: Outgoing links from the selected note · Orange: Incoming links"))
                     .font(.caption2).foregroundStyle(.secondary)
             }
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .navigationTitle("전체 그래프")
+        .navigationTitle(appText("Note Graph"))
     }
 }
 
@@ -457,7 +457,7 @@ private struct NoteGraphCanvas: View {
                         context.stroke(Path(ellipseIn: rect.insetBy(dx: -3, dy: -3)), with: .color(selected ? .primary : .accentColor), lineWidth: 1.7)
                     }
                     if labels.contains(node.id) {
-                        let title = node.title.isEmpty ? "제목 없음" : String(node.title.prefix(28))
+                        let title = node.title.isEmpty ? appText("Untitled") : String(node.title.prefix(28))
                         let labelWidth = CGFloat(min(node.title.count, 28)) * 6.3 + 12
                         let labelRect = CGRect(x: p.x - labelWidth / 2, y: p.y + radius + 4,
                                                width: labelWidth, height: 15)
@@ -493,8 +493,8 @@ private struct NoteGraphCanvas: View {
             }.onEnded { _ in magnifyOrigin = nil })
             .contextMenu {
                 if let target = hoveredID ?? navigation.selectedID {
-                    Button("노트 열기") { onOpen(target) }
-                    Button("연결된 노트만 보기") { onFocus(target) }
+                    Button(appText("Open Note")) { onOpen(target) }
+                    Button(appText("Show Linked Notes Only")) { onFocus(target) }
                 }
             }
             .overlay(alignment: .bottomTrailing) {

@@ -53,18 +53,18 @@ def _inline(children) -> str:
         elif typ == "html_inline":
             result += t.content
         else:
-            raise CLIError("UNSUPPORTED_MARKDOWN_FEATURE", f"지원하지 않는 Markdown 인라인 형식: {typ}")
+            raise CLIError("UNSUPPORTED_MARKDOWN_FEATURE", f"Unsupported Markdown inline token: {typ}")
     return result
 
 
 def render(markdown: str, blocks: list[dict] | None = None) -> str:
     blocks = blocks or []
     if not validate_blocks(markdown, blocks):
-        raise CLIError("INVALID_SOURCE", "보존 블록과 Markdown 토큰이 일치하지 않습니다.")
+        raise CLIError("INVALID_SOURCE", "The preserved blocks do not match the Markdown tokens.")
     preserved = {block["id"]: block["html"] for block in blocks}
     # MathExport needs cross-platform PNG assets. Prevent silent downgrade to text.
     if re.search(r"(?<!\\)(?<!\$)\$\$|(?<!\\)(?<!\$)\$(?!\s|\$)[^\n$]+?\$(?!\$)", markdown):
-        raise CLIError("UNSUPPORTED_MARKDOWN_FEATURE", "TeX 수식은 PNG 동등성 검증 전에는 업로드할 수 없습니다.")
+        raise CLIError("UNSUPPORTED_MARKDOWN_FEATURE", "TeX formulas cannot be uploaded until PNG equivalence has been verified.")
     tokens = PARSER.parse(markdown)
     chunks: list[str] = []
     index = 0
@@ -131,6 +131,6 @@ def render(markdown: str, blocks: list[dict] | None = None) -> str:
         elif typ in ("table_close", "thead_close", "tbody_close", "tr_close", "th_close", "td_close"):
             chunks.append("</" + token.tag + ">" + ("\n" if typ == "table_close" else ""))
         else:
-            raise CLIError("UNSUPPORTED_MARKDOWN_FEATURE", f"지원하지 않는 Markdown 블록 형식: {typ}")
+            raise CLIError("UNSUPPORTED_MARKDOWN_FEATURE", f"Unsupported Markdown block token: {typ}")
         index += 1
     return "".join(chunks)

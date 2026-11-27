@@ -1,3 +1,4 @@
+import { currentLanguage, t } from "./i18n";
 export type SortField = "title" | "createdAt" | "modifiedAt";
 export type SortDirection = "ascending" | "descending";
 export type DatedNote = {
@@ -6,15 +7,19 @@ export type DatedNote = {
   created_at?: number | null;
   modified_at?: number | null;
 };
-const collator = new Intl.Collator("ko", {
-  numeric: true,
-  sensitivity: "base",
-});
+const sortOptions = { numeric: true, sensitivity: "base" } as const;
+const collators = new Map<string, Intl.Collator>();
 export function sortNotes<T extends DatedNote>(
   notes: T[],
   field: SortField,
   direction: SortDirection,
 ): T[] {
+  const language = currentLanguage();
+  let collator = collators.get(language);
+  if (!collator) {
+    collator = new Intl.Collator(language, sortOptions);
+    collators.set(language, collator);
+  }
   return [...notes].sort((a, b) => {
     const cmp =
       field === "title"
@@ -46,13 +51,13 @@ export function savePreference(key: string, value: unknown): void {
 }
 export function dateLabel(value?: number | null): string {
   return value
-    ? new Date(value * 1000).toLocaleString("ko-KR", {
+    ? new Date(value * 1000).toLocaleString(currentLanguage(), {
         month: "numeric",
         day: "numeric",
         hour: "2-digit",
         minute: "2-digit",
       })
-    : "날짜 없음";
+    : t("library.noDate");
 }
 
 export function remoteNoteLink(label: string, id: string): string {

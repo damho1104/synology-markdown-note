@@ -1,23 +1,24 @@
+import { t, UiError } from "./i18n";
 const MAX_MARKDOWN_LENGTH = 2_000_000;
 
 export async function readMarkdownFile(file: File): Promise<{title: string; markdown: string}> {
   const name = /\.(?:md|markdown)$/i.exec(file.name);
-  if (!name) throw new Error("Markdown 파일(.md, .markdown)을 선택하세요.");
-  if (file.size > MAX_MARKDOWN_LENGTH * 4) throw new Error("Markdown 본문이 너무 깁니다.");
+  if (!name) throw new UiError("errors.selectMarkdownFileMdOrMarkdown");
+  if (file.size > MAX_MARKDOWN_LENGTH * 4) throw new UiError("errors.markdownBodyTooLong");
 
   const bytes = await new Promise<ArrayBuffer>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result as ArrayBuffer);
-    reader.onerror = reader.onabort = () => reject(new Error("파일을 읽을 수 없습니다."));
+    reader.onerror = reader.onabort = () => reject(new UiError("errors.couldNotReadFile"));
     reader.readAsArrayBuffer(file);
   });
   let markdown: string;
   try {
     markdown = new TextDecoder("utf-8", {fatal:true}).decode(bytes);
   } catch {
-    throw new Error("UTF-8 Markdown 파일을 선택하세요.");
+    throw new UiError("errors.selectUtf8MarkdownFile");
   }
-  if (markdown.length > MAX_MARKDOWN_LENGTH) throw new Error("Markdown 본문이 너무 깁니다.");
-  const title = Array.from(file.name.slice(0, name.index).trim()).slice(0, 256).join("") || "제목 없음";
+  if (markdown.length > MAX_MARKDOWN_LENGTH) throw new UiError("errors.markdownBodyTooLong");
+  const title = Array.from(file.name.slice(0, name.index).trim()).slice(0, 256).join("") || t("common.untitled");
   return {title, markdown};
 }

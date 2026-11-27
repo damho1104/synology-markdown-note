@@ -1,6 +1,10 @@
 import Foundation
 import NoteCore
 
+enum LoginStorageIssue {
+    case missingPassword, couldNotSave
+}
+
 extension LibraryStore {
     struct NASWriteValidationResult {
         let receipt: WriteValidationReceipt
@@ -14,14 +18,15 @@ extension LibraryStore {
         guard savedProfile.autoConnect, savedProfile.rememberPassword,
               !savedProfile.server.isEmpty, !savedProfile.username.isEmpty,
               !isConnected, !isRefreshing else { return }
-        connectionStatus = "저장된 계정 확인 중…"
+        connectionStatus = appText("Checking Saved Account…")
         do {
             let credentials = try await credentialAccess.load(savedProfile.storageKey)
             guard generation == connectionGeneration, profile == savedProfile, !isConnected, !isRefreshing else { return }
             guard let password = credentials?.password, !password.isEmpty else {
                 recoveryBlocked = true
-                connectionStatus = "로그인 필요"
-                loginStorageMessage = "저장된 비밀번호가 없습니다. 설정에서 한 번 로그인하세요."
+                connectionStatus = appText("Sign-in Required")
+                loginStorageIssue = .missingPassword
+                loginStorageMessage = appText("No saved password. Sign in once from Settings.")
                 return
             }
             await connect(profile: savedProfile, password: password, automatic: true, storedCredentials: credentials)
@@ -34,14 +39,18 @@ extension LibraryStore {
     func connectUsingSavedAccount() async {
         guard !isRefreshing, !isPushing else { return }
         let savedProfile = profile, generation = connectionGeneration
-        isRefreshing = true; connectionStatus = "키체인 로그인 정보 확인 중…"; loginStorageMessage = nil; connectionError = nil
+        isRefreshing = true; connectionStatus = appText("Checking Sign-in Details in Keychain…"); loginStorageMessage = nil; connectionError = nil
+        loginStorageIssue = nil
         do {
             let loader = credentialAccess.loadInteractive ?? credentialAccess.load
             let credentials = try await loader(savedProfile.storageKey)
             guard generation == connectionGeneration else { return }
             isRefreshing = false
             guard let password = credentials?.password, !password.isEmpty else {
-                connectionStatus = "로그인 필요"; loginStorageMessage = "저장된 비밀번호가 없습니다. ‘계정 정보 수정…’에서 비밀번호를 입력하세요."; return
+                connectionStatus = appText("Sign-in Required")
+                loginStorageIssue = .missingPassword
+                loginStorageMessage = appText("No saved password. Enter it using “Edit Account Details…”.")
+                return
             }
             await connect(profile: savedProfile, password: password, storedCredentials: credentials)
         } catch {
@@ -53,11 +62,11 @@ extension LibraryStore {
     func reportCredentialAccessFailure(_ error: Error) {
         recoveryBlocked = true
         if case CredentialStoreError.keychain = error {
-            connectionStatus = "키체인 접근 확인 필요"
-            loginStorageMessage = "‘다시 연결’을 누른 뒤 macOS 키체인 창에서 SynologyCredentialHelper를 항상 허용하세요. NAS 인증 코드를 다시 입력하는 단계는 아닙니다."
+            connectionStatus = appText("Keychain Access Required")
+            loginStorageMessage = appText("Click “Reconnect” and choose Always Allow for SynologyCredentialHelper in the macOS Keychain prompt. This step does not require a NAS verification code.")
         } else {
-            connectionStatus = "로그인 필요"
-            loginStorageMessage = "저장된 로그인 정보를 읽을 수 없습니다. 설정에서 확인하세요."
+            connectionStatus = appText("Sign-in Required")
+            loginStorageMessage = appText("Could not read saved sign-in details. Check Settings.")
         }
     }
 
@@ -72,8 +81,9 @@ extension LibraryStore {
         lastConnectionFailure = nil
         connectionGeneration += 1
         let generation = connectionGeneration
-        isRefreshing = true; connectionError = nil; connectionStatus = "연결 중…"
+        isRefreshing = true; connectionError = nil; connectionStatus = appText("Connecting…")
         logEvent(.connectionStarted, fields: ["automatic": String(automatic)])
+        loginStorageIssue = nil
         loginStorageMessage = nil
         defer { if generation == connectionGeneration { isRefreshing = false } }
         do {
@@ -89,7 +99,7 @@ extension LibraryStore {
             guard generation == connectionGeneration else { await client.disconnect(); return }
             await flush()
             guard generation == connectionGeneration else { await client.disconnect(); return }
-            if sessions.values.contains(where: { $0.saveError != nil }) { throw RepositoryError(message: "이전 작업 공간을 저장하지 못했습니다. 저장 오류를 먼저 확인하세요.") }
+            if sessions.values.contains(where: { $0.saveError != nil }) { throw RepositoryError(message: appText("Could not save the previous workspace. Check the save errors first.")) }
             if newProfile.storageKey != profile.storageKey {
                 let directory = root.appendingPathComponent(newProfile.storageKey)
                 let log = diagnosticLog ?? DiagnosticLog(root: root, policy: diagnosticLogPolicy)
@@ -104,6 +114,7 @@ extension LibraryStore {
             }
             await self.client?.disconnect()
             guard generation == connectionGeneration else { await client.disconnect(); return }
+            hasVerifiedNASLists = false
             self.client = client; self.profile = newProfile; self.profile.persist(to: preferences)
             let credentials = SavedNASCredentials(password: newProfile.rememberPassword ? password : nil,
                                                  deviceID: newProfile.rememberDevice ? await client.trustedDeviceID : nil)
@@ -113,15 +124,16 @@ extension LibraryStore {
                 guard generation == connectionGeneration else { return }
                 trustedDeviceRemembered = credentials.deviceID != nil
                 if newProfile.rememberDevice, credentials.deviceID == nil {
-                    loginStorageMessage = "NAS에서 기기 기억 토큰을 발급하지 않았습니다. 다음 로그인에 인증 코드가 필요할 수 있습니다."
+                    loginStorageMessage = appText("The NAS did not issue a trusted device token. You may need a verification code next time you sign in.")
                 }
             } catch {
                 // Credential persistence is optional; a keychain ACL failure
                 // must not invalidate a successful NAS authentication.
-                loginStorageMessage = "NAS 인증은 성공했지만 로그인 정보를 키체인에 저장하지 못했습니다. 다음 연결에는 다시 인증해야 합니다."
+                loginStorageIssue = .couldNotSave
+                loginStorageMessage = appText("The NAS accepted the sign-in, but the app could not save the details in Keychain. Sign in again next time.")
             }
             guard generation == connectionGeneration else { return }
-            isConnected = true; connectionStatus = "NAS 연결됨 · 조회 가능"
+            isConnected = true
             logEvent(.connectionSucceeded)
             try await reload()
             // Refresh after clearing the connect progress flag.
@@ -136,7 +148,7 @@ extension LibraryStore {
             guard generation == connectionGeneration else { return }
             let retainedExistingConnection = wasConnected && self.client === previousClient && profile == previousProfile
             isConnected = retainedExistingConnection
-            connectionStatus = retainedExistingConnection ? "NAS 연결됨 · 계정 변경 실패" : "로그인 필요"
+            connectionStatus = retainedExistingConnection ? appText("NAS Connected · Could Not Switch Accounts") : appText("Sign-in Required")
             connectionError = error.localizedDescription
             lastConnectionFailure = error
             logEvent(.connectionFailed, error: error)
@@ -160,7 +172,7 @@ extension LibraryStore {
         refreshTask?.cancel()
         uploadTask?.cancel(); uploadLoop?.cancel(); syncCoordinator = nil; uploadTransport = nil; isPushing = false
         let previous = client
-        client = nil; isConnected = false; connectionStatus = "NAS 연결 안 됨"
+        client = nil; isConnected = false; hasVerifiedNASLists = false; connectionStatus = appText("Disconnected from NAS")
         await previous?.disconnect()
     }
 
@@ -176,8 +188,9 @@ extension LibraryStore {
 
     func refreshFromServer() async {
         guard let client, isConnected, !isRefreshing, !isPushing, !isManagingStacks, deletingNotebookIDs.isEmpty, deletingNoteIDs.isEmpty else { return }
-        isRefreshing = true; connectionStatus = "NAS 목록 확인 중…"
+        isRefreshing = true; connectionStatus = appText("Checking NAS List…")
         let generation = accountGeneration, connection = connectionGeneration, repo = repository
+        var receivedLists = false
         defer {
             if connection == connectionGeneration, self.client === client {
                 isRefreshing = false; scheduleUpload()
@@ -189,13 +202,15 @@ extension LibraryStore {
             async let remoteNotes = client.notes()
             let (books, notes) = try await (remoteBooks, remoteNotes)
             guard generation == accountGeneration, connection == connectionGeneration, self.client === client else { return }
+            receivedLists = true
+            if !Task.isCancelled, isConnected { hasVerifiedNASLists = true }
             let localBooks = try await repo.notebooks().filter { $0.id == "local" || $0.id.hasPrefix("local-") }
             try await repo.setNotebooks(books.map { Notebook(id: $0.id, name: $0.name, stack: $0.stack) } + localBooks)
             for summary in notes {
                 try await repo.observeRemote(Self.record(from: summary))
             }
             try await reload()
-            connectionStatus = "NAS 연결됨 · 조회 가능"
+            connectionStatus = appText("NAS Connected · Reading Available")
             connectionError = nil
             logEvent(.refreshCompleted, fields: ["count": String(notes.count)])
             // Open documents refresh independently; closed notes remain metadata-only.
@@ -207,7 +222,11 @@ extension LibraryStore {
             if isConnected { recoveryStartedAt = nil; recoveryExpired = false }
         } catch {
             guard generation == accountGeneration, connection == connectionGeneration, self.client === client else { return }
-            connectionStatus = "NAS 확인 실패"
+            if !receivedLists, !Task.isCancelled, !(error is CancellationError),
+               let failure = error as? NoteStationError, failure != .cancelled, failure != .connectionChanged {
+                hasVerifiedNASLists = false
+            }
+            connectionStatus = appText("Could not check the NAS")
             connectionError = error.localizedDescription
             logEvent(.refreshFailed, error: error)
             if Self.isRecoverableConnectionError(error) { requestConnectionRecovery(after: error) }
@@ -246,7 +265,7 @@ extension LibraryStore {
         }
         // Keep diagnostic evidence across restarts without storing document bodies.
         do { try JSONEncoder().encode(report).write(to: reportURL, options: .atomic) }
-        catch { errorMessage = "검사 결과 파일을 저장하지 못했습니다: " + error.localizedDescription }
+        catch { errorMessage = appText("Could not save the check result file: ") + error.localizedDescription }
         await refreshFromServer()
         guard generation == accountGeneration, self.client === client else { throw NoteStationError.connectionChanged }
         return report
@@ -268,7 +287,7 @@ extension LibraryStore {
         let report = try await client.validateNoteAttachments(notebookID: notebookID)
         guard generation == accountGeneration, self.client === client, isConnected else { throw NoteStationError.connectionChanged }
         do { try JSONEncoder().encode(report).write(to: url, options: .atomic) }
-        catch { errorMessage = "첨부 검사 기록을 저장하지 못했습니다: " + error.localizedDescription }
+        catch { errorMessage = appText("Could not save the attachment check record: ") + error.localizedDescription }
         await refreshFromServer()
         guard generation == accountGeneration, self.client === client else { throw NoteStationError.connectionChanged }
         return report
@@ -320,7 +339,7 @@ extension LibraryStore {
                 current.conflictVersion = snapshot.version
                 current.conflictSnapshot = snapshot
                 current.syncState = .conflict
-                current.lastError = "NAS 본문을 가져오는 동안 이 Mac에서도 변경되었습니다. 두 버전을 확인하세요."
+                current.lastError = appText("This note changed on this Mac while its body was downloading. Review both versions.")
                 session.note = current
                 await save(session)
             }
@@ -328,7 +347,7 @@ extension LibraryStore {
         } catch {
             guard account == accountGeneration, connection == connectionGeneration, self.client === client else { return }
             session.saveError = nil
-            session.note.lastError = "NAS 본문을 가져오지 못했습니다: " + error.localizedDescription
+            session.note.lastError = appText("Could not download the note body from the NAS: ") + error.localizedDescription
             connectionError = error.localizedDescription
             if Self.isRecoverableConnectionError(error) { requestConnectionRecovery(after: error) }
         }

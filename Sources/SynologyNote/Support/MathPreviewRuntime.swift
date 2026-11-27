@@ -4,12 +4,9 @@ enum MathPreviewRuntime {
     static func hasMath(in page: String) -> Bool { page.contains("note-math-") }
 
     private static func resource(_ name: String, extension ext: String) throws -> String {
-        let packaged = Bundle.main.resourceURL?
-            .appendingPathComponent("SynologyNote_SynologyNote.bundle", isDirectory: true)
-            .appendingPathComponent("\(name).\(ext)")
-        let url = packaged.flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
-            ?? Bundle.module.url(forResource: name, withExtension: ext)
-        guard let url else { throw CocoaError(.fileNoSuchFile) }
+        guard let url = AppLocalization.resources.url(forResource: name, withExtension: ext) else {
+            throw CocoaError(.fileNoSuchFile)
+        }
         return try String(contentsOf: url, encoding: .utf8)
     }
 
@@ -21,14 +18,15 @@ enum MathPreviewRuntime {
         .note-math .katex{font-size:1.1em}
         .note-math-error{color:light-dark(#b42318,#ff9990);white-space:pre-wrap;font-family:ui-monospace,monospace}
         """
-        let json = try JSONSerialization.data(withJSONObject: [css])
-        let encodedCSS = String(decoding: json, as: UTF8.self)
+        let json = try JSONSerialization.data(withJSONObject: [css, appText("Math error: ")])
+        let arguments = String(decoding: json, as: UTF8.self)
         return library + "\n" + #"""
         (() => {
+          const [css, errorPrefix] = \#(arguments);
           if (!document.getElementById('note-katex-style')) {
             const style = document.createElement('style');
             style.id = 'note-katex-style';
-            style.textContent = \#(encodedCSS)[0];
+            style.textContent = css;
             document.head.appendChild(style);
           }
           for (const element of document.querySelectorAll('.note-math')) {
@@ -47,7 +45,7 @@ enum MathPreviewRuntime {
             } catch (error) {
               element.textContent = source;
               element.classList.add('note-math-error');
-              element.title = '수식 오류: ' + String(error.message || error);
+              element.title = errorPrefix + String(error.message || error);
             }
           }
         })();

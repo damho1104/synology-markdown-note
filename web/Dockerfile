@@ -1,8 +1,9 @@
 FROM --platform=$BUILDPLATFORM node:22-alpine AS frontend
-WORKDIR /build
+WORKDIR /build/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY frontend/ ./
+COPY backend/synonote_web/locales.json /build/backend/synonote_web/locales.json
 RUN npm run build
 
 FROM python:3.13-slim AS runtime
@@ -18,7 +19,7 @@ RUN python -m pip install --no-cache-dir /app/backend \
     && mkdir -p /data /app/static \
     && chown synonote:synonote /data \
     && chmod 700 /data
-COPY --from=frontend /build/dist /app/static
+COPY --from=frontend /build/frontend/dist /app/static
 USER synonote
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \

@@ -1,0 +1,12 @@
+{
+  "confirm": "확인",
+  "delete": "삭제",
+  "name": "이름",
+  "noDate": "날짜 없음",
+  "notebooksAddStack": "책장에 넣을 메모장",
+  "operationFailed": "작업에 실패했습니다.",
+  "tagsCommaSeparated": "태그 (쉼표로 구분)",
+  "thisDeletesNotebookNasAndMovesItsNotes": "NAS에서 메모장을 삭제하고 포함된 노트를 휴지통으로 이동합니다.",
+  "thisRemovesStackGroupingAndKeepsItsNotebooks": "책장 분류를 해제합니다. 메모장과 노트는 그대로 남습니다.",
+  "working": "처리 중…"
+}

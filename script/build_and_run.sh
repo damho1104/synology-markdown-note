@@ -31,14 +31,12 @@ fi
 ./script/swift.sh build "${BUILD_OPTIONS[@]}" --product "$EXECUTABLE_NAME"
 BUILD_BINARY="$(./script/swift.sh build "${BUILD_OPTIONS[@]}" --show-bin-path)/$EXECUTABLE_NAME"
 BUILD_DIR="$(dirname "$BUILD_BINARY")"
-RESOURCE_BUNDLE="$BUILD_DIR/SynologyNote_SynologyNote.bundle"
 mkdir -p "$APP_CONTENTS/MacOS" "$APP_CONTENTS/Resources"
 cp "$BUILD_BINARY" "$APP_BINARY"
-rm -rf "$APP_BUNDLE/SynologyNote_SynologyNote.bundle"
-if [[ -d "$RESOURCE_BUNDLE" ]]; then
-    rm -rf "$APP_CONTENTS/Resources/SynologyNote_SynologyNote.bundle"
-    cp -R "$RESOURCE_BUNDLE" "$APP_CONTENTS/Resources/SynologyNote_SynologyNote.bundle"
-fi
+for bundle in SynologyNote_SynologyNote.bundle SynologyNote_NoteCore.bundle; do
+    rm -rf "$APP_BUNDLE/$bundle" "$APP_CONTENTS/Resources/$bundle"
+    cp -R "$BUILD_DIR/$bundle" "$APP_CONTENTS/Resources/$bundle"
+done
 chmod +x "$APP_BINARY"
 # The cache-aware builder preserves the signed helper for unchanged sources,
 # while still honoring deliberate helper/CredentialStore security fixes.
@@ -62,6 +60,8 @@ cat > "$APP_CONTENTS/Info.plist" <<PLIST
 <key>CFBundleIdentifier</key><string>com.damho.SynologyMarkdown</string>
 <key>CFBundleName</key><string>Synology Markdown Note</string>
 <key>CFBundleDisplayName</key><string>Synology Markdown Note</string>
+<key>CFBundleDevelopmentRegion</key><string>en</string>
+<key>CFBundleLocalizations</key><array><string>en</string><string>ko</string></array>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>$APP_VERSION</string>
 <key>CFBundleVersion</key><string>29</string>

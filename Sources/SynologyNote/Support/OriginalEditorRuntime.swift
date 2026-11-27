@@ -1,11 +1,12 @@
 import WebKit
+import NoteCore
 
 /// Bundled, offline editor. Untrusted HTML is parsed only inside an inert template,
 /// never used as the WebView's document. All executable code belongs to this world.
 enum OriginalEditorRuntime {
     static let world = WKContentWorld.world(name: "SynologyNote.OriginalEditor")
     static let page = """
-    <!doctype html><html><head><meta charset="utf-8">
+    <!doctype html><html lang="\(NoteLocalization.language)"><head><meta charset="utf-8">
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; connect-src 'none'; img-src attachment: data:; style-src 'unsafe-inline'; font-src data:; frame-src 'none'; media-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
     <style>
     :root { color-scheme: light dark; font: 14px -apple-system, sans-serif; }
@@ -20,15 +21,73 @@ enum OriginalEditorRuntime {
     #original-editor img { max-width:100%; } #original-editor [data-original-opaque] { display:inline-block; padding:3px 8px; border:1px dashed GrayText; border-radius:4px; color:GrayText; user-select:all; }
     #original-dialog { padding:16px; border:1px solid GrayText; border-radius:8px; }
     #original-dialog label { display:block; margin:8px 0; } #original-dialog input { min-width:220px; }
-    </style></head><body><div id="original-toolbar" role="toolbar" aria-label="원본 HTML 서식"></div>
-    <main id="original-editor" role="textbox" aria-label="원본 HTML 본문" aria-multiline="true"></main>
-    <dialog id="original-dialog"><form method="dialog"><label id="original-dialog-label"></label><input id="original-dialog-value"><p><button value="cancel">취소</button> <button id="original-dialog-confirm" value="ok">적용</button></p></form></dialog>
+    </style></head><body><div id="original-toolbar" role="toolbar" aria-label="\(htmlEscape(appText("Original HTML Formatting")))"></div>
+    <main id="original-editor" role="textbox" aria-label="\(htmlEscape(appText("Original HTML Body")))" aria-multiline="true"></main>
+    <dialog id="original-dialog"><form method="dialog"><label id="original-dialog-label" for="original-dialog-value"></label><input id="original-dialog-value"><p><button value="cancel">\(htmlEscape(appText("Cancel")))</button> <button id="original-dialog-confirm" value="ok">\(htmlEscape(appText("Apply")))</button></p></form></dialog>
     </body></html>
     """
+
+    static let labels: [String: String] = [
+        "1. List",
+        "Add Column to Left",
+        "Add Column to Right",
+        "Add Row Above",
+        "Add Row Below",
+        "Align Center",
+        "Align Left",
+        "Align Right",
+        "Attach",
+        "Attach Files or Images",
+        "Body",
+        "Bold",
+        "Bulleted List",
+        "Checklist",
+        "Clear Formatting",
+        "Code",
+        "Create Table",
+        "Delete Column",
+        "Delete Row",
+        "Delete Table",
+        "Edit Table",
+        "Edit Table…",
+        "Font",
+        "Font Size",
+        "Gothic",
+        "Heading 1",
+        "Heading 2",
+        "Heading 3",
+        "Highlight Color",
+        "Indent",
+        "Insert Link",
+        "Italic",
+        "Justify",
+        "Link",
+        "Link Address",
+        "Myungjo",
+        "Numbered List",
+        "Original Preserved",
+        "Outdent",
+        "Paragraph Style",
+        "Quote",
+        "Redo",
+        "Remove Link",
+        "Rows x Columns (up to 30 x 20)",
+        "Strikethrough",
+        "Subscript",
+        "Superscript",
+        "System",
+        "Table",
+        "Text Color",
+        "To Do",
+        "Underline",
+        "Undo",
+        "• List",
+    ].reduce(into: [:]) { $0[$1] = appText($1) }
 
     static let script = #"""
     (() => {
       if (window.originalEditor) return;
+      const text = key => labels[key] ?? key;
       const root=document.getElementById('original-editor'), toolbar=document.getElementById('original-toolbar');
       const token='data-sne-'+Array.from(crypto.getRandomValues(new Uint8Array(16)),x=>x.toString(16).padStart(2,'0')).join('');
       const records=new Map(), scopedStyles=[]; let serial=0, original='', baseline='', revision=0, editable=false, composing=false, selection=null, assets=[], fullDocument=null;
@@ -77,7 +136,7 @@ enum OriginalEditorRuntime {
         if(opaque) {
           const placeholder=document.createElement('span');
           placeholder.setAttribute(token,id); placeholder.setAttribute('data-original-opaque',''); placeholder.contentEditable='false';
-          placeholder.setAttribute('aria-label',tag+' · 원본 보존'); placeholder.textContent='▤ '+tag+' · 원본 보존';
+          placeholder.setAttribute('aria-label',tag+' · '+text('Original Preserved')); placeholder.textContent='▤ '+tag+' · '+text('Original Preserved');
           records.set(id,{opaque: node.outerHTML}); node.replaceWith(placeholder); return;
         }
         const saved={};
@@ -178,7 +237,7 @@ enum OriginalEditorRuntime {
         if(!editable||composing)return false;restore();
         if(name==='undo'||name==='redo'){post({action:name});return true;}
         if(['table','rowAfter','rowBefore','columnAfter','columnBefore','deleteRow','deleteColumn','deleteTable'].includes(name))tableCommand(name,value);
-        else if(name==='checklist')exec('insertHTML','<ul><li><label><input type="checkbox"> '+(getSelection().toString().replaceAll('&','&amp;').replaceAll('<','&lt;')||'할 일')+'</label></li></ul>');
+        else if(name==='checklist')exec('insertHTML','<ul><li><label><input type="checkbox"> '+(getSelection().toString().replaceAll('&','&amp;').replaceAll('<','&lt;')||text('To Do').replaceAll('&','&amp;').replaceAll('<','&lt;'))+'</label></li></ul>');
         else if(name==='link'){if(!/^(https?:\/\/|mailto:|#)/i.test(value))return false;exec('createLink',value);}
         else if(name==='fontSize'){if(!/^\d{1,2}$/.test(value)||Number(value)<8||Number(value)>72)return false;exec('fontSize','7');const range=getSelection().rangeCount?getSelection().getRangeAt(0):null;for(const n of root.querySelectorAll('font[size="7"]')){if(!range?.intersectsNode(n))continue;n.removeAttribute('size');n.style.fontSize=value+'px';}}
         else if(name==='formatBlock'){if(!['p','h1','h2','h3','h4','pre','blockquote'].includes(value))return false;exec(name,value);}
@@ -209,19 +268,19 @@ enum OriginalEditorRuntime {
       toolbar.addEventListener('mousedown',e=>{remember();if(e.target.closest('button'))e.preventDefault();});
       function button(label,name,title=label){const b=document.createElement('button');b.type='button';b.textContent=label;b.title=title;b.setAttribute('aria-label',title);b.addEventListener('click',()=>command(name));toolbar.append(b);return b;}
       function select(label,items,name){const s=document.createElement('select');s.setAttribute('aria-label',label);s.title=label;for(const [v,t] of items){const o=document.createElement('option');o.value=v;o.textContent=t;s.append(o);}s.addEventListener('change',()=>command(name,s.value));toolbar.append(s);return s;}
-      select('문단',[['p','본문'],['h1','제목 1'],['h2','제목 2'],['h3','제목 3'],['blockquote','인용'],['pre','코드']], 'formatBlock');
-      select('글꼴',[['-apple-system','시스템'],['Arial','Arial'],['Georgia','Georgia'],['Times New Roman','Times'],['Helvetica','Helvetica'],['Apple SD Gothic Neo','고딕'],['AppleMyungjo','명조'],['Menlo','Menlo']], 'fontName');
-      select('글자 크기',['10','12','14','16','18','24','32','48','72'].map(x=>[x,x+' px']),'fontSize');
-      for(const [l,n,t] of [['B','bold','굵게'],['I','italic','기울임'],['U','underline','밑줄'],['S','strikeThrough','취소선'],['x₂','subscript','아래 첨자'],['x²','superscript','위 첨자']])button(l,n,t);
-      for(const [label,name] of [['글자 색','foreColor'],['강조 색','hiliteColor']]){const c=document.createElement('input');c.type='color';c.title=label;c.setAttribute('aria-label',label);c.addEventListener('input',()=>command(name,c.value));toolbar.append(c);}
-      for(const [l,n,t] of [['≡','justifyLeft','왼쪽 정렬'],['☰','justifyCenter','가운데 정렬'],['≣','justifyRight','오른쪽 정렬'],['☷','justifyFull','양쪽 정렬'],['• 목록','insertUnorderedList','글머리 목록'],['1. 목록','insertOrderedList','번호 목록'],['☑','checklist','체크리스트'],['→','indent','들여쓰기'],['←','outdent','내어쓰기'],['서식 지우기','removeFormat','서식 지우기']])button(l,n,t);
+      select(text('Paragraph Style'),[['p',text('Body')],['h1',text('Heading 1')],['h2',text('Heading 2')],['h3',text('Heading 3')],['blockquote',text('Quote')],['pre',text('Code')]], 'formatBlock');
+      select(text('Font'),[['-apple-system',text('System')],['Arial','Arial'],['Georgia','Georgia'],['Times New Roman','Times'],['Helvetica','Helvetica'],['Apple SD Gothic Neo',text('Gothic')],['AppleMyungjo',text('Myungjo')],['Menlo','Menlo']], 'fontName');
+      select(text('Font Size'),['10','12','14','16','18','24','32','48','72'].map(x=>[x,x+' px']),'fontSize');
+      for(const [l,n,t] of [['B','bold',text('Bold')],['I','italic',text('Italic')],['U','underline',text('Underline')],['S','strikeThrough',text('Strikethrough')],['x₂','subscript',text('Subscript')],['x²','superscript',text('Superscript')]])button(l,n,t);
+      for(const [label,name] of [[text('Text Color'),'foreColor'],[text('Highlight Color'),'hiliteColor']]){const c=document.createElement('input');c.type='color';c.title=label;c.setAttribute('aria-label',label);c.addEventListener('input',()=>command(name,c.value));toolbar.append(c);}
+      for(const [l,n,t] of [['≡','justifyLeft',text('Align Left')],['☰','justifyCenter',text('Align Center')],['≣','justifyRight',text('Align Right')],['☷','justifyFull',text('Justify')],[text('• List'),'insertUnorderedList',text('Bulleted List')],[text('1. List'),'insertOrderedList',text('Numbered List')],['☑','checklist',text('Checklist')],['→','indent',text('Indent')],['←','outdent',text('Outdent')],[text('Clear Formatting'),'removeFormat',text('Clear Formatting')]])button(l,n,t);
       function requestValue(label,initial,callback){remember();const d=document.getElementById('original-dialog'),input=document.getElementById('original-dialog-value');document.getElementById('original-dialog-label').textContent=label;input.value=initial;d.onclose=()=>{if(d.returnValue==='ok')callback(input.value);restore();};d.showModal();input.focus();}
-      const link=button('링크','noop','링크 삽입');link.addEventListener('click',()=>requestValue('링크 주소','https://',v=>command('link',v)));
-      button('링크 해제','unlink');
-      const table=button('표','noop','표 만들기');table.addEventListener('click',()=>requestValue('행 x 열 (최대 30 x 20)','2x2',v=>command('table',v)));
-      select('표 편집',[['','표 편집…'],['rowBefore','위에 행 추가'],['rowAfter','아래에 행 추가'],['columnBefore','왼쪽 열 추가'],['columnAfter','오른쪽 열 추가'],['deleteRow','행 삭제'],['deleteColumn','열 삭제'],['deleteTable','표 삭제']],'noop').addEventListener('change',e=>{command(e.target.value);e.target.value='';});
-      const files=button('첨부','noop','파일 또는 이미지 첨부');files.addEventListener('click',()=>post({action:'pickFiles'}));
-      button('↶','undo','실행 취소');button('↷','redo','다시 실행');
+      const link=button(text('Link'),'noop',text('Insert Link'));link.addEventListener('click',()=>requestValue(text('Link Address'),'https://',v=>command('link',v)));
+      button(text('Remove Link'),'unlink');
+      const table=button(text('Table'),'noop',text('Create Table'));table.addEventListener('click',()=>requestValue(text('Rows x Columns (up to 30 x 20)'),'2x2',v=>command('table',v)));
+      select(text('Edit Table'),[['',text('Edit Table…')],['rowBefore',text('Add Row Above')],['rowAfter',text('Add Row Below')],['columnBefore',text('Add Column to Left')],['columnAfter',text('Add Column to Right')],['deleteRow',text('Delete Row')],['deleteColumn',text('Delete Column')],['deleteTable',text('Delete Table')]],'noop').addEventListener('change',e=>{command(e.target.value);e.target.value='';});
+      const files=button(text('Attach'),'noop',text('Attach Files or Images'));files.addEventListener('click',()=>post({action:'pickFiles'}));
+      button('↶','undo',text('Undo'));button('↷','redo',text('Redo'));
       window.originalEditor={load,getHTML,command,pasteHTML,setEditable,updateAttachments};
     })();
     """#

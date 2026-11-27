@@ -56,7 +56,7 @@ struct OriginalHTMLEditor: NSViewRepresentable {
             self.web = web
             web.noteUndoManager = parent.undoManager
             web.navigationDelegate = self
-            web.setAccessibilityLabel("원본 HTML 편집기")
+            web.setAccessibilityLabel(appText("Original HTML Editor"))
             web.registerForDraggedTypes([.fileURL, .png, .tiff])
             navigation = web.loadHTMLString(OriginalEditorRuntime.page, baseURL: URL(string: "about:blank"))
             update(parent)
@@ -127,7 +127,8 @@ struct OriginalHTMLEditor: NSViewRepresentable {
             let currentRevision = revision
             let assets = attachmentArguments
             web.callAsyncJavaScript(OriginalEditorRuntime.script + "\nreturn window.originalEditor.load(html, attachments, editable, revision);",
-                                    arguments: ["html": parent.html, "attachments": assets, "editable": parent.isEditable, "revision": currentRevision],
+                                    arguments: ["html": parent.html, "attachments": assets, "editable": parent.isEditable,
+                                                "revision": currentRevision, "labels": OriginalEditorRuntime.labels],
                                     in: nil, in: OriginalEditorRuntime.world) { [weak self] result in
                 guard let self, !self.detached, self.revision == currentRevision else { return }
                 switch result {
@@ -197,7 +198,7 @@ struct OriginalHTMLEditor: NSViewRepresentable {
                 target.parent.html = html
                 target.reload()
             }
-            manager.setActionName("원본 HTML 편집")
+            manager.setActionName(appText("Edit Original HTML"))
             if needsGroup { manager.endUndoGrouping() }
         }
         private func pickFiles() {

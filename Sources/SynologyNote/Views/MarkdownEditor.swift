@@ -67,7 +67,7 @@ struct MarkdownEditor: NSViewRepresentable {
         editor.delegate = context.coordinator
         editor.onFiles = onFiles; editor.onImage = onImage
         editor.registerForDraggedTypes([.fileURL, .png, .tiff])
-        editor.setAccessibilityLabel("Markdown 본문")
+        editor.setAccessibilityLabel(appText("Markdown Body"))
         scroll.documentView = editor
         scroll.hasVerticalScroller = true
         scroll.drawsBackground = true
@@ -246,7 +246,7 @@ struct MarkdownEditor: NSViewRepresentable {
                 hideCompletion(); return
             }
             hideCompletion()
-            editor.insertNoteLink(target, replacing: completion.range, label: target.title.isEmpty ? "제목 없음" : target.title)
+            editor.insertNoteLink(target, replacing: completion.range, label: target.title.isEmpty ? appText("Untitled") : target.title)
             editor.window?.makeFirstResponder(editor)
         }
         func replace(with text: String, blocks: [PreservedBlock]) {
@@ -262,7 +262,7 @@ struct MarkdownEditor: NSViewRepresentable {
                 while searchRange.location < result.length {
                     let range = (result.string as NSString).range(of: token, range: searchRange)
                     if range.location == NSNotFound { break }
-                    let label = "  ▤ \(block.label) · 원본 보존  "
+                    let label = appText("  ▤ %@ · Original Preserved  ", AppLocalization.blockLabel(block.label))
                     let font = NSFont.systemFont(ofSize: 12, weight: .medium)
                     let size = (label as NSString).size(withAttributes: [.font: font])
                     let image = NSImage(size: NSSize(width: size.width + 12, height: 30), flipped: false) { rect in
@@ -398,7 +398,7 @@ final class SourceTextView: NSTextView {
     @objc func markdownItalic(_ sender: Any?) { wrap("*", "*") }
     @objc func markdownLink(_ sender: Any?) { wrap("[", "](https://)") }
     @objc func markdownCode(_ sender: Any?) { wrap("`", "`") }
-    @objc func markdownTable(_ sender: Any?) { insertText("\n| 제목 | 내용 |\n| --- | --- |\n|  |  |\n", replacementRange: selectedRange()) }
+    @objc func markdownTable(_ sender: Any?) { insertText(appText("\n| Title | Content |\n| --- | --- |\n|  |  |\n"), replacementRange: selectedRange()) }
     private func wrap(_ prefix: String, _ suffix: String) {
         guard isEditable, !hasMarkedText() else { return }
         let range = selectedRange()

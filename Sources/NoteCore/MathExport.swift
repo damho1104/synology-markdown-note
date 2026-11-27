@@ -58,7 +58,7 @@ public enum MathExport {
         // generated math spans are replaced; other bytes stay untouched.
         let namespace = UUID().uuidString
         let protected = blocks.map { PreservedBlock(id: $0.id, html: "<!--math-export-\(namespace)-\($0.id)-->", label: $0.label) }
-        var html = MarkdownPipeline.renderForPreview(markdown, blocks: protected)
+        var html = MarkdownPipeline.renderForMathExport(markdown, blocks: protected)
         let document = try SwiftSoup.parseBodyFragment(html)
         document.outputSettings().prettyPrint(pretty: false)
         for element in try document.select("span.note-math").array() {
@@ -69,7 +69,7 @@ public enum MathExport {
             guard matches.count == 1, let asset = matches.first, let metadata = asset.generatedMath,
                   metadata.width.isFinite, metadata.height.isFinite,
                   metadata.width > 0, metadata.height > 0, metadata.width <= 8192, metadata.height <= 8192 else {
-                throw RepositoryError(message: "수식 이미지 첨부를 준비하지 못했습니다. 원문을 보관한 채 다시 전송합니다.")
+                throw RepositoryError(message: coreText("Could not prepare a math image attachment. The source was kept for retry."))
             }
             let image = Element(try Tag.valueOf("img"), "")
             try image.attr("src", asset.reference)

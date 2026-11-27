@@ -26,7 +26,7 @@ struct NoteInspector: View {
         showingLinkPicker = false
         guard canManageLinks, target.id != session.id, !target.isTrashed else { return }
         guard let updated = InternalNoteLinks.addManagedLink(session.note.markdown, target: target) else {
-            library.errorMessage = "관련 노트 관리 영역의 마커가 손상되거나 중복되어 연결을 추가할 수 없습니다. 본문을 확인해 주세요."
+            library.errorMessage = appText("The managed Related Notes markers are damaged or duplicated. Check the body before adding a link.")
             return
         }
         guard updated != session.note.markdown else { return }
@@ -36,7 +36,7 @@ struct NoteInspector: View {
     private func removeLink(to target: NoteSummary) {
         guard canManageLinks else { return }
         guard let updated = InternalNoteLinks.removeManagedLink(session.note.markdown, target: target) else {
-            library.errorMessage = "관련 노트 관리 영역을 확인할 수 없어 연결을 제거하지 못했습니다."
+            library.errorMessage = appText("Could not remove the link. Check the managed Related Notes section.")
             return
         }
         guard updated != session.note.markdown else { return }
@@ -48,14 +48,14 @@ struct NoteInspector: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear { library.logEvent(.inspectorOpened, noteID: session.id) }
         .onDisappear { library.logEvent(.inspectorClosed, noteID: session.id) }
-        .confirmationDialog("첨부파일을 노트에서 제거할까요?", isPresented: Binding(get: { attachmentToRemove != nil }, set: { if !$0 { attachmentToRemove = nil } }), presenting: attachmentToRemove) { attachment in
-            Button("노트에서 제거", role: .destructive) {
+        .confirmationDialog(appText("Remove Attachment from Note?"), isPresented: Binding(get: { attachmentToRemove != nil }, set: { if !$0 { attachmentToRemove = nil } }), presenting: attachmentToRemove) { attachment in
+            Button(appText("Remove from Note"), role: .destructive) {
                 attachmentToRemove = nil
                 Task { await library.removeAttachment(attachment, from: session) }
             }
-            Button("취소", role: .cancel) { attachmentToRemove = nil }
+            Button(appText("Cancel"), role: .cancel) { attachmentToRemove = nil }
         } message: { attachment in
-            Text("\(attachment.name)\n본문에서 사용 중이면 제거하지 않습니다. 로컬 파일과 수정 이력은 보존되며 NAS 삭제는 동기화할 때 반영됩니다.")
+            Text(appText("%@\nAttachments in use stay in place. Local files and revision history are kept. The NAS removes the attachment when the note syncs.", attachment.name))
         }
         .task(id: session.note.revision) { do { history = try await library.repository.revisions(noteID: session.id) } catch { library.errorMessage = error.localizedDescription } }
         .task(id: session.id) { await library.loadBacklinks(for: session.id) }
@@ -75,13 +75,13 @@ struct NoteInspector: View {
         }
         .onChange(of: library.summaries) { _, _ in Task { await library.loadBacklinks(for: session.id) } }
         .sheet(item: $blockToView) { block in
-            InspectorPreview(title: block.label) { PreviewView(markdown: nil, originalHTML: block.html, blocks: [], attachments: session.note.attachments, assetStore: library.attachments) }
+            InspectorPreview(title: AppLocalization.blockLabel(block.label)) { PreviewView(markdown: nil, originalHTML: block.html, blocks: [], attachments: session.note.attachments, assetStore: library.attachments) }
         }
         .sheet(item: $revisionToView) { revision in
-            InspectorPreview(title: "변경 \(revision.number)") {
+            InspectorPreview(title: appText("Revision %@", AppLocalization.number(revision.number))) {
                 VStack {
                     PreviewView(markdown: revision.note.mode == .markdown ? revision.note.markdown : nil, originalHTML: revision.note.originalHTML, blocks: revision.note.blocks, attachments: revision.note.attachments, assetStore: library.attachments)
-                    Button("이 버전으로 복원") {
+                    Button(appText("Restore This Version")) {
                         library.edit(session, registerUndo: true) { note in
                             note.markdown = revision.note.markdown; note.blocks = revision.note.blocks
                             note.mode = revision.note.mode; note.originalHTML = revision.note.originalHTML; note.attachments = revision.note.attachments
@@ -94,111 +94,111 @@ struct NoteInspector: View {
     }
     private var inspectorSections: some View {
         VStack(alignment: .leading, spacing: 18) {
-            InspectorSection("노트 정보") {
-                LabeledContent("수정", value: session.note.modifiedAt.formatted(date: .abbreviated, time: .shortened))
-                LabeledContent("변경 번호", value: String(session.note.revision))
+            InspectorSection(appText("Note Info")) {
+                LabeledContent(appText("Modified"), value: AppLocalization.date(session.note.modifiedAt))
+                LabeledContent(appText("Revision Number"), value: AppLocalization.number(session.note.revision))
                 HStack {
-                    Text("NAS 메모장")
+                    Text(appText("NAS Notebook"))
                     Spacer(minLength: 8)
                     Menu {
                         ForEach(library.notebooks.filter { library.isNASNotebook($0.id) }) { book in
-                            Button(book.name.isEmpty ? "이름 없는 메모장" : book.name) {
+                            Button(book.name.isEmpty ? appText("Untitled Notebook") : book.name) {
                                 library.edit(session) { $0.notebookID = book.id }
                             }.disabled(library.deletingNotebookIDs.contains(book.id))
                         }
                     } label: {
-                        Text(library.notebooks.first(where: { $0.id == session.note.notebookID }).map { $0.name.isEmpty ? "이름 없는 메모장" : $0.name } ?? "NAS 전송 준비 중")
+                        Text(library.notebooks.first(where: { $0.id == session.note.notebookID }).map { $0.name.isEmpty ? appText("Untitled Notebook") : $0.name } ?? appText("Preparing NAS Upload"))
                             .lineLimit(1).truncationMode(.middle)
                     }
                     .disabled(!library.canCreateNotes)
-                    .accessibilityLabel("NAS 메모장 선택")
+                    .accessibilityLabel(appText("Select NAS Notebook"))
                     .menuStyle(.borderlessButton)
                 }
                 .accessibilityElement(children: .contain)
-                if let remote = session.note.remoteID { LabeledContent("서버 ID", value: String(remote.prefix(12))).help(remote) }
+                if let remote = session.note.remoteID { LabeledContent(appText("Server ID"), value: String(remote.prefix(12))).help(remote) }
                 if let version = session.note.serverVersion {
-                    LabeledContent("서버 버전") {
+                    LabeledContent(appText("Server Version")) {
                         Text(version).font(.system(.caption, design: .monospaced))
                             .lineLimit(1).truncationMode(.middle).help(version)
                     }
                 }
             }
-            InspectorSection("태그") {
-                if session.note.tags.isEmpty { Text("태그 없음").foregroundStyle(.secondary) }
+            InspectorSection(appText("Tags")) {
+                if session.note.tags.isEmpty { Text(appText("No Tags")).foregroundStyle(.secondary) }
                 ForEach(session.note.tags, id: \.self) { tag in
                     HStack(spacing: 8) {
                         Text("#" + tag).lineLimit(1).truncationMode(.tail)
                         Spacer(minLength: 4)
                         Button { library.edit(session) { $0.tags.removeAll { $0 == tag } } } label: {
-                            IconButtonLabel(title: "태그 제거", systemImage: "xmark")
-                        }.buttonStyle(.borderless).foregroundStyle(.secondary).help("태그 제거")
+                            IconButtonLabel(title: appText("Remove Tag"), systemImage: "xmark")
+                        }.buttonStyle(.borderless).foregroundStyle(.secondary).help(appText("Remove Tag"))
                     }
                 }
                 HStack {
-                    TextField("태그 추가", text: $tagInput).onSubmit(addTag)
-                    Button(action: addTag) { IconButtonLabel(title: "태그 추가", systemImage: "plus") }
-                        .buttonStyle(.borderless).help("태그 추가")
+                    TextField(appText("Add Tag"), text: $tagInput).onSubmit(addTag)
+                    Button(action: addTag) { IconButtonLabel(title: appText("Add Tag"), systemImage: "plus") }
+                        .buttonStyle(.borderless).help(appText("Add Tag"))
                         .disabled(tagInput.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
-            InspectorSection("내가 연결한 노트") {
-                if outgoing.isEmpty { Text("연결한 노트 없음").foregroundStyle(.secondary) }
+            InspectorSection(appText("Outgoing Note Links")) {
+                if outgoing.isEmpty { Text(appText("No Outgoing Note Links")).foregroundStyle(.secondary) }
                 ForEach(outgoing) { node in
                     HStack(alignment: .center, spacing: 6) {
                         Button {
                             NotificationCenter.default.post(name: .openNote, object: node.id)
                         } label: {
-                            Label(node.title.isEmpty ? "제목 없음" : node.title, systemImage: "arrow.up.right")
+                            Label(node.title.isEmpty ? appText("Untitled") : node.title, systemImage: "arrow.up.right")
                                 .lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
                         }
                         .buttonStyle(.plain)
                         if let target = library.summaries.first(where: { $0.id == node.id }),
                            InternalNoteLinks.hasManagedLink(session.note.markdown, to: target), canManageLinks {
                             Button { removeLink(to: target) } label: {
-                                IconButtonLabel(title: "관리 영역에서 연결만 제거", systemImage: "minus.circle")
+                                IconButtonLabel(title: appText("Remove Managed Link"), systemImage: "minus.circle")
                             }
                             .buttonStyle(.borderless)
-                            .help("본문 끝 관리 영역의 연결만 제거합니다. 본문 다른 링크와 대상 노트는 유지됩니다.")
+                            .help(appText("This removes the link from the managed section at the end of the body. Other links and the target note are kept."))
                             .accessibilityIdentifier("inspector-remove-managed-link")
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 if canManageLinks {
-                    Button { showingLinkPicker = true } label: { Label("＋ 연결", systemImage: "link.badge.plus") }
+                    Button { showingLinkPicker = true } label: { Label(appText("＋ Link"), systemImage: "link.badge.plus") }
                         .buttonStyle(.borderless)
                         .accessibilityIdentifier("inspector-add-note-link")
-                    Text("추가한 연결은 본문 끝의 ‘관련 노트 (앱에서 관리)’ 영역에 저장됩니다. 제거는 이 영역의 링크만 대상으로 하며 다른 본문 링크나 대상 노트는 삭제하지 않습니다.")
+                    Text(appText("Links are added to the managed Related Notes section at the end of the body. Removal applies to links in that section. Other links and target notes are kept."))
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 } else {
-                    Text("Markdown 노트에서 연결을 추가하거나 제거할 수 있습니다.")
+                    Text(appText("You can add and remove links in Markdown notes."))
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
-            InspectorSection("나를 참조하는 노트") {
+            InspectorSection(appText("Incoming Note Links")) {
                 let sources = library.backlinks[session.id] ?? []
-                if sources.isEmpty { Text("참조하는 노트 없음").foregroundStyle(.secondary) }
+                if sources.isEmpty { Text(appText("No Incoming Note Links")).foregroundStyle(.secondary) }
                 ForEach(sources) { source in
                     Button {
                         NotificationCenter.default.post(name: .openNote, object: source.id)
                     } label: {
-                        Label(source.title.isEmpty ? "제목 없음" : source.title, systemImage: "arrowshape.turn.up.left")
+                        Label(source.title.isEmpty ? appText("Untitled") : source.title, systemImage: "arrowshape.turn.up.left")
                             .lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
                     }
                         .buttonStyle(.plain)
                 }
             }
-            InspectorSection("로컬 그래프") {
+            InspectorSection(appText("Local Graph")) {
                 NoteGraphExplorer(graph: library.noteGraph, notebooks: library.notebooks,
                                   focusID: session.id, compact: true) { id in
                     NotificationCenter.default.post(name: .openNote, object: id)
                 }
                 .frame(height: 255)
-                Button("그래프 크게 보기") { showingLocalGraph = true }
+                Button(appText("Expand Graph")) { showingLocalGraph = true }
                     .buttonStyle(.borderless)
             }
-            InspectorSection("첨부파일") {
-                if session.note.attachments.isEmpty { Text("첨부파일 없음").foregroundStyle(.secondary) }
+            InspectorSection(appText("Attachments")) {
+                if session.note.attachments.isEmpty { Text(appText("No Attachments")).foregroundStyle(.secondary) }
                 ForEach(session.note.attachments) { attachment in
                     HStack(alignment: .top, spacing: 8) {
                         Button {
@@ -215,7 +215,7 @@ struct NoteInspector: View {
                             }.contentShape(Rectangle())
                         }.buttonStyle(.plain).help(attachment.name)
                         Menu {
-                            Button("Finder에서 보기") {
+                            Button(appText("Show in Finder")) {
                                 Task {
                                     do {
                                         _ = try await library.attachments.verifiedData(for: attachment)
@@ -223,49 +223,51 @@ struct NoteInspector: View {
                                     } catch { library.errorMessage = error.localizedDescription }
                                 }
                             }
-                            Button("노트에서 제거…", role: .destructive) { attachmentToRemove = attachment }
+                            Button(appText("Remove from Note…"), role: .destructive) { attachmentToRemove = attachment }
                                 .disabled(session.note.mode == .locked || !session.note.hasRemoteContent || session.note.isTrashed)
-                        } label: { IconButtonLabel(title: "첨부파일 관리", systemImage: "ellipsis") }
-                        .menuStyle(.borderlessButton).fixedSize().help("첨부파일 관리")
+                        } label: { IconButtonLabel(title: appText("Manage Attachments"), systemImage: "ellipsis") }
+                        .menuStyle(.borderlessButton).fixedSize().help(appText("Manage Attachments"))
                     }
                 }
-                Button("파일 추가…") { library.pickAttachment(for: session) }.disabled(session.note.mode == .locked || session.note.isTrashed)
+                Button(appText("Preserved Blocks")) { library.pickAttachment(for: session) }.disabled(session.note.mode == .locked || session.note.isTrashed)
             }
             if !session.note.blocks.isEmpty {
-                InspectorSection("원본 보존 블록") {
+                InspectorSection(appText("View Original")) {
                     ForEach(session.note.blocks) { block in
                         Menu {
-                            Button("원본 보기") { blockToView = block }
-                            Button("복제") {
+                            Button(appText("Duplicate")) { blockToView = block }
+                            Button(appText("Duplicate")) {
                                 library.edit(session, registerUndo: true) { note in
                                     var copy = block; copy.id = UUID().uuidString
                                     note.blocks.append(copy)
                                     note.markdown += "\n\n" + MarkdownPipeline.token(for: copy) + "\n"
                                 }
                             }
-                        } label: { Label(block.label, systemImage: "rectangle.on.rectangle") }
+                        } label: { Label(AppLocalization.blockLabel(block.label), systemImage: "rectangle.on.rectangle") }
                     }
-                    Text("블록은 본문에서 이동·삭제할 수 있으며 실행 취소로 복원됩니다.").font(.caption).foregroundStyle(.secondary)
+                    Text(appText("You can move or remove blocks in the body and restore them with Undo.")).font(.caption).foregroundStyle(.secondary)
                 }
             }
-            InspectorSection("이 Mac에 보관된 수정 이력") {
-                if history.isEmpty { Text("수정 이력 없음").foregroundStyle(.secondary) }
+            InspectorSection(appText("Revision History on This Mac")) {
+                if history.isEmpty { Text(appText("No Revisions")).foregroundStyle(.secondary) }
                 ForEach(history.prefix(30)) { revision in
                     Button { revisionToView = revision } label: {
-                        HStack { Text("변경 \(revision.number)"); Spacer(); Text(revision.savedAt, format: .dateTime.hour().minute()).foregroundStyle(.secondary) }
+                        HStack { Text(appText("Revision %@", AppLocalization.number(revision.number))); Spacer(); Text(revision.savedAt, format: .dateTime.hour().minute().locale(AppLocalization.locale)).foregroundStyle(.secondary) }
                     }.buttonStyle(.plain)
                 }
             }
             if session.note.remoteID != nil {
-                InspectorSection("NAS 수정 이력") {
-                    Button("서버 이력 조회") { Task { await loadServerHistory() } }.disabled(!library.isConnected)
+                InspectorSection(appText("NAS Revision History")) {
+                    Button(appText("Load Server History")) { Task { await loadServerHistory() } }.disabled(!library.isConnected)
                     if let serverHistoryError { Text(serverHistoryError).foregroundStyle(.secondary) }
                     ForEach(serverHistory, id: \.version) { revision in
-                        VStack(alignment: .leading, spacing: 3) { Text(revision.version); Text(revision.modifiedAt, format: .dateTime).font(.caption).foregroundStyle(.secondary) }
+                        VStack(alignment: .leading, spacing: 3) { Text(revision.version); Text(revision.modifiedAt, format: .dateTime.locale(AppLocalization.locale)).font(.caption).foregroundStyle(.secondary) }
                     }
                 }
             }
-            if let error = session.note.lastError { InspectorSection("NAS 상태") { Text(error).foregroundStyle(.orange).font(.caption) } }
+            if let error = AppLocalization.syncErrorMessage(session.note.lastError) {
+                InspectorSection(appText("NAS Status")) { Text(error).foregroundStyle(.orange).font(.caption) }
+            }
         }
     }
 
@@ -286,7 +288,7 @@ private struct InspectorPreview<Content: View>: View {
     var title: String
     @ViewBuilder var content: () -> Content
     var body: some View {
-        VStack(spacing: 0) { HStack { Text(title).font(.headline); Spacer(); Button("닫기") { dismiss() } }.padding(); Divider(); content() }.frame(width: 720, height: 580)
+        VStack(spacing: 0) { HStack { Text(title).font(.headline); Spacer(); Button(appText("Close")) { dismiss() } }.padding(); Divider(); content() }.frame(width: 720, height: 580)
     }
 }
 

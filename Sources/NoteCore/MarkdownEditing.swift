@@ -28,7 +28,8 @@ public enum MarkdownEditing {
         for input in (try? body.select("input[data-md-task]").array()) ?? [] {
             guard let value = try? input.attr("data-md-task"), let line = Int(value), line > 0 else { continue }
             let checked = input.hasAttr("checked")
-            try? input.before("<a class=\"task-toggle\" href=\"note-task://\(line)\" aria-label=\"\(checked ? "체크 해제" : "체크 완료")\">\(checked ? "☑" : "☐")</a>")
+            let label = htmlEscape(checked ? coreText("Uncheck") : coreText("Check"))
+            try? input.before("<a class=\"task-toggle\" href=\"note-task://\(line)\" aria-label=\"\(label)\">\(checked ? "☑" : "☐")</a>")
             try? input.remove()
             if let parent = input.parent() { try? parent.addClass("task-item") }
         }

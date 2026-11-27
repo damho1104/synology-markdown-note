@@ -5,8 +5,8 @@ enum MermaidStyle: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .classic: "기본"
-        case .sketch: "스케치"
+        case .classic: appText("Standard")
+        case .sketch: appText("Sketch")
         }
     }
 }
@@ -21,11 +21,11 @@ enum MermaidTheme: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .automatic: "화면 모드에 맞춤"
-        case .light: "라이트"
-        case .dark: "다크"
-        case .neutral: "무채색"
-        case .forest: "포레스트"
+        case .automatic: appText("Match Appearance")
+        case .light: appText("Light")
+        case .dark: appText("Dark")
+        case .neutral: appText("Neutral")
+        case .forest: appText("Forest")
         }
     }
 }

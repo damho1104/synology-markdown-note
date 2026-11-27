@@ -25,7 +25,7 @@ ATTACH_REF = re.compile(r"attachment://([0-9a-fA-F-]{36})")
 
 def verified_source(api: NoteStationAPI, note: Note) -> tuple[SourceEnvelope, str, list[str]]:
     if note.locked or note.trashed:
-        raise CLIError("UNSUPPORTED_DOCUMENT_TYPE", "잠금/휴지통 노트는 Markdown으로 편집할 수 없습니다.")
+        raise CLIError("UNSUPPORTED_DOCUMENT_TYPE", "Locked or trashed notes cannot be edited as Markdown.")
     matches: list[tuple[SourceEnvelope, str]] = []
     for file in note.attachments:
         if not file["name"].endswith(".md"):
@@ -38,20 +38,20 @@ def verified_source(api: NoteStationAPI, note: Note) -> tuple[SourceEnvelope, st
         if value.matches(note.html):
             matches.append((value, file["id"]))
     if len(matches) != 1:
-        raise CLIError("UNSUPPORTED_DOCUMENT_TYPE", "검증된 Markdown 원문 첨부가 정확히 하나여야 합니다.", candidates=len(matches))
+        raise CLIError("UNSUPPORTED_DOCUMENT_TYPE", "Exactly one verified Markdown source attachment is required.", candidates=len(matches))
     source, source_file_id = matches[0]
     # Check attachment bindings with the exact rules used by the Swift importer.
     for ref in set(ATTACH_REF.findall(source.markdown)) | set(source.math_attachments):
         try:
             normalized = uuid.UUID(ref)
         except ValueError as ex:
-            raise CLIError("INVALID_SOURCE", "첨부파일 참조 UUID가 올바르지 않습니다.") from ex
+            raise CLIError("INVALID_SOURCE", "The attachment reference UUID is invalid.") from ex
         binding = next((v for k, v in source.attachment_bindings.items() if uuid.UUID(k) == normalized), None)
         candidates = [f for f in note.attachments if f["id"] == binding] if binding else [
             f for f in note.attachments if f["id"].lower() == str(normalized) or
             (f.get("ref") and _uuid_equal(f["ref"], normalized))]
         if len(candidates) != 1:
-            raise CLIError("INVALID_SOURCE", "NAS 첨부파일을 유일하게 찾을 수 없습니다.")
+            raise CLIError("INVALID_SOURCE", "Could not find a unique matching NAS attachment.")
         api.download(candidates[0]["id"], note.id)
     return source, source_file_id, [f["id"] for f in note.attachments]
 
@@ -68,11 +68,11 @@ def select_notebook(api: NoteStationAPI, *, stack: str | None, notebook: str | N
     selected = [book for book in books if (notebook_id is None or book["id"] == notebook_id) and
                 (notebook is None or book["name"] == notebook) and (stack is None or book["stack"] == stack)]
     if not (notebook_id or notebook):
-        raise CLIError("INVALID_ARGUMENT", "--notebook 또는 --notebook-id 가 필요합니다.")
+        raise CLIError("INVALID_ARGUMENT", "Specify --notebook or --notebook-id.")
     if not selected:
-        raise CLIError("NOT_FOUND", "대상 메모장을 찾지 못했습니다.")
+        raise CLIError("NOT_FOUND", "Could not find the target notebook.")
     if len(selected) != 1:
-        raise CLIError("AMBIGUOUS_TARGET", "같은 이름의 메모장이 여러 개입니다. --notebook-id를 사용하세요.", ids=[x["id"] for x in selected])
+        raise CLIError("AMBIGUOUS_TARGET", "Multiple notebooks have that name. Use --notebook-id.", ids=[x["id"] for x in selected])
     return selected[0]
 
 
@@ -83,7 +83,7 @@ def select_note(api: NoteStationAPI, notebook_id: str, title: str, note_id: str 
     if note_id:
         summaries = [n for n in summaries if n["id"] == note_id]
     if len(summaries) > 1:
-        raise CLIError("AMBIGUOUS_TARGET", "동일한 제목의 노트가 여럿입니다.", ids=[v["id"] for v in summaries])
+        raise CLIError("AMBIGUOUS_TARGET", "Multiple notes have that title.", ids=[v["id"] for v in summaries])
     return api.fetch(summaries[0]["id"]) if summaries else None
 
 
@@ -94,26 +94,26 @@ def diff(source: str, local: str, note_id: str, local_path: Path) -> str:
 
 def input_markdown(path: Path) -> tuple[str, list[dict]]:
     if path.suffix.lower() != ".md" or not path.is_file():
-        raise CLIError("INVALID_ARGUMENT", "UTF-8 .md 파일만 업로드할 수 있습니다.")
+        raise CLIError("INVALID_ARGUMENT", "Only UTF-8 .md files can be uploaded.")
     try:
         data = path.read_bytes()
         markdown = data.decode("utf-8", errors="strict")
     except (OSError, UnicodeError) as ex:
-        raise CLIError("INVALID_ARGUMENT", "Markdown 파일을 읽을 수 없습니다.") from ex
+        raise CLIError("INVALID_ARGUMENT", "Could not read the Markdown file.") from ex
     blocks_path = path.with_name(path.name + ".preserved.json")
     if blocks_path.exists():
         try:
             blocks = json.loads(blocks_path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as ex:
-            raise CLIError("INVALID_SOURCE", "보존 블록 sidecar를 읽을 수 없습니다.") from ex
+            raise CLIError("INVALID_SOURCE", "Could not read the preserved blocks sidecar file.") from ex
     else:
         blocks = []
     if not validate_blocks(markdown, blocks):
-        raise CLIError("INVALID_SOURCE", "원문 보존 블록의 참조가 유효하지 않습니다.")
+        raise CLIError("INVALID_SOURCE", "The source contains invalid preserved block references.")
     if any(ATTACH_REF.search(block["html"]) for block in blocks):
-        raise CLIError("UNSUPPORTED_MARKDOWN_FEATURE", "첨부 참조가 있는 보존 블록은 아직 지원되지 않습니다.")
+        raise CLIError("UNSUPPORTED_MARKDOWN_FEATURE", "Preserved blocks with attachment references are not supported yet.")
     if ATTACH_REF.search(markdown) or re.search(r"!\[[^]]*\]\((?!https?://|data:)[^)]+\)", markdown):
-        raise CLIError("UNSUPPORTED_MARKDOWN_FEATURE", "로컬 이미지와 첨부 리소스 업로드는 아직 지원되지 않습니다.")
+        raise CLIError("UNSUPPORTED_MARKDOWN_FEATURE", "Uploading local images and attachment resources is not supported yet.")
     return markdown, blocks
 
 
@@ -121,7 +121,7 @@ def download(api: NoteStationAPI, note_id: str, destination: Path, *, force: boo
     note = api.fetch(note_id)
     source, _, _ = verified_source(api, note)
     if ATTACH_REF.search(source.markdown) or source.math_attachments:
-        raise CLIError("UNSUPPORTED_MARKDOWN_FEATURE", "첨부 리소스가 있는 Markdown의 로컬 내보내기는 아직 지원되지 않습니다.")
+        raise CLIError("UNSUPPORTED_MARKDOWN_FEATURE", "Exporting Markdown with attachment resources to a local file is not supported yet.")
     targets: dict[Path, bytes | None] = {destination: source.markdown.encode("utf-8")}
     sidecar = destination.with_name(destination.name + ".preserved.json")
     if source.blocks:
@@ -131,12 +131,12 @@ def download(api: NoteStationAPI, note_id: str, destination: Path, *, force: boo
         # Removing it is an explicit part of --force-local and uses the same rollback.
         targets[sidecar] = None
     if destination.suffix.lower() != ".md":
-        raise CLIError("INVALID_ARGUMENT", "다운로드 경로는 .md 파일이어야 합니다.")
+        raise CLIError("INVALID_ARGUMENT", "The download path must point to a .md file.")
     if any(target.exists() for target in targets) and not force:
-        raise CLIError("OUTPUT_EXISTS", "출력 파일이 이미 존재합니다. --force-local 옵션을 사용하세요.")
+        raise CLIError("OUTPUT_EXISTS", "The output file already exists. Use --force-local to replace it.")
     for target in targets:
         if target.is_symlink() or not target.parent.is_dir() or (target.exists() and not target.is_file()):
-            raise CLIError("INVALID_ARGUMENT", "출력 디렉터리가 없거나 심볼릭 링크가 존재합니다.")
+            raise CLIError("INVALID_ARGUMENT", "The output directory is missing or the output path contains a symbolic link.")
     # Keep the identity of every destination stable while staging and backing up.
     # In particular, never follow a symlink substituted after the initial check.
     originals = {target: target.stat() if target.exists() else None for target in targets}
@@ -209,9 +209,9 @@ def download(api: NoteStationAPI, note_id: str, destination: Path, *, force: boo
                 recovery_errors.append(str(target))
         if recovery_errors:
             retain_backups = True
-            raise CLIError("OUTPUT_EXISTS", "출력 실패 후 기존 파일 복원에도 실패했습니다. 백업 파일을 확인하세요.",
+            raise CLIError("OUTPUT_EXISTS", "Writing the output and restoring the original file both failed. Check the backup file.",
                            affected_paths=recovery_errors, backup_paths=list(backups.values())) from ex
-        raise CLIError("INVALID_ARGUMENT", "출력 파일을 저장하지 못했습니다.") from ex
+        raise CLIError("INVALID_ARGUMENT", "Could not save the output file.") from ex
     finally:
         for tmp in staged.values():
             if os.path.exists(tmp):
@@ -228,17 +228,17 @@ def upload(api: NoteStationAPI, local_path: Path, *, stack: str | None, notebook
            notebook_id: str | None, title: str | None, note_id: str | None,
            overwrite: bool, compare_only: bool) -> dict:
     if overwrite and compare_only:
-        raise CLIError("INVALID_ARGUMENT", "--overwrite와 --diff는 함께 사용할 수 없습니다.")
+        raise CLIError("INVALID_ARGUMENT", "--overwrite and --diff cannot be used together.")
     markdown, blocks = input_markdown(local_path)
     title = title if title is not None else local_path.stem
     if not title or title.strip() != title:
-        raise CLIError("INVALID_ARGUMENT", "노트 제목이 올바르지 않습니다.")
+        raise CLIError("INVALID_ARGUMENT", "The note title is invalid.")
     book = select_notebook(api, stack=stack, notebook=notebook, notebook_id=notebook_id)
     target = select_note(api, book["id"], title, note_id)
     if target is None and note_id:
-        raise CLIError("NOT_FOUND", "요청한 노트 ID가 제목/메모장과 일치하지 않습니다.")
+        raise CLIError("NOT_FOUND", "The requested note ID does not match the title or notebook.")
     if target is None and overwrite:
-        raise CLIError("NOT_FOUND", "덮어쓸 노트가 없습니다.")
+        raise CLIError("NOT_FOUND", "No note was found to overwrite.")
     old_source = None
     old_source_id = None
     protected_ids: set[str] = set()
@@ -257,18 +257,18 @@ def upload(api: NoteStationAPI, local_path: Path, *, stack: str | None, notebook
         if compare_only:
             return {"status": "different", "uploaded": False, "note_id": target.id, "remote_version": target.version, "diff": difference}
         if not overwrite:
-            raise CLIError("TITLE_CONFLICT", "동일 제목 노트가 있습니다. 덮어쓰기에는 --overwrite가 필요합니다.",
+            raise CLIError("TITLE_CONFLICT", "A note with that title already exists. Use --overwrite to replace it.",
                            note_id=target.id, remote_version=target.version, diff=difference, uploaded=False, requires_overwrite=True)
         # Protect assets/opaque user content until lossless attachment editing is supported.
         if old_source.attachment_bindings or old_source.math_attachments or old_source.blocks != blocks or ATTACH_REF.search(old_source.markdown):
-            raise CLIError("UNSUPPORTED_MARKDOWN_FEATURE", "원격 첨부·수식·보존 블록이 포함된 노트는 아직 덮어쓸 수 없습니다.")
+            raise CLIError("UNSUPPORTED_MARKDOWN_FEATURE", "Overwriting notes with remote attachments, formulas, or preserved blocks is not supported yet.")
     elif compare_only:
         return {"status": "would_create", "uploaded": False, "title": title, "notebook_id": book["id"]}
 
     html = render(markdown, blocks=blocks)
     operation_id = str(uuid.uuid4())
     document_id = old_source.document_id if old_source else str(uuid.uuid4()).upper()
-    original_html = target.html if target else "<p>문서를 전송하고 있습니다.</p>"
+    original_html = target.html if target else "<p>Transferring the document.</p>"
     stage_name = f"synology-note-upload-{document_id}-{operation_id}.md"
     stage = SourceEnvelope.make(markdown, original_html, document_id=document_id,
                                 operation_id=operation_id, is_staging=True, blocks=blocks).encode()
@@ -282,10 +282,10 @@ def upload(api: NoteStationAPI, local_path: Path, *, stack: str | None, notebook
         if target:
             latest = api.fetch(target.id)
             if latest.version != target.version or latest.html != target.html or latest.title != target.title or latest.notebook_id != book["id"]:
-                raise CLIError("REMOTE_CHANGED", "비교 후 NAS 노트가 변경되었습니다.")
+                raise CLIError("REMOTE_CHANGED", "The NAS note changed after the comparison.")
             checked_source, checked_id, _ = verified_source(api, latest)
             if checked_source != old_source or checked_id != old_source_id:
-                raise CLIError("REMOTE_CHANGED", "비교한 Markdown 원문이 변경되었습니다.")
+                raise CLIError("REMOTE_CHANGED", "The Markdown source changed after the comparison.")
         record["phase"] = "staging"; save(record)
         new_id, stage_version = api.write(note_id=target.id if target else None,
                                           version=target.version if target else None,
@@ -296,16 +296,16 @@ def upload(api: NoteStationAPI, local_path: Path, *, stack: str | None, notebook
         record.update(note_id=new_id, stage_version=stage_version, phase="staged"); save(record)
         current = api.fetch(new_id)
         if current.version != stage_version or current.html != original_html or current.title != title or current.notebook_id != book["id"]:
-            raise CLIError("REMOTE_CHANGED", "임시 원문을 등록한 뒤 NAS 문서가 변경되었습니다.")
+            raise CLIError("REMOTE_CHANGED", "The NAS document changed after the staging source was attached.")
         stages = [f for f in current.attachments if f["name"] == stage_name and api.download(f["id"], new_id) == stage]
         if len(stages) != 1:
-            raise CLIError("WRITE_UNCERTAIN", "NAS 임시 원문을 확인할 수 없습니다.")
+            raise CLIError("WRITE_UNCERTAIN", "Could not verify the staging source on the NAS.")
         record["phase"] = "body"; save(record)
         _, body_version = api.write(note_id=new_id, version=current.version, html=html)
         record.update(body_version=body_version, phase="body_saved"); save(record)
         current = api.fetch(new_id)
         if current.version != body_version or current.html != html or current.title != title or current.notebook_id != book["id"]:
-            raise CLIError("WRITE_UNCERTAIN", "NAS HTML 본문을 검증할 수 없습니다.")
+            raise CLIError("WRITE_UNCERTAIN", "Could not verify the HTML body on the NAS.")
         final = SourceEnvelope.make(markdown, current.html, document_id=document_id, operation_id=operation_id, blocks=blocks).encode()
         delete_ids = [stages[0]["id"]] + ([old_source_id] if old_source_id else [])
         record["phase"] = "publishing"; save(record)
@@ -319,7 +319,7 @@ def upload(api: NoteStationAPI, local_path: Path, *, stack: str | None, notebook
                 source.markdown != markdown or source.blocks != blocks or source.document_id != document_id or
                 not source.operation_id or uuid.UUID(source.operation_id) != uuid.UUID(operation_id) or
                 any(v in current_ids for v in delete_ids) or not protected_ids.issubset(current_ids)):
-            raise CLIError("WRITE_UNCERTAIN", "NAS 최종 원문 확인에 실패했습니다.")
+            raise CLIError("WRITE_UNCERTAIN", "Could not verify the final source on the NAS.")
         done(record)
         return {"status": "uploaded", "uploaded": True, "note_id": new_id, "remote_version": current.version,
                 "operation_id": operation_id, "notebook_id": book["id"], "title": title}
@@ -329,6 +329,6 @@ def upload(api: NoteStationAPI, local_path: Path, *, stack: str | None, notebook
             raise
         # Any in-flight mutation may have succeeded after a lost response.
         if ex.code in ("TRANSPORT_ERROR", "WRITE_UNCERTAIN", "REMOTE_ERROR") or record["phase"] in ("staging", "body", "publishing"):
-            raise CLIError("WRITE_UNCERTAIN", "NAS 쓰기 결과가 불확실합니다. 작업 상태를 조회하세요.",
+            raise CLIError("WRITE_UNCERTAIN", "The NAS write result is uncertain. Check the operation status.",
                            operation_id=operation_id, phase=record["phase"], note_id=record.get("note_id")) from ex
         raise

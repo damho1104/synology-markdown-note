@@ -87,21 +87,14 @@ enum DiagnosticExport {
         ]
         try JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .sortedKeys])
             .write(to: payload.appendingPathComponent("manifest.json"))
-        try """
-        개발자 진단 자료
-        database-summary.json은 선택한 계정의 개수·용량·무결성 결과만 포함합니다(전체 진단 선택 시).
-        logs에는 현재 및 이전 진단 로그가 포함됩니다. 식별자는 이 ZIP 안에서만 통하는 별칭으로 바꿉니다.
-        원본 DB, 노트 내용·제목·수정 이력 내용, 첨부파일, NAS 주소, Keychain 정보는 포함하지 않습니다.
-        시각·오류 코드·작업 횟수는 진단을 위해 포함됩니다. 손상되거나 알 수 없는 로그 줄은 제외합니다.
-        원본 로그와 로컬 DB는 변경하지 않았습니다. 이 자료로 노트를 복원할 수는 없습니다.
-        """.write(to: payload.appendingPathComponent("README.txt"), atomically: true, encoding: .utf8)
+        try appText("diagnostics.readme").write(to: payload.appendingPathComponent("README.txt"), atomically: true, encoding: .utf8)
         let zip = temporary.appendingPathComponent("diagnostics.zip")
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
         process.arguments = ["-c", "-k", "--keepParent", "--norsrc", "--noextattr", "--noacl", "--noqtn", payload.path, zip.path]
         process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
         try process.run(); process.waitUntilExit()
-        guard process.terminationStatus == 0 else { throw RepositoryError(message: "진단 ZIP을 만들지 못했습니다.") }
+        guard process.terminationStatus == 0 else { throw RepositoryError(message: appText("Could not create the diagnostic ZIP.")) }
         // Atomic publication also preserves an existing destination on write failure.
         try Data(contentsOf: zip).write(to: destination, options: .atomic)
         try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: destination.path)

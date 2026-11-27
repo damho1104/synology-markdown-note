@@ -12,7 +12,7 @@ extension LibraryStore {
     func permanentlyDelete(_ session: EditorSession) async throws {
         guard sessions[session.id] === session, session.workspaceGeneration == accountGeneration,
               canPermanentlyDelete(session.note), let client, let remoteID = session.note.remoteID,
-              let version = session.note.serverVersion ?? session.note.listedVersion else { throw RepositoryError(message: "NAS 연결과 휴지통 동기화를 완료한 뒤 영구 삭제하세요.") }
+              let version = session.note.serverVersion ?? session.note.listedVersion else { throw RepositoryError(message: appText("Connect to the NAS and sync the Trash before permanently deleting notes.")) }
         let generation = accountGeneration, connection = connectionGeneration, repo = repository, assets = attachments
         deletingNoteIDs.insert(session.id)
         cancelOfflineDownload()
@@ -22,7 +22,7 @@ extension LibraryStore {
             await flush()
             guard session.editGeneration == session.savedGeneration,
                   try await !repo.pendingOperations().contains(where: { $0.noteID == session.id }),
-                  try await !repo.syncAttempts().contains(where: { $0.note.id == session.id }) else { throw RepositoryError(message: "전송 대기 중인 변경을 먼저 확인하세요.") }
+                  try await !repo.syncAttempts().contains(where: { $0.note.id == session.id }) else { throw RepositoryError(message: appText("Review pending changes first.")) }
             guard generation == accountGeneration, connection == connectionGeneration else { throw NoteStationError.connectionChanged }
             try await client.permanentlyDeleteNote(noteID: remoteID, baseVersion: version)
             guard generation == accountGeneration, connection == connectionGeneration, self.client === client else { throw NoteStationError.connectionChanged }
@@ -42,14 +42,14 @@ extension LibraryStore {
     }
 
     func promptPermanentlyDelete(_ session: EditorSession) {
-        guard canPermanentlyDelete(session.note) else { errorMessage = "NAS 연결과 휴지통 동기화를 완료한 뒤 영구 삭제하세요."; return }
+        guard canPermanentlyDelete(session.note) else { errorMessage = appText("Connect to the NAS and sync the Trash before permanently deleting notes."); return }
         let generation = accountGeneration
         let alert = NSAlert()
-        alert.messageText = "‘\(session.note.title)’ 노트를 영구 삭제할까요?"
-        alert.informativeText = "NAS의 노트와 첨부, 이 Mac에 보관된 노트와 수정 이력을 삭제합니다. 다른 기기에서도 사라지며 복원할 수 없습니다."
+        alert.messageText = appText("Permanently delete “%@”?", "\(session.note.title)")
+        alert.informativeText = appText("This deletes the note and attachments from the NAS and the local note and revision history from this Mac. It cannot be undone and affects other devices.")
         alert.alertStyle = .critical
-        alert.addButton(withTitle: "영구 삭제").keyEquivalent = ""
-        alert.addButton(withTitle: "취소").keyEquivalent = "\r"
+        alert.addButton(withTitle: appText("Delete Permanently")).keyEquivalent = ""
+        alert.addButton(withTitle: appText("Cancel")).keyEquivalent = "\r"
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         Task {
             guard generation == accountGeneration else { return }

@@ -44,7 +44,7 @@ def load(operation_id: str) -> dict:
             raise ValueError()
         return record
     except (OSError, ValueError, KeyError, TypeError) as ex:
-        raise CLIError("NOT_FOUND", "해당 전송 작업 기록을 찾지 못했습니다.") from ex
+        raise CLIError("NOT_FOUND", "Could not find the transfer operation record.") from ex
 
 
 def done(record: dict) -> None:
@@ -90,7 +90,7 @@ def status(api, operation_id: str) -> dict:
         if not stage:
             raise ValueError("empty stage")
     except (KeyError, ValueError, TypeError, binascii.Error) as ex:
-        raise CLIError("INVALID_SOURCE", "전송 저널의 임시 원문이 손상되었습니다.") from ex
+        raise CLIError("INVALID_SOURCE", "The staging source in the transfer journal is corrupt.") from ex
     for candidate in api.notes():
         if candidate["title"] != record["title"] or candidate["notebook_id"] != record["notebook_id"]:
             continue

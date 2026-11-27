@@ -29,12 +29,12 @@ public actor NoteRepository {
         // Offer recovery rather than silently creating an empty library.
         if !FileManager.default.fileExists(atPath: databaseFile.path),
            !DatabaseMaintenance.snapshots(in: directory).isEmpty {
-            throw RepositoryError(message: "로컬 데이터베이스 파일이 없습니다. 자동 백업을 선택해 복구하세요.")
+            throw RepositoryError(message: coreText("The local database file is missing. Select an automatic backup to recover it."))
         }
         var handle: OpaquePointer?
         guard sqlite3_open_v2(databaseFile.path, &handle, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK, let handle else {
             if let handle { sqlite3_close(handle) }
-            throw RepositoryError(message: "로컬 저장소를 열 수 없습니다.")
+            throw RepositoryError(message: coreText("Could not open the local storage."))
         }
         database = handle
         self.directory = directory
@@ -67,7 +67,7 @@ public actor NoteRepository {
         """
         guard sqlite3_exec(handle, schema, nil, nil, nil) == SQLITE_OK else {
             sqlite3_close(handle)
-            throw RepositoryError(message: "로컬 저장소 초기화에 실패했습니다.")
+            throw RepositoryError(message: coreText("Could not initialize the local storage."))
         }
         do {
             // Repair legacy FTS rows before any backfill can reuse an orphaned rowid.
@@ -164,28 +164,28 @@ public actor NoteRepository {
                 !$0.isTrashed && ($0.id == documentID || $0.sourceDocumentID == documentID)
             }
             guard matches.count == 1, let target = matches.first else {
-                throw RepositoryError(message: "연결된 문서를 찾지 못했거나 문서 식별자가 중복됩니다.")
+                throw RepositoryError(message: coreText("The linked document could not be found or its identifier is duplicated."))
             }
             return target.id
         }
         if let remoteID = InternalNoteLinks.remoteID(for: destination) {
             let matches = try listNotes().filter { !$0.isTrashed && $0.remoteID == remoteID }
             guard matches.count == 1, let target = matches.first else {
-                throw RepositoryError(message: "NAS 문서를 찾지 못했거나 서버 ID가 중복됩니다.")
+                throw RepositoryError(message: coreText("The NAS document could not be found or its server ID is duplicated."))
             }
             return target.id
         }
-        guard let title = InternalNoteLinks.title(for: destination) else { throw RepositoryError(message: "노트 링크 형식이 올바르지 않습니다.") }
+        guard let title = InternalNoteLinks.title(for: destination) else { throw RepositoryError(message: coreText("The note link format is invalid.")) }
         let recorded = try blobs("SELECT CAST(target_id AS BLOB) FROM note_links WHERE source_id=? AND destination=? AND target_id IS NOT NULL", strings: [sourceID.uuidString, destination])
         if let id = recorded.first.flatMap({ UUID(uuidString: String(decoding: $0, as: UTF8.self)) }) {
             guard let target = try note(id: id), !target.isTrashed else {
-                throw RepositoryError(message: "연결된 노트가 삭제되었거나 휴지통에 있습니다: \(title)")
+                throw RepositoryError(message: coreText("The linked note was deleted or is in the Trash: %@", "\(title)"))
             }
             return id
         }
         let matches = try listNotes().filter { !$0.isTrashed && $0.title.precomposedStringWithCanonicalMapping == title.precomposedStringWithCanonicalMapping }
         guard matches.count == 1, let id = matches.first?.id else {
-            throw RepositoryError(message: matches.isEmpty ? "연결된 노트를 찾지 못했습니다: \(title)" : "'\(title)' 제목의 노트가 여러 개라 연결할 수 없습니다.")
+            throw RepositoryError(message: matches.isEmpty ? coreText("The linked note could not be found: %@", "\(title)") : coreText("The link is ambiguous because multiple notes are named “%@”.", "\(title)"))
         }
         try execute("UPDATE note_links SET target_id=? WHERE source_id=? AND destination=?", values: [.text(id.uuidString), .text(sourceID.uuidString), .text(destination)])
         return id
@@ -280,8 +280,8 @@ public actor NoteRepository {
     }
 
     @discardableResult public func save(_ input: NoteRecord, enqueue: Bool = true) throws -> NoteRecord {
-        guard try blobs("SELECT CAST(local_id AS BLOB) FROM deleted_notes WHERE local_id=?", strings: [input.id.uuidString]).isEmpty else { throw RepositoryError(message: "영구 삭제한 노트는 다시 저장할 수 없습니다.") }
-        if let id = input.remoteID, try isPermanentlyDeleted(remoteID: id) { throw RepositoryError(message: "영구 삭제한 노트는 다시 저장할 수 없습니다.") }
+        guard try blobs("SELECT CAST(local_id AS BLOB) FROM deleted_notes WHERE local_id=?", strings: [input.id.uuidString]).isEmpty else { throw RepositoryError(message: coreText("Permanently deleted notes cannot be saved again.")) }
+        if let id = input.remoteID, try isPermanentlyDeleted(remoteID: id) { throw RepositoryError(message: coreText("Permanently deleted notes cannot be saved again.")) }
         var result = input
         let current = try note(id: input.id)
         if let current {
@@ -325,8 +325,8 @@ public actor NoteRepository {
     }
 
     @discardableResult public func mergeRemote(_ remote: NoteRecord) throws -> NoteRecord {
-        guard let remoteID = remote.remoteID else { throw RepositoryError(message: "서버 노트 ID가 없습니다.") }
-        guard try !isPermanentlyDeleted(remoteID: remoteID) else { throw RepositoryError(message: "영구 삭제된 노트입니다.") }
+        guard let remoteID = remote.remoteID else { throw RepositoryError(message: coreText("The server note ID is missing.")) }
+        guard try !isPermanentlyDeleted(remoteID: remoteID) else { throw RepositoryError(message: coreText("This note was permanently deleted.")) }
         if var local = try note(remoteID: remoteID) {
             if local.serverVersion == remote.serverVersion && local.hasRemoteContent { return local }
             let operation = try pendingOperations().first(where: { $0.noteID == local.id })
@@ -342,7 +342,7 @@ public actor NoteRepository {
                     attachments: remote.attachments
                 )
                 local.syncState = .conflict
-                local.lastError = "공식 앱에서 변경된 내용이 있습니다. 두 버전을 확인하세요."
+                local.lastError = coreText("The official app changed this note. Review both versions.")
                 var conflicted = operation!
                 conflicted.state = .conflict
                 try transaction { try write(local); try writeOperation(conflicted) }
@@ -368,7 +368,7 @@ public actor NoteRepository {
 
     /// Listing metadata never advances the version of a body that has not been downloaded.
     public func observeRemote(_ remote: NoteRecord) throws {
-        guard let remoteID = remote.remoteID else { throw RepositoryError(message: "서버 노트 ID가 없습니다.") }
+        guard let remoteID = remote.remoteID else { throw RepositoryError(message: coreText("The server note ID is missing.")) }
         if try isPermanentlyDeleted(remoteID: remoteID) { return }
         if var local = try note(remoteID: remoteID) {
             local.listedVersion = remote.listedVersion ?? remote.serverVersion
@@ -431,7 +431,7 @@ public actor NoteRepository {
         let duplicate = try note(remoteID: snapshot.remoteID)
         if let duplicate, duplicate.id != current.id {
             guard duplicate.revision == 0, try !pendingOperations().contains(where: { $0.noteID == duplicate.id }) else {
-                throw RepositoryError(message: "같은 NAS 노트의 다른 로컬 편집이 있어 자동으로 합칠 수 없습니다.")
+                throw RepositoryError(message: coreText("Another local edit exists for the same NAS note. The edits cannot be merged automatically."))
             }
         }
         current.remoteID = snapshot.remoteID; current.serverVersion = snapshot.version
@@ -479,7 +479,7 @@ public actor NoteRepository {
         if note.remoteID == nil { note.remoteID = snapshot.remoteID }
         note.conflictHTML = snapshot.html; note.conflictVersion = snapshot.version
         note.conflictSnapshot = RemoteConflictSnapshot(html: snapshot.html, version: snapshot.version, attachments: snapshot.attachments ?? note.attachments)
-        note.syncState = .conflict; note.lastError = "NAS에서 먼저 변경된 내용이 있습니다. 두 버전을 확인하세요."
+        note.syncState = .conflict; note.lastError = coreText("The note changed on the NAS first. Review both versions.")
         operation.state = .conflict; operation.error = note.lastError
         try transaction {
             try write(note); try writeOperation(operation)
@@ -490,10 +490,10 @@ public actor NoteRepository {
 
     public func bindRemoteID(noteID: UUID, remoteID: String) throws {
         guard var current = try note(id: noteID) else { return }
-        guard current.remoteID == nil || current.remoteID == remoteID else { throw RepositoryError(message: "전송 중 NAS 노트 연결이 변경되었습니다.") }
+        guard current.remoteID == nil || current.remoteID == remoteID else { throw RepositoryError(message: coreText("The NAS note association changed during upload.")) }
         if let duplicate = try note(remoteID: remoteID), duplicate.id != current.id {
             guard duplicate.revision == 0, try !pendingOperations().contains(where: { $0.noteID == duplicate.id }) else {
-                throw RepositoryError(message: "같은 NAS 노트에 다른 로컬 편집이 있습니다.")
+                throw RepositoryError(message: coreText("Another local edit exists for the same NAS note."))
             }
             try execute("DELETE FROM notes WHERE id=?", values: [.text(duplicate.id.uuidString)])
         }
@@ -534,9 +534,9 @@ public actor NoteRepository {
 
     /// Called only after NAS confirms absence. Shared cache files survive.
     public func purgeConfirmedTrash(noteID: UUID, remoteID: String) throws -> [NoteAttachment] {
-        guard let note = try note(id: noteID), note.isTrashed, note.remoteID == remoteID else { throw RepositoryError(message: "휴지통 노트만 영구 삭제할 수 있습니다.") }
+        guard let note = try note(id: noteID), note.isTrashed, note.remoteID == remoteID else { throw RepositoryError(message: coreText("Only notes in the Trash can be permanently deleted.")) }
         guard try !pendingOperations().contains(where: { $0.noteID == noteID }),
-              try !syncAttempts().contains(where: { $0.note.id == noteID }) else { throw RepositoryError(message: "전송 대기 중인 변경을 먼저 확인하세요.") }
+              try !syncAttempts().contains(where: { $0.note.id == noteID }) else { throw RepositoryError(message: coreText("Review pending changes first.")) }
         let candidates = note.attachments + (try revisions(noteID: noteID).flatMap { $0.note.attachments })
         try transaction {
             try execute("INSERT OR REPLACE INTO deleted_notes VALUES (?,?)", values: [.text(noteID.uuidString), .text(remoteID)])
@@ -596,7 +596,7 @@ public actor NoteRepository {
     private func linkRows() throws -> [(String, String, String?)] {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, "SELECT source_id,destination,target_id FROM note_links", -1, &statement, nil) == SQLITE_OK else {
-            throw RepositoryError(message: "노트 링크를 읽지 못했습니다.")
+            throw RepositoryError(message: coreText("Could not read note links."))
         }
         defer { sqlite3_finalize(statement) }
         var rows: [(String, String, String?)] = []
@@ -608,7 +608,7 @@ public actor NoteRepository {
             }
             status = sqlite3_step(statement)
         }
-        guard status == SQLITE_DONE else { throw RepositoryError(message: "노트 링크를 읽지 못했습니다.") }
+        guard status == SQLITE_DONE else { throw RepositoryError(message: coreText("Could not read note links.")) }
         return rows
     }
     private static func backfillLinks(database: OpaquePointer) throws {
@@ -617,7 +617,7 @@ public actor NoteRepository {
               sqlite3_prepare_v2(database, "INSERT OR IGNORE INTO note_links(source_id,destination,target_id) VALUES (?,?,NULL)", -1, &insert, nil) == SQLITE_OK,
               sqlite3_prepare_v2(database, "INSERT OR IGNORE INTO note_links_indexed VALUES (?)", -1, &indexed, nil) == SQLITE_OK else {
             if let rows { sqlite3_finalize(rows) }; if let insert { sqlite3_finalize(insert) }; if let indexed { sqlite3_finalize(indexed) }
-            throw RepositoryError(message: "노트 링크 색인을 준비하지 못했습니다.")
+            throw RepositoryError(message: coreText("Could not prepare the note link index."))
         }
         defer { sqlite3_finalize(rows); sqlite3_finalize(insert); sqlite3_finalize(indexed) }
         let decoder = JSONDecoder()
@@ -630,16 +630,16 @@ public actor NoteRepository {
                         sqlite3_reset(insert); sqlite3_clear_bindings(insert)
                         sqlite3_bind_text(insert, 1, note.id.uuidString, -1, transient)
                         sqlite3_bind_text(insert, 2, destination, -1, transient)
-                        guard sqlite3_step(insert) == SQLITE_DONE else { throw RepositoryError(message: "노트 링크 색인을 복구하지 못했습니다.") }
+                        guard sqlite3_step(insert) == SQLITE_DONE else { throw RepositoryError(message: coreText("Could not rebuild the note link index.")) }
                     }
                 }
                 sqlite3_reset(indexed); sqlite3_clear_bindings(indexed)
                 sqlite3_bind_text(indexed, 1, note.id.uuidString, -1, transient)
-                guard sqlite3_step(indexed) == SQLITE_DONE else { throw RepositoryError(message: "노트 링크 기록을 복구하지 못했습니다.") }
+                guard sqlite3_step(indexed) == SQLITE_DONE else { throw RepositoryError(message: coreText("Could not rebuild the note link records.")) }
             }
             status = sqlite3_step(rows)
         }
-        guard status == SQLITE_DONE else { throw RepositoryError(message: "노트 링크 색인을 읽지 못했습니다.") }
+        guard status == SQLITE_DONE else { throw RepositoryError(message: coreText("Could not read the note link index.")) }
     }
     private static func normalized(_ text: String) -> String { text.precomposedStringWithCanonicalMapping.lowercased() }
     private static func searchText(_ note: NoteRecord) -> String {
@@ -652,21 +652,21 @@ public actor NoteRepository {
         guard sqlite3_prepare_v2(database, "SELECT body FROM notes WHERE id NOT IN (SELECT id FROM search_documents)", -1, &rows, nil) == SQLITE_OK,
               sqlite3_prepare_v2(database, "INSERT OR IGNORE INTO search_documents VALUES (?,?)", -1, &insert, nil) == SQLITE_OK else {
             if let rows { sqlite3_finalize(rows) }; if let insert { sqlite3_finalize(insert) }
-            throw RepositoryError(message: "검색 색인을 준비하지 못했습니다.")
+            throw RepositoryError(message: coreText("Could not prepare the search index."))
         }
         defer { sqlite3_finalize(rows); sqlite3_finalize(insert) }
         let decoder = JSONDecoder()
         var status = sqlite3_step(rows)
         while status == SQLITE_ROW {
-            guard let bytes = sqlite3_column_blob(rows, 0) else { throw RepositoryError(message: "검색 본문을 읽지 못했습니다.") }
+            guard let bytes = sqlite3_column_blob(rows, 0) else { throw RepositoryError(message: coreText("Could not read the text for indexing.")) }
             let note = try decoder.decode(NoteRecord.self, from: Data(bytes: bytes, count: Int(sqlite3_column_bytes(rows, 0))))
             sqlite3_reset(insert); sqlite3_clear_bindings(insert)
             sqlite3_bind_text(insert, 1, note.id.uuidString, -1, transient)
             sqlite3_bind_text(insert, 2, searchText(note), -1, transient)
-            guard sqlite3_step(insert) == SQLITE_DONE else { throw RepositoryError(message: "검색 색인을 저장하지 못했습니다.") }
+            guard sqlite3_step(insert) == SQLITE_DONE else { throw RepositoryError(message: coreText("Could not save the search index.")) }
             status = sqlite3_step(rows)
         }
-        guard status == SQLITE_DONE else { throw RepositoryError(message: "검색 색인 복구에 실패했습니다.") }
+        guard status == SQLITE_DONE else { throw RepositoryError(message: coreText("Could not recover the search index.")) }
     }
 
     /// Old INSERT OR REPLACE writes could leave FTS rows after their document rowid changed.
@@ -675,11 +675,11 @@ public actor NoteRepository {
         func count(_ table: String) throws -> Int64 {
             var statement: OpaquePointer?
             guard sqlite3_prepare_v2(database, "SELECT count(*) FROM \(table)", -1, &statement, nil) == SQLITE_OK else {
-                throw RepositoryError(message: "검색 색인 상태를 확인하지 못했습니다.")
+                throw RepositoryError(message: coreText("Could not check the search index status."))
             }
             defer { sqlite3_finalize(statement) }
             guard sqlite3_step(statement) == SQLITE_ROW else {
-                throw RepositoryError(message: "검색 색인 개수를 확인하지 못했습니다.")
+                throw RepositoryError(message: coreText("Could not count search index entries."))
             }
             return sqlite3_column_int64(statement, 0)
         }
@@ -701,11 +701,11 @@ public actor NoteRepository {
             )
             """
             guard sqlite3_prepare_v2(database, mismatch, -1, &statement, nil) == SQLITE_OK else {
-                throw RepositoryError(message: "검색 색인 연결 상태를 검사하지 못했습니다.")
+                throw RepositoryError(message: coreText("Could not inspect the search index associations."))
             }
             defer { sqlite3_finalize(statement) }
             guard sqlite3_step(statement) == SQLITE_ROW else {
-                throw RepositoryError(message: "검색 색인 연결 상태를 확인하지 못했습니다.")
+                throw RepositoryError(message: coreText("Could not verify the search index associations."))
             }
             inconsistent = sqlite3_column_int(statement, 0) != 0
         }
@@ -716,7 +716,7 @@ public actor NoteRepository {
             let result = sqlite3_exec(database, "INSERT INTO search_fts(search_fts) VALUES('integrity-check')", nil, nil, nil)
             if result != SQLITE_OK {
                 guard result & 0xff == SQLITE_CORRUPT else {
-                    throw RepositoryError(message: "전문 검색 내부 색인의 무결성을 확인하지 못했습니다: \(String(cString: sqlite3_errmsg(database)))")
+                    throw RepositoryError(message: coreText("Could not verify the internal full-text search index: %@", "\(String(cString: sqlite3_errmsg(database)))"))
                 }
                 inconsistent = true
             }
@@ -758,7 +758,7 @@ public actor NoteRepository {
         }) {
             guard sqlite3_exec(database, sql, nil, nil, nil) == SQLITE_OK else {
                 _ = sqlite3_exec(database, "ROLLBACK", nil, nil, nil)
-                throw RepositoryError(message: "검색 색인 재구성에 실패했습니다. 원본 데이터와 백업은 유지됩니다.")
+                throw RepositoryError(message: coreText("Could not rebuild the search index. The original data and backup were preserved."))
             }
         }
         return inconsistent
@@ -835,5 +835,5 @@ public actor NoteRepository {
         guard status == SQLITE_DONE else { throw failure() }
         return results
     }
-    private func failure() -> RepositoryError { RepositoryError(message: "로컬 저장 실패 (SQLite \(sqlite3_errcode(database))). 저장 공간과 파일 권한을 확인하세요.") }
+    private func failure() -> RepositoryError { RepositoryError(message: coreText("Local save failed (SQLite %@). Check available disk space and file permissions.", "\(sqlite3_errcode(database))")) }
 }

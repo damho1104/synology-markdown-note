@@ -1,0 +1,17 @@
+{
+  "allSearchResults": "All search results",
+  "bodyIndex": "· Body index {{0}}/{{1}}",
+  "closeSearch": "Close search",
+  "confirmThatCurrentNoteWasSavedThenTry": "Confirm that the current note was saved, then try opening the note again.",
+  "couldNotOpenNoteSelectItAgainRetry": "Could not open the note. Select it again to retry.",
+  "couldNotSearchNoteBodies": "· Could not search note bodies",
+  "noResultsFound": "No results found.",
+  "notebookLink": "Notebook to link from",
+  "results": "Results: {{0}}{{1}}",
+  "search": "Search",
+  "searchesTitlesBodiesAndTagsAllNotesOutside": "Searches titles, bodies, and tags in all notes outside the trash.",
+  "searchForNoteLink": "Search for a note to link",
+  "searchingNoteBodies": "· Searching note bodies…",
+  "searchNoteTitlesBodiesAndTags": "Search note titles, bodies, and tags",
+  "searchQueryForAllNotes": "Search query for all notes"
+}

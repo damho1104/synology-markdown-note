@@ -51,7 +51,7 @@ extension LibraryStore {
         guard let coordinator = syncCoordinator, isConnected, !isPushing, !isRefreshing, !isManagingStacks, deletingNotebookIDs.isEmpty, deletingNoteIDs.isEmpty,
               automaticUploadReady else { return }
         let generation = connectionGeneration, account = accountGeneration, repo = repository
-        isPushing = true; uploadAgain = false; uploadStatus = "NAS에 전송 중…"
+        isPushing = true; uploadAgain = false; uploadStatus = appText("Uploading to NAS…")
         defer {
             if generation == connectionGeneration {
                 isPushing = false
@@ -83,11 +83,11 @@ extension LibraryStore {
             for operation in pending {
                 logEvent(.uploadPending, noteID: operation.noteID, fields: ["state": operation.state.rawValue, "attempts": String(operation.attempts)])
             }
-            uploadStatus = pending.isEmpty ? "NAS 동기화 완료" : pending.contains(where: { $0.state == .conflict || $0.state == .uncertain }) ? "일부 변경 확인 필요" : "\(pending.count)개 전송 대기"
+            uploadStatus = pending.isEmpty ? appText("Synced with NAS") : pending.contains(where: { $0.state == .conflict || $0.state == .uncertain }) ? appText("Some Changes Need Review") : appText("Pending uploads: %@", AppLocalization.number(pending.count))
             if let client, !(await client.isAuthenticated) { requestConnectionRecovery(after: NoteStationError.sessionExpired) }
             else { startOfflineDownload() }
         } catch {
-            uploadStatus = "NAS 전송 확인 필요"; connectionError = error.localizedDescription
+            uploadStatus = appText("NAS Upload Needs Review"); connectionError = error.localizedDescription
             logEvent(.uploadFailed, error: error)
         }
     }
@@ -142,18 +142,18 @@ extension LibraryStore {
             await coordinator.push()
             note = try await repo.note(id: note.id)!
             report.remoteID = note.remoteID
-            guard note.syncState == .synced else { throw RepositoryError(message: note.lastError ?? "생성 확인 실패") }
+            guard note.syncState == .synced else { throw RepositoryError(message: note.lastError ?? appText("Could not verify creation")) }
             report.createVerified = true
             report.lostResponseRecovered = await loss.writeCount == 1
             note.markdown += "\n수정 저장 확인\n"; note.tags = ["SynologyNote 검증"]; note.isFavorite = true
             note = try await repo.save(note)
             await coordinator.push()
             note = try await repo.note(id: note.id)!
-            guard note.syncState == .synced else { throw RepositoryError(message: note.lastError ?? "수정 확인 실패") }
+            guard note.syncState == .synced else { throw RepositoryError(message: note.lastError ?? appText("Could not verify the update")) }
             note.isFavorite = false
             note = try await repo.save(note); await coordinator.push()
             note = try await repo.note(id: note.id)!
-            guard note.syncState == .synced else { throw RepositoryError(message: note.lastError ?? "즐겨찾기 복원 확인 실패") }
+            guard note.syncState == .synced else { throw RepositoryError(message: note.lastError ?? appText("Could not verify that the favorite was restored")) }
             report.updateVerified = true
         } catch { report.failure = error.localizedDescription }
         guard generation == connectionGeneration else { throw NoteStationError.connectionChanged }

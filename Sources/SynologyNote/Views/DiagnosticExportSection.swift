@@ -9,20 +9,20 @@ struct DiagnosticExportSection: View {
     @State private var exportedURL: URL?
 
     var body: some View {
-        Section("내보내기") {
+        Section(appText("Export")) {
             HStack {
-                Button("진단 자료 내보내기…") { export(includeDatabase: true) }
-                Button("로그만 내보내기…") { export(includeDatabase: false) }
+                Button(appText("Export Diagnostics…")) { export(includeDatabase: true) }
+                Button(appText("Export Logs Only…")) { export(includeDatabase: false) }
                 if exporting { ProgressView().controlSize(.small) }
             }
             .disabled(exporting)
-            Text("진단 자료에는 DB 상태·무결성 검사 결과와 현재·이전 로그가 포함됩니다. 로그만 내보낼 수도 있습니다.")
+            Text(appText("Diagnostics include database status, integrity check results, and current and previous logs. You can also export just the logs."))
                 .font(.caption).foregroundStyle(.secondary)
-            Text("노트 제목·본문·수정 이력 내용·첨부파일·로그인 정보·원본 DB는 제외합니다. 계정·노트·메모장 식별자는 익명화하며, 작업 시각과 오류 코드는 포함합니다.")
+            Text(appText("Note titles, bodies, revision content, attachments, sign-in details, and the original database are excluded. Account, note, and notebook identifiers are anonymized. Timestamps and error codes are included."))
                 .font(.caption).foregroundStyle(.secondary)
             if let message { Text(message).font(.caption).textSelection(.enabled) }
             if let exportedURL {
-                Button("내보낸 파일 보기") { NSWorkspace.shared.activateFileViewerSelecting([exportedURL]) }
+                Button(appText("Show Exported File")) { NSWorkspace.shared.activateFileViewerSelecting([exportedURL]) }
             }
         }
     }
@@ -33,8 +33,8 @@ struct DiagnosticExportSection: View {
         panel.canCreateDirectories = true
         panel.nameFieldStringValue = includeDatabase ? "SynologyNote-diagnostics.zip" : "SynologyNote-logs.zip"
         panel.message = includeDatabase
-            ? "개인정보를 제외한 DB 상태 보고서와 익명화한 로그를 저장합니다."
-            : "현재 및 이전 로그를 익명화하여 저장합니다."
+            ? appText("Save a database status report without personal data and anonymized logs.")
+            : appText("Save anonymized current and previous logs.")
         exporting = true; message = nil; exportedURL = nil
         panel.begin { response in
             Task { @MainActor in
@@ -43,9 +43,9 @@ struct DiagnosticExportSection: View {
                 do {
                     try await library.exportDiagnostics(to: url, includeDatabase: includeDatabase)
                     exportedURL = url
-                    message = "진단 ZIP을 저장했습니다."
+                    message = appText("The diagnostic ZIP was saved.")
                 } catch {
-                    message = "내보내지 못했습니다. 저장 위치와 여유 공간을 확인한 뒤 다시 시도하세요."
+                    message = appText("Could not export. Check the destination and available disk space, then try again.")
                 }
             }
         }

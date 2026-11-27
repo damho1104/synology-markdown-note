@@ -6,8 +6,8 @@ beforeEach(() => localStorage.clear())
 afterEach(() => vi.restoreAllMocks())
 
 it('uses native defaults for missing, malformed and unsupported stored versions', () => {
-  expect(loadPreferences()).toEqual({ appearance: 'system', editorFontSize: 14, lineNumbers: false,
-    lineWrapping: false, mermaidStyle: 'handDrawn', mermaidTheme: 'system', listRefreshMinutes: 5 })
+  expect(loadPreferences()).toEqual({ appearance: 'system', editorFontSize: 14, language: '',
+    lineNumbers: false, lineWrapping: false, mermaidStyle: 'handDrawn', mermaidTheme: 'system', listRefreshMinutes: 5 })
   for (const value of ['{bad', 'null', '[]', '{"version":2,"preferences":{"appearance":"dark"}}']) {
     localStorage.setItem(PREFERENCES_KEY, value)
     expect(loadPreferences()).toEqual(DEFAULT_PREFERENCES)
@@ -15,7 +15,7 @@ it('uses native defaults for missing, malformed and unsupported stored versions'
 })
 
 it('validates each field and restricts font sizes to integer values from 11 through 22', () => {
-  expect(validatePreferences({ appearance: 'unknown', editorFontSize: '18', lineNumbers: 1,
+  expect(validatePreferences({ appearance: 'unknown', editorFontSize: '18', language: 'klingon', lineNumbers: 1,
     lineWrapping: 'true', mermaidStyle: 'script', mermaidTheme: 'unknown', listRefreshMinutes: '2' })).toEqual(DEFAULT_PREFERENCES)
   expect(validatePreferences({ editorFontSize: 80 }).editorFontSize).toBe(22)
   expect(validatePreferences({ editorFontSize: 1 }).editorFontSize).toBe(11)

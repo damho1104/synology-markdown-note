@@ -19,6 +19,7 @@ void translator.init({
 });
 
 let language = fallbackLanguage;
+let defaultLanguage = fallbackLanguage;
 
 export function setLanguage(value: Language): void {
   language = value;
@@ -27,6 +28,17 @@ export function setLanguage(value: Language): void {
 
 export function currentLanguage(): Language {
   return language;
+}
+
+// The startup flow resolves the server default once; an empty preference falls back to it.
+export function setDefaultLanguage(value: Language): void {
+  defaultLanguage = value;
+}
+
+export function languageForPreference(preference: string, preferred: readonly string[]): Language {
+  if (preference === "auto") return browserLanguage(preferred);
+  if (isSupportedLanguage(preference)) return preference;
+  return defaultLanguage;
 }
 
 const formats = new Map<string, Intl.NumberFormat>();

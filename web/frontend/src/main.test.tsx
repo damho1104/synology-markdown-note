@@ -5,9 +5,23 @@ import userEvent from "@testing-library/user-event";
 
 beforeEach(() => {
   vi.resetModules();
+  localStorage.clear();
   document.documentElement.lang = "en";
   document.body.innerHTML = '<div id="root"></div>';
   vi.spyOn(navigator, "languages", "get").mockReturnValue(["ko-KR"]);
+});
+
+it.each([
+  ["en", ["ko-KR"], "Sign in to NAS", "en"],
+  ["auto", ["en-US", "ko-KR"], "Sign in to NAS", "en"],
+  ["unknown", ["en-US"], "NAS 계정 로그인", "ko"],
+] as const)("applies the browser's saved %s override over the server default on startup", async (language, preferred, heading, expected) => {
+  vi.spyOn(navigator, "languages", "get").mockReturnValue(preferred);
+  localStorage.setItem("synonote:web-preferences", JSON.stringify({version: 1, preferences: {language}}));
+  mockStartup(async () => Response.json({default_language: "ko"}));
+  await import("./main");
+  await screen.findByRole("heading", {name: heading});
+  expect(document.documentElement.lang).toBe(expected);
 });
 
 afterEach(() => {

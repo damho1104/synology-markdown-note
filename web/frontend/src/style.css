@@ -816,32 +816,25 @@ input {
   padding: 24px;
   margin-block: auto;
 }
-.nas-connection-footer {
+.nas-account-status {
   display: flex;
-  flex: none;
-  justify-content: flex-end;
   align-items: center;
-  width: 100%;
-  min-height: 26px;
-  padding: 3px 12px;
-  border-top: 1px solid var(--line, #d9d9d9);
-  background: var(--toolbar, #f7f7f7);
-  color: var(--muted, #5b5b5b);
-  font-size: 11px;
+  gap: 5px;
 }
-.nas-connection-footer > span {
+.nas-connection-status {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  flex: none;
+  gap: 3px;
 }
-.nas-connection-footer > span::after {
+.nas-connection-status::after {
   content: "";
   width: 8px;
   height: 8px;
   border-radius: 50%;
   background: var(--nas-disconnected, #c73340);
 }
-.nas-connection-footer > span[data-connected="true"]::after {
+.nas-connection-status[data-connected="true"]::after {
   background: var(--nas-connected, #168249);
 }
 .auth-brand {

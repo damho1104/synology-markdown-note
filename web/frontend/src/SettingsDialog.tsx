@@ -1,7 +1,18 @@
 import { formatNumber, t } from "./i18n";
 import { useId, useLayoutEffect, useRef, useState } from 'react'
 import { SlidersHorizontal, X } from 'lucide-react'
+import { supportedLanguages } from './catalogs'
 import { DEFAULT_PREFERENCES, MIN_LIST_REFRESH_MINUTES, normalizeListRefreshMinutes, type PreviewPreferences } from './preferences'
+
+const languageNames = new Map<string, string>()
+function languageName(language: string): string {
+  let name = languageNames.get(language)
+  if (!name) {
+    name = new Intl.DisplayNames([language], { type: 'language' }).of(language) ?? language
+    languageNames.set(language, name)
+  }
+  return name
+}
 
 export function SettingsDialog({ preferences, onChange, onClose }: {
   preferences: PreviewPreferences
@@ -94,6 +105,12 @@ export function SettingsDialog({ preferences, onChange, onClose }: {
             <label className="settings-row">{t("settings.appearance")}<select aria-label={t("settings.appearance")} value={preferences.appearance}
               onChange={event => update('appearance', event.target.value as PreviewPreferences['appearance'])}>
               <option value="system">{t("settings.systemSetting")}</option><option value="light">{t("settings.light")}</option><option value="dark">{t("settings.dark")}</option>
+            </select></label>
+            <label className="settings-row">{t("settings.displayLanguage")}<select aria-label={t("settings.displayLanguage")} value={preferences.language}
+              onChange={event => update('language', event.target.value)}>
+              <option value="">{t("settings.serverDefaultLanguage")}</option>
+              <option value="auto">{t("settings.browserLanguage")}</option>
+              {supportedLanguages.map(language => <option key={language} value={language}>{languageName(language)}</option>)}
             </select></label>
             <label className="settings-row settings-toggle">{t("settings.showLineNumbers")}<input type="checkbox" checked={preferences.lineNumbers}
               onChange={event => update('lineNumbers', event.target.checked)} /></label>

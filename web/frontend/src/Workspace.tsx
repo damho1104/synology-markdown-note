@@ -1,4 +1,4 @@
-import { currentLanguage, t, translate, UiError, type Message } from "./i18n";
+import { currentLanguage, languageForPreference, setLanguage, t, translate, UiError, type Message } from "./i18n";
 import { supportedLanguages } from "./catalogs";
 import { editorPhrases } from "./editorPhrases";
 import { NasConnectionStatus } from "./NasConnectionStatus";
@@ -75,7 +75,7 @@ import {
 import { annotateFormattedDraft, editFormattedDraft, escapeText, formattedSelection } from "./formattedDraft";
 import { NoteLinkPicker } from "./NoteLinkPicker";
 import { SettingsDialog } from "./SettingsDialog";
-import { loadPreferences, savePreferences } from "./preferences";
+import { loadPreferences, savePreferences, type PreviewPreferences } from "./preferences";
 import CodeMirror, { EditorView, type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { Transaction } from "@codemirror/state";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
@@ -481,6 +481,11 @@ export function Workspace({
   const [inspector, setInspector] = useState(false);
   const [revisionNoteId, setRevisionNoteId] = useState<string | null>(null);
   const [preferences, setPreferences] = useState(loadPreferences);
+  function changePreferences(next: PreviewPreferences) {
+    // Apply the display language before re-rendering so the new catalog is used immediately.
+    if (next.language !== preferences.language) setLanguage(languageForPreference(next.language, navigator.languages));
+    setPreferences(next);
+  }
   const [showSettings, setShowSettings] = useState(false);
   const [systemDark, setSystemDark] = useState(
     () => window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false,
@@ -491,7 +496,7 @@ export function Workspace({
     editorPhrases(),
     EditorView.contentAttributes.of({"aria-label": t("workspace.markdownBody")}),
     ...(preferences.lineWrapping ? [EditorView.lineWrapping] : []),
-  ], [preferences.lineWrapping]);
+  ], [preferences.lineWrapping, currentLanguage()]);
   const attachmentInput = useRef<HTMLInputElement>(null);
   const [attachmentError, setAttachmentError] = useState("");
   const composingNow = useRef(false);
@@ -2408,7 +2413,10 @@ export function Workspace({
           <div className="account-footer">
             <div>
               <b>{session.username}</b>
-              <p>{nasConnected ? t("workspace.nasConnectedAvailable") : t("common.disconnectedNas")}</p>
+              <p className="nas-account-status">
+                <NasConnectionStatus connected={nasConnected} />
+                <span>{nasConnected ? t("workspace.nasConnectedAvailable") : t("common.disconnectedNas")}</span>
+              </p>
             </div>
             <button
               className="icon-button"
@@ -3042,7 +3050,6 @@ export function Workspace({
           </aside>
         )}
       </div>
-      <NasConnectionStatus connected={nasConnected} />
       {contextMenu && (
         <div
           className="native-context-menu"
@@ -3139,7 +3146,7 @@ export function Workspace({
       {showGlobalSearch && <GlobalSearchDialog notes={notes} notebooks={notebooks} loading={listLoading} searchBody={searchNoteBody}
         onSelect={(id)=>navigate({shelf:null,notebook:null,note:id,compose:false},false,'')}
         onClose={()=>setShowGlobalSearch(false)} />}
-      {showSettings && <SettingsDialog preferences={preferences} onChange={setPreferences} onClose={() => setShowSettings(false)} />}
+      {showSettings && <SettingsDialog preferences={preferences} onChange={changePreferences} onClose={() => setShowSettings(false)} />}
       {detail && revisionNoteId === detail.id && <NoteRevisionDialog key={detail.id}
         noteId={detail.id} currentVersion={detail.version} dark={dark}
         canRestore={!saving && !dirty && !hasStagedUploads && !draft?.review_required &&

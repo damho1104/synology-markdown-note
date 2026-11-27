@@ -51,10 +51,11 @@ extension LibraryStore {
         guard let coordinator = syncCoordinator, isConnected, !isPushing, !isRefreshing, !isManagingStacks, deletingNotebookIDs.isEmpty, deletingNoteIDs.isEmpty,
               automaticUploadReady else { return }
         let generation = connectionGeneration, account = accountGeneration, repo = repository
-        isPushing = true; uploadAgain = false; uploadStatus = appText("Uploading to NAS…")
+        isPushing = true; uploadAgain = false
         defer {
             if generation == connectionGeneration {
                 isPushing = false
+                uploadProgress = nil
                 if uploadAgain { scheduleUpload() }
             }
         }
@@ -63,13 +64,23 @@ extension LibraryStore {
         do {
             let queued = try await repo.pendingOperations()
             if !queued.isEmpty { logEvent(.uploadStarted, fields: ["count": String(queued.count)]) }
-            try await migrateLegacyNotebooks()
+            let awaitingNotebookConfirmation: Bool
+            do {
+                try await migrateLegacyNotebooks()
+                awaitingNotebookConfirmation = false
+            } catch let error as NoteStationError {
+                guard case .notebookWriteUncertain = error else { throw error }
+                awaitingNotebookConfirmation = true
+                logEvent(.uploadFailed, error: error)
+            }
             guard generation == connectionGeneration, account == accountGeneration else { return }
             var eligible: Set<UUID> = []
             for operation in try await repo.pendingOperations() {
                 if let note = try await repo.note(id: operation.noteID), isNASNotebook(note.notebookID) { eligible.insert(note.id) }
             }
-            await coordinator.push(noteIDs: eligible)
+            await coordinator.push(noteIDs: eligible) { [weak self] processed, total in
+                await self?.showUploadProgress(processed, total: total, generation: generation)
+            }
             guard generation == connectionGeneration, account == accountGeneration else { return }
             for session in Array(sessions.values) {
                 let editing = session.editGeneration, saving = session.savedGeneration
@@ -78,18 +89,40 @@ extension LibraryStore {
                 integrateUploadedRecord(saved, into: session, expectedEditGeneration: editing, expectedSavedGeneration: saving)
             }
             try await reload()
-            let pending = try await repo.pendingOperations().filter { eligible.contains($0.noteID) }
+            let remaining = try await repo.pendingOperations()
+            guard generation == connectionGeneration, account == accountGeneration else { return }
+            pendingUploadCount = remaining.count
+            let pending = remaining.filter { eligible.contains($0.noteID) }
             if !eligible.isEmpty { logEvent(.uploadCompleted, fields: ["count": String(eligible.count), "pending": String(pending.count)]) }
             for operation in pending {
                 logEvent(.uploadPending, noteID: operation.noteID, fields: ["state": operation.state.rawValue, "attempts": String(operation.attempts)])
             }
-            uploadStatus = pending.isEmpty ? appText("Synced with NAS") : pending.contains(where: { $0.state == .conflict || $0.state == .uncertain }) ? appText("Some Changes Need Review") : appText("Pending uploads: %@", AppLocalization.number(pending.count))
+            if pending.contains(where: { $0.state == .conflict }) {
+                uploadStatus = appText("Some Changes Need Review")
+            } else if !pending.isEmpty {
+                uploadStatus = pending.contains { $0.state == .uncertain } ? appText("Verifying NAS Save") : appText("Waiting to Upload")
+            } else if awaitingNotebookConfirmation {
+                uploadStatus = appText("Local notebook sync is pending. The app checks automatically.")
+            } else {
+                uploadStatus = appText("Synced with NAS")
+            }
             if let client, !(await client.isAuthenticated) { requestConnectionRecovery(after: NoteStationError.sessionExpired) }
             else { startOfflineDownload() }
         } catch {
-            uploadStatus = appText("NAS Upload Needs Review"); connectionError = error.localizedDescription
+            uploadStatus = appText("Waiting to Upload")
             logEvent(.uploadFailed, error: error)
         }
+    }
+
+    private func showUploadProgress(_ processed: Int, total: Int, generation: Int) {
+        guard generation == connectionGeneration else { return }
+        uploadProgress = appText("Uploading %@/%@", AppLocalization.number(processed), AppLocalization.number(total))
+    }
+
+    var uploadQueueStatus: String? {
+        if let uploadProgress { return uploadProgress }
+        guard pendingUploadCount > 0 else { return nil }
+        return appText("Pending uploads: %@", AppLocalization.number(pendingUploadCount))
     }
 
     func integrateUploadedRecord(_ saved: NoteRecord, into session: EditorSession, expectedEditGeneration: Int, expectedSavedGeneration: Int) {

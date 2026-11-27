@@ -170,7 +170,7 @@ extension LibraryStore {
         isRefreshing = false
         trustedDeviceRemembered = false
         refreshTask?.cancel()
-        uploadTask?.cancel(); uploadLoop?.cancel(); syncCoordinator = nil; uploadTransport = nil; isPushing = false
+        uploadTask?.cancel(); uploadLoop?.cancel(); syncCoordinator = nil; uploadTransport = nil; isPushing = false; uploadProgress = nil
         let previous = client
         client = nil; isConnected = false; hasVerifiedNASLists = false; connectionStatus = appText("Disconnected from NAS")
         await previous?.disconnect()
@@ -326,6 +326,7 @@ extension LibraryStore {
             let mergeGeneration = session.editGeneration
             let merged = try await repo.mergeRemote(incoming)
             guard account == accountGeneration, connection == connectionGeneration, self.client === client, session.workspaceGeneration == account else { return }
+            session.isWaitingForMarkdownSource = false
             if session.editGeneration == mergeGeneration {
                 session.note = merged
             } else {
@@ -344,6 +345,9 @@ extension LibraryStore {
                 await save(session)
             }
             try await reload()
+        } catch RemoteContentPending.markdownPublication {
+            guard account == accountGeneration, connection == connectionGeneration, self.client === client else { return }
+            session.isWaitingForMarkdownSource = true
         } catch {
             guard account == accountGeneration, connection == connectionGeneration, self.client === client else { return }
             session.saveError = nil

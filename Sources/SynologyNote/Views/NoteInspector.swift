@@ -265,7 +265,7 @@ struct NoteInspector: View {
                     }
                 }
             }
-            if let error = AppLocalization.syncErrorMessage(session.note.lastError) {
+            if let error = AppLocalization.syncAttentionMessage(session.note.lastError) {
                 InspectorSection(appText("NAS Status")) { Text(error).foregroundStyle(.orange).font(.caption) }
             }
         }

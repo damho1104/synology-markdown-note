@@ -34,6 +34,30 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); setLan
 function mount(onLogout = async () => {}, workspaceStatus: Status = status) { return render(<Workspace session={session} status={workspaceStatus} onLogout={onLogout} onSessionExpired={() => {}} />) }
 async function edit() { await screen.findByLabelText('노트 제목'); const split = screen.queryByRole('button', {name: '분할'}); if (split) fireEvent.click(split); fireEvent.change(screen.getByLabelText('노트 제목'), {target: {value: '수정 제목'}}) }
 
+it("waits for a Markdown note being published by another client and opens it automatically", async () => {
+  const staged = {...note, editable: false, html: "<p>Temporary HTML from NAS</p>",
+    read_only_reason: "WRITE_IN_PROGRESS", write_in_progress: true}
+  const published = {...note, version: "v2", markdown: "# Published Markdown", html: "<h1>Published Markdown</h1>"}
+  let ready = false
+  vi.spyOn(document, "hidden", "get").mockReturnValue(false)
+  const fetcher = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation((path, init) => path === "/api/notes/note1"
+    ? Promise.resolve(Response.json(ready ? published : staged))
+    : fetcher(path, init))
+  mount()
+  await screen.findByRole("heading", {name: "마크다운 동기화 대기 중"})
+  expect(screen.queryByText("Temporary HTML from NAS")).toBeNull()
+  expect(screen.queryByRole("alert")).toBeNull()
+
+  ready = true
+  await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([path, init]) =>
+    path === "/api/notes/note1" && new Headers(init?.headers).has("X-Synonote-Background"))).toBe(true), {timeout: 6_500})
+  await waitFor(() => expect(screen.queryByRole("heading", {name: "마크다운 동기화 대기 중"})).toBeNull())
+  fireEvent.click(screen.getByRole("button", {name: "분할"}))
+  expect(document.querySelector(".cm-content")?.textContent).toBe(published.markdown)
+  expect(writes).toEqual([])
+}, 8_000)
+
 it('updates the NAS indicator after a failed list refresh and successful retry', async () => {
   let unavailable = false
   const fetcher = vi.mocked(fetch).getMockImplementation()!

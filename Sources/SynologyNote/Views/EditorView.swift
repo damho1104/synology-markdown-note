@@ -134,7 +134,7 @@ struct EditorView: View {
                     Text(session.note.tags.map { "#" + $0 }.joined(separator: "  ")).lineLimit(1).truncationMode(.tail)
                 }
                 Spacer(minLength: 8)
-                if session.note.mode == .original && session.note.hasRemoteContent {
+                if session.note.mode == .original && session.note.hasRemoteContent && !session.isWaitingForMarkdownSource {
                     Button(appText("Edit as Markdown")) { Task { await library.convert(session) } }.buttonStyle(.bordered).controlSize(.small).fixedSize()
                 }
             }.font(.caption).foregroundStyle(.secondary)
@@ -144,6 +144,9 @@ struct EditorView: View {
     @ViewBuilder private var content: some View {
         if session.note.mode == .locked {
             ContentUnavailableView(appText("Encrypted Note"), systemImage: "lock", description: Text(appText("Editing encrypted notes is not supported yet. Open the note in the official app.")))
+        } else if session.note.mode == .original && session.isWaitingForMarkdownSource {
+            ContentUnavailableView(appText("Waiting for Markdown to sync"), systemImage: "arrow.triangle.2.circlepath",
+                description: Text(appText("The app will open the note when its Markdown source is available on the NAS.")))
         } else if session.note.mode == .original && !session.note.hasRemoteContent {
             VStack(spacing: 16) {
                 ContentUnavailableView(session.isDownloading ? appText("Downloading Note Body from NAS…") : appText("Note Body Needs Downloading"),
@@ -199,17 +202,20 @@ struct EditorView: View {
             Spacer()
             if session.note.mode == .markdown {
                 Text(appText("Characters: %@", AppLocalization.number(session.note.markdown.count))).monospacedDigit().foregroundStyle(.secondary).fixedSize()
-            } else { Text(appText("Formatted Document")).foregroundStyle(.secondary).fixedSize() }
+            } else if session.note.hasRemoteContent && !session.isWaitingForMarkdownSource {
+                Text(appText("Formatted Document")).foregroundStyle(.secondary).fixedSize()
+            }
             Divider().frame(height: 12)
             Label(nasStatus, systemImage: session.note.syncState == .synced ? "checkmark.icloud" : "externaldrive")
-                .lineLimit(1).help(AppLocalization.syncErrorMessage(session.note.lastError) ?? library.uploadStatus)
-            if session.note.syncState == .failed {
-                Button(appText("Verify")) { Task { await library.pushPendingUploads() } }.disabled(library.isPushing || !library.isConnected)
+                .lineLimit(1).help(AppLocalization.syncAttentionMessage(session.note.lastError) ?? library.uploadStatus)
+            if let queueStatus = library.uploadQueueStatus {
+                Text(queueStatus).monospacedDigit().fixedSize()
             }
         }.font(.system(size: 11)).imageScale(.small).foregroundStyle(.secondary)
             .padding(.horizontal, 20).frame(minHeight: 34)
     }
     private var nasStatus: String {
+        if session.isWaitingForMarkdownSource { return appText("Waiting for Markdown to sync") }
         switch session.note.syncState {
         case .synced: return appText("Synced with NAS")
         case .conflict: return appText("Compare Changes")

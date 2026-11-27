@@ -40,6 +40,8 @@ final class LibraryStore {
     var deletingNotebookIDs: Set<String> = []
     var isManagingStacks = false
     var deletingNoteIDs: Set<UUID> = []
+    var pendingUploadCount = 0
+    var uploadProgress: String?
     var uploadStatus = appText("Automatic Sync After NAS Connection")
     @ObservationIgnored var uploadTask: Task<Void, Never>?
     @ObservationIgnored var uploadLoop: Task<Void, Never>?
@@ -148,6 +150,7 @@ final class LibraryStore {
         let changeVersion = localChangeVersion
         let rows = try await repo.listNotes()
         let books = try await repo.notebooks()
+        let pendingCount = try await repo.pendingOperations().count
         let searches = try await repo.savedSearches()
         let graph = try await repo.noteGraph(summaries: rows)
         var matches: [UUID: Set<UUID>] = [:]
@@ -155,6 +158,7 @@ final class LibraryStore {
             matches[search.id] = try await repo.searchNoteIDs(search.query)
         }
         guard generation == accountGeneration, changeVersion == localChangeVersion, !Task.isCancelled else { return }
+        pendingUploadCount = pendingCount
         summaries = rows; notebooks = books; savedSearches = searches; savedSearchMatches = matches; noteGraph = graph
         // HTML body downloads can update the index without changing a summary.
         searchIndexRevision &+= 1
@@ -303,6 +307,7 @@ final class LibraryStore {
             await fetchContent(for: session)
         }
         guard session.workspaceGeneration == accountGeneration, sessions[session.id] === session else { return nil }
+        if session.note.mode == .original && session.isWaitingForMarkdownSource { return nil }
         guard session.note.remoteID == nil || session.note.hasRemoteContent || session.note.mode == .locked else {
             errorMessage = AppLocalization.syncErrorMessage(session.note.lastError) ?? appText("Download the note body from the NAS before editing.")
             return nil

@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Testing
 @testable import NoteCore
@@ -121,6 +122,105 @@ import Testing
         #expect(try await store.attachments.verifiedData(for: uploaded.attachments[0]) == Data("attachment".utf8))
         await store.pushPendingUploads()
         #expect(f.server.counts().creates == 1)
+        #expect(try await store.repository.pendingOperations().isEmpty)
+    }
+
+    @Test func unverifiedLegacyNotebookDoesNotBlockNASNoteAndAttachmentUpload() async throws {
+        let fixture = try await ProductionFixture.make()
+        defer { fixture.close() }
+        let store = try makeStore(fixture)
+        defer { store.uploadLoop?.cancel(); store.uploadTask?.cancel(); store.offlineTask?.cancel() }
+
+        let localID = "local"
+        let key = SHA256.hash(data: Data(localID.utf8)).map { String(format: "%02x", $0) }.joined()
+        let journal = store.root.appendingPathComponent(store.profile.storageKey)
+            .appendingPathComponent("notebook-migration").appendingPathComponent(key)
+        try FileManager.default.createDirectory(at: journal, withIntermediateDirectories: true)
+        let receipt = journal.appendingPathComponent("notebook-create-pending.json")
+        let receiptData = try JSONEncoder().encode(["name": "Old title", "objectID": "book"])
+        try receiptData.write(to: receipt)
+        let local = try await store.repository.save(NoteRecord(notebookID: localID, markdown: "Local draft"), enqueue: false)
+        let asset = try await store.attachments.importData(Data("attachment".utf8), name: "test.txt")
+        var note = NoteRecord(notebookID: "book", markdown: "[File](\(asset.reference))")
+        note.attachments = [asset]
+        let pending = try await store.repository.save(note)
+
+        await store.pushPendingUploads()
+
+        let uploaded = try #require(try await store.repository.note(id: pending.id))
+        #expect(uploaded.syncState == .synced)
+        #expect(uploaded.attachments.first?.remoteID != nil)
+        #expect(try await store.repository.note(id: local.id)?.notebookID == localID)
+        #expect(try Data(contentsOf: receipt) == receiptData)
+        #expect(store.connectionError == nil)
+        #expect(store.uploadStatus == appText("Local notebook sync is pending. The app checks automatically."))
+    }
+
+    @Test func uploadProgressCountsReadyNotesAndKeepsDeferredNotesQueued() async throws {
+        actor Progress {
+            var updates: [String] = []
+            func append(_ processed: Int, _ total: Int) {
+                updates.append("\(processed)/\(total)")
+            }
+        }
+        let fixture = try await ProductionFixture.make()
+        defer { fixture.close() }
+        let store = try makeStore(fixture)
+        let deferred = try await store.repository.save(NoteRecord(notebookID: "book", markdown: "Deferred"))
+        try await store.repository.fail(noteID: deferred.id, message: "Unverified", uncertain: true)
+        _ = try await store.repository.save(NoteRecord(notebookID: "book", markdown: "First"))
+        _ = try await store.repository.save(NoteRecord(notebookID: "book", markdown: "Second"))
+        let progress = Progress()
+        let coordinator = try #require(store.syncCoordinator)
+
+        await coordinator.push { processed, total in
+            await progress.append(processed, total)
+        }
+        try await store.reload()
+
+        #expect(await progress.updates == ["0/2", "1/2", "2/2"])
+        #expect(store.pendingUploadCount == 1)
+        #expect(store.uploadQueueStatus == appText("Pending uploads: %@", AppLocalization.number(1)))
+        #expect(try await store.repository.pendingOperations().map(\.noteID) == [deferred.id])
+    }
+
+    @Test func secondDeviceWaitsForNewMarkdownSourceThenOpensItOnRefresh() async throws {
+        let fixture = try await ProductionFixture.make(loseCreate: true)
+        defer { fixture.close() }
+        let markdown = "# New note from the first device"
+        let draft = try await fixture.repo.save(NoteRecord(title: "New note", notebookID: "book", markdown: markdown))
+        await fixture.coordinator.push()
+        let staged = try #require(try await fixture.client.notes().first)
+        let secondClient = NoteStationClient(baseURL: URL(string: "https://\(fixture.server.host)")!,
+                                             session: fixture.server.session, allowsValidatedWrites: true)
+        try await secondClient.connect(username: "test", password: "test")
+        let profile = ConnectionProfile(server: "https://\(fixture.server.host)", username: "test", keepOffline: false)
+        let store = try LibraryStore(root: fixture.root.appendingPathComponent("second-device"), profile: profile)
+        store.client = secondClient
+        store.isConnected = true
+        try await store.repository.observeRemote(LibraryStore.record(from: staged))
+        let cached = try #require(try await store.repository.note(remoteID: staged.id))
+        let session = try #require(await store.session(for: cached.id))
+        await store.fetchContent(for: session)
+
+        #expect(!session.note.hasRemoteContent)
+        #expect(session.isWaitingForMarkdownSource)
+        #expect(store.connectionError == nil)
+
+        let remote = try await fixture.client.fetch(noteID: staged.id)
+        let html = "<h1>New note from the first device</h1>"
+        let source = SourceEnvelope(documentID: draft.id, markdown: markdown, blocks: [], html: html).encoded()
+        _ = try await fixture.client.applyWrite(
+            NoteStationWrite(objectID: staged.id, baseVersion: remote.summary.version, html: html),
+            uploads: [NoteStationUpload(name: "synology-note-source-\(draft.id).md", mimeType: "text/markdown", bytes: source, reference: nil)],
+            deleting: remote.attachments.map(\.id)
+        )
+        await store.refreshFromServer()
+
+        #expect(session.note.hasRemoteContent)
+        #expect(!session.isWaitingForMarkdownSource)
+        #expect(session.note.mode == .markdown)
+        #expect(session.note.markdown == markdown)
         #expect(try await store.repository.pendingOperations().isEmpty)
     }
 

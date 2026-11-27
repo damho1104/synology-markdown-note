@@ -371,6 +371,15 @@ function draftStore(key: string, draft: Draft): void {
   }
 }
 
+function draftFromNote(note: NoteDetail, key: string): Draft {
+  return {
+    key, title: note.title, html: note.html, notebook_id: note.notebook_id,
+    version: note.version, markdown: note.markdown,
+    text_changes: note.html_text_preview ? [] : undefined,
+    text_layout: note.html_text_layout, text_blocks: note.html_text_blocks,
+  };
+}
+
 function writeInProgress(note: NoteDetail | null): boolean {
   return !!(note?.write_in_progress || note?.read_only_reason === "WRITE_IN_PROGRESS");
 }
@@ -572,7 +581,11 @@ export function Workspace({
   const referencedUploads = useMemo(() => uploads ? uploadReferences(draft?.markdown) : new Set<string>(),
     [uploads, draft?.markdown]);
   const hasStagedUploads = !!uploads?.items.some(item => item.phase !== "committed");
-  const noteActionsDisabled = composing || !!saveFailure || !!draft?.resume_paused || reviewingUploads || hasStagedUploads;
+  const waitingForMarkdown = writeInProgress(detail) && !reviewingUploads;
+  const waitingForMarkdownBody = waitingForMarkdown && detail?.markdown === undefined;
+  const pendingMarkdownNote = waitingForMarkdown && !dirty && !saving && !hasStagedUploads && detail?.id === route.note
+    ? detail?.id : undefined;
+  const noteActionsDisabled = waitingForMarkdown || composing || !!saveFailure || !!draft?.resume_paused || reviewingUploads || hasStagedUploads;
   const currentHistory = detail && formatHistory?.id === detail.id ? formatHistory : undefined;
   const bindings = original?.attachment_bindings;
   const attachmentsBlocked = !!uploads?.items.some(item => uploadBlocksSave(item, referencedUploads, route.compose, bindings));
@@ -1093,16 +1106,7 @@ export function Workspace({
           setMessage(t("workspace.restoredDraftSavedThisTab"));
         } else {
           setEditing(note.editable || !!note.html_text_preview);
-          setDraft({
-            key: activeKey,
-            title: note.title,
-            html: note.html,
-            notebook_id: note.notebook_id,
-            version: note.version,
-            markdown: note.markdown,
-            text_changes: note.html_text_preview ? [] : undefined,
-            text_layout:note.html_text_layout, text_blocks:note.html_text_blocks,
-          });
+          setDraft(draftFromNote(note, activeKey));
         }
       })
       .catch((error) => {
@@ -1123,6 +1127,49 @@ export function Workspace({
     revision,
     handleError,
   ]);
+
+  const acceptPublishedMarkdown = useEffectEvent((note: NoteDetail) => {
+    if (!activeKey || note.id !== pendingMarkdownNote || writeInFlight.current || writeInProgress(note)) return false;
+    setDetail(note);
+    setDraft(draftFromNote(note, activeKey));
+    setEditing(note.editable || !!note.html_text_preview);
+    return true;
+  });
+
+  useEffect(() => {
+    if (!pendingMarkdownNote) return;
+    const path = `/api/notes/${encodeURIComponent(pendingMarkdownNote)}`;
+    let timer: number;
+    let stopped = false;
+    let inFlight: AbortController | undefined;
+
+    function schedule() {
+      timer = window.setTimeout(check, 5_000);
+    }
+    async function check() {
+      if (document.hidden) { schedule(); return; }
+      const controller = new AbortController();
+      inFlight = controller;
+      const timeout = window.setTimeout(() => controller.abort(), 30_000);
+      try {
+        const note = await backgroundRead<NoteDetail>(path, controller.signal);
+        if (!stopped && !controller.signal.aborted && acceptPublishedMarkdown(note)) return;
+      } catch {
+        // Keep waiting through a temporary read failure.
+      } finally {
+        window.clearTimeout(timeout);
+        inFlight = undefined;
+      }
+      if (!stopped) schedule();
+    }
+
+    schedule();
+    return () => {
+      stopped = true;
+      window.clearTimeout(timer);
+      inFlight?.abort();
+    };
+  }, [pendingMarkdownNote, revision]);
 
   useEffect(() => {
     if (
@@ -2176,7 +2223,7 @@ export function Workspace({
               <Search size={19} />
             </button>
           </div>
-          {!formattedNote && <div className="mode-picker" aria-label={t("workspace.viewMode")}>
+          {!formattedNote && !waitingForMarkdownBody && <div className="mode-picker" aria-label={t("workspace.viewMode")}>
             {(["source", "split", "read"] as const).map((m, i) => (
               <button
                 key={m}
@@ -2717,7 +2764,7 @@ export function Workspace({
               {!route.compose &&
                 detail &&
                 !detail.editable &&
-                !detail.html_text_preview && (
+                !detail.html_text_preview && !waitingForMarkdown && (
                   <div className="workspace-alert warning">
                     <ShieldAlert size={15} />
                     {t(detail.read_only_reason && Object.hasOwn(readOnlyReasons, detail.read_only_reason)
@@ -2817,7 +2864,12 @@ export function Workspace({
                   </div>
                 </div>
               )}
-              {detail?.locked ? (
+              {waitingForMarkdownBody ? (
+                <div className="native-empty" role="status">
+                  <RefreshCw size={26} />
+                  <h2>{t("workspace.waitingForMarkdown")}</h2>
+                </div>
+              ) : detail?.locked ? (
                 <div className="native-empty">
                   <ShieldAlert size={30} />
                   <h2>{t("workspace.encryptedNote")}</h2>
@@ -2955,9 +3007,9 @@ export function Workspace({
                 busy={saving} reviewing={reviewingUploads} composing={composing} references={referencedUploads}
                 cancel={cancelUpload} discard={id => void discardReviewedUpload(id)} retry={id =>
                   patchUpload(uploads.id, id, row => ({...row, phase: "checking", error: undefined}))} /> : null}
-              <footer className="native-status editor-status">
+              {!waitingForMarkdownBody && <footer className="native-status editor-status">
                 <span>
-                  {saveFailure ? t("workspace.autosaveStoppedDraftKept") : saving ? t("workspace.savingNas")
+                  {waitingForMarkdown ? t("workspace.waitingForMarkdown") : saveFailure ? t("workspace.autosaveStoppedDraftKept") : saving ? t("workspace.savingNas")
                     : draft?.resume_paused ? t("workspace.autosavePaused")
                     : attachmentsBlocked ? t("workspace.waitingForAttachments") : dirty ? t("workspace.waitingAutosave") : route.compose ? t("workspace.writingNewNote") : t("workspace.savedNas")}
                 </span>
@@ -2967,7 +3019,7 @@ export function Workspace({
                     detail?.version ?? t("workspace.newNote"),
                   )}
                 </span>
-              </footer>
+              </footer>}
             </>
           )}
         </main>

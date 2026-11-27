@@ -1,6 +1,10 @@
 import Foundation
 import NoteCore
 
+enum RemoteContentPending: Error {
+    case markdownPublication
+}
+
 extension LibraryStore {
     func setOfflineStorage(_ enabled: Bool) {
         profile.keepOffline = enabled; profile.persist(to: preferences)
@@ -42,10 +46,13 @@ extension LibraryStore {
                         if let session = self.sessions[candidate.id], session.editGeneration != session.savedGeneration { continue }
                         let merged = try await repo.mergeRemote(incoming)
                         if let session = self.sessions[candidate.id], session.editGeneration == session.savedGeneration {
+                            session.isWaitingForMarkdownSource = false
                             session.note = merged
                         }
                         self.offlineCompleted += 1
                         if self.offlineCompleted.isMultiple(of: 10) { try await self.reload() }
+                    } catch RemoteContentPending.markdownPublication {
+                        continue
                     } catch {
                         guard self.offlineRunID == run, !Task.isCancelled else { return }
                         self.offlineFailures[candidate.id] = error.localizedDescription
@@ -71,10 +78,17 @@ extension LibraryStore {
         incoming.originalHTML = remote.html; incoming.hasRemoteContent = true; incoming.listedVersion = remote.summary.version
         let existing = try await repo.note(remoteID: noteID)
         var sources: [SourceEnvelope] = []
+        var hasStagedSource = false
         for file in remote.attachments {
             try Task.checkCancellation()
             let bytes = try await client.download(fileID: file.id, noteID: noteID)
-            if file.name.hasSuffix(".md"), let source = try? SourceEnvelope.decode(bytes), source.matches(html: remote.html) { sources.append(source) }
+            if file.name.hasSuffix(".md"), let source = try? SourceEnvelope.decode(bytes) {
+                if source.isStaging {
+                    hasStagedSource = true
+                    continue
+                }
+                if source.matches(html: remote.html) { sources.append(source) }
+            }
             var attachment: NoteAttachment
             if let cached = existing?.attachments.first(where: { $0.remoteID == file.id }),
                let data = try? await assets.verifiedData(for: cached), data == bytes {
@@ -87,6 +101,9 @@ extension LibraryStore {
         if sources.count == 1, let source = sources.first, let restored = try? source.restoredAttachments(from: incoming.attachments) {
             incoming.attachments = restored; incoming.sourceDocumentID = source.documentID
             incoming.markdown = source.markdown; incoming.blocks = source.blocks; incoming.mode = .markdown
+        } else if hasStagedSource {
+            // Keep the cached document until the final source becomes readable.
+            throw RemoteContentPending.markdownPublication
         }
         return incoming
     }

@@ -2,6 +2,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { NotePreview } from "./NotePreview";
+import { setLanguage } from "./i18n";
 afterEach(cleanup);
 async function renderedPage(frame: HTMLIFrameElement): Promise<string> {
   const send = vi.fn();
@@ -170,6 +171,25 @@ it("keeps the iframe document mounted while sending edited preview content", asy
   await waitFor(() => expect(send).toHaveBeenCalled());
   expect(frame.getAttribute("srcdoc")).toBe(initialDocument);
   expect(send.mock.calls.at(-1)![0].page).toContain("edited");
+});
+
+it("sends translated metadata and the new language to the existing preview iframe", async () => {
+  const markdown = "---\nname: 원본\n---\n\n본문";
+  const view = render(<NotePreview html="" markdown={markdown} />);
+  const frame = screen.getByTitle("노트 HTML 미리보기") as HTMLIFrameElement;
+  const initialDocument = frame.srcdoc;
+  expect(await renderedPage(frame)).toContain("문서 정보");
+  try {
+    setLanguage("en");
+    view.rerender(<NotePreview html="" markdown={markdown} />);
+    const updated = new DOMParser().parseFromString(await renderedPage(frame), "text/html");
+    expect(frame.srcdoc).toBe(initialDocument);
+    expect(updated.documentElement.lang).toBe("en");
+    expect(updated.querySelector("summary")?.textContent).toBe("Document information");
+    expect(updated.querySelector("code")?.textContent).toBe("name: 원본");
+  } finally {
+    setLanguage("ko");
+  }
 });
 
 

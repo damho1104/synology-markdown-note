@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { Workspace } from './Workspace'
@@ -7,6 +8,8 @@ import { supportedLanguages } from './catalogs'
 import type { Status } from './api'
 import { exportMath } from './mathExport'
 import { DEFAULT_PREFERENCES, PREFERENCES_KEY, loadPreferences } from './preferences'
+
+const styles = readFileSync('src/style.css', 'utf8')
 
 vi.mock('./mathExport', () => ({ exportMath: vi.fn(async () => []) }))
 
@@ -39,11 +42,21 @@ it('updates the NAS indicator after a failed list refresh and successful retry',
       ? Promise.resolve(Response.json({error: 'NAS_UNAVAILABLE'}, {status: 503}))
       : fetcher(path, init))
   mount()
-  await screen.findByRole('img', {name: 'NAS 연결됨'})
+  const connected = await screen.findByRole('img', {name: 'NAS 연결됨'})
+  expect(connected.querySelector('svg')).toBeTruthy()
+  expect(connected.querySelector('.nas-connection-dot')).toBeTruthy()
+  expect(styles).toMatch(/\.nas-connection-status\s*\{[^}]*position:\s*relative/s)
+  expect(styles).toMatch(/\.nas-connection-dot\s*\{[^}]*position:\s*absolute[^}]*right:\s*-2px[^}]*bottom:\s*-2px/s)
+  expect(styles).toMatch(/\.nas-connection-status\[data-connected="true"\]\s+\.nas-connection-dot\s*\{[^}]*var\(--nas-connected/s)
+  expect(styles).toMatch(/\.nas-connection-dot\s*\{[^}]*var\(--nas-disconnected/s)
+  expect(connected.getAttribute('data-connected')).toBe('true')
+  expect(connected.closest('.account-footer')?.textContent).toContain('NAS 연결 · 조회 가능')
   const refresh = screen.getByRole('button', {name: '새로고침'})
   unavailable = true
   fireEvent.click(refresh)
-  await screen.findByRole('img', {name: 'NAS 연결 안 됨'})
+  const disconnected = await screen.findByRole('img', {name: 'NAS 연결 안 됨'})
+  expect(disconnected.querySelector('svg')).toBeTruthy()
+  expect(disconnected.getAttribute('data-connected')).toBe('false')
   unavailable = false
   fireEvent.click(refresh)
   await screen.findByRole('img', {name: 'NAS 연결됨'})
@@ -528,8 +541,8 @@ it('opens a settings popup from the gear and applies local preferences without w
   fireEvent.change(within(dialog).getByLabelText('색상 테마'), { target: { value: 'forest' } })
   expect(container.querySelector('.native-app')!.classList.contains('native-dark')).toBe(true)
   expect((container.querySelector('.native-app') as HTMLElement).style.getPropertyValue('--editor-font-size')).toBe('20px')
-  expect(loadPreferences()).toEqual({ appearance: 'dark', editorFontSize: 20, lineNumbers: true,
-    lineWrapping: true, mermaidStyle: 'classic', mermaidTheme: 'forest', listRefreshMinutes: 5 })
+  expect(loadPreferences()).toEqual({ appearance: 'dark', editorFontSize: 20, language: '',
+    lineNumbers: true, lineWrapping: true, mermaidStyle: 'classic', mermaidTheme: 'forest', listRefreshMinutes: 5 })
   expect(sessionStorage.getItem(sessionStorage.key(0)!)).toBe(storedDraft)
   expect(writes).toHaveLength(0)
   expect(vi.mocked(fetch).mock.calls.some(([, init]) => init?.method && !['GET', 'HEAD'].includes(init.method))).toBe(false)
@@ -542,6 +555,49 @@ it('opens a settings popup from the gear and applies local preferences without w
   fireEvent.click(screen.getByRole('button', { name: /^설정$/ }))
   expect((screen.getByLabelText('글꼴 크기') as HTMLInputElement).value).toBe('20')
   expect((screen.getByLabelText('화면 모드') as HTMLSelectElement).value).toBe('dark')
+})
+
+it('applies a browser language override immediately and restores the server default without losing the open draft', async () => {
+  mount()
+  await edit()
+  const openTitle = screen.getByLabelText<HTMLInputElement>('노트 제목')
+  fireEvent.click(screen.getByRole('button', {name: /^설정$/}))
+  const selector = screen.getByLabelText<HTMLSelectElement>('표시 언어')
+  expect(selector.value).toBe('')
+  fireEvent.change(selector, {target: {value: 'en'}})
+  expect(screen.getByLabelText('Display language')).toBe(selector)
+  expect(document.documentElement.lang).toBe('en')
+  expect(screen.getByLabelText('Note title')).toBe(openTitle)
+  expect(openTitle.value).toBe('수정 제목')
+  expect(loadPreferences()).toMatchObject({language: 'en'})
+  expect(writes).toHaveLength(0)
+  fireEvent.change(selector, {target: {value: ''}})
+  expect(screen.getByLabelText('표시 언어')).toBe(selector)
+  expect(document.documentElement.lang).toBe('ko')
+  expect(loadPreferences()).toMatchObject({language: ''})
+})
+
+it('preserves a language written by another tab before a local appearance edit', async () => {
+  mount()
+  await screen.findByLabelText('노트 제목')
+  fireEvent.click(screen.getByRole('button', {name: /^설정$/}))
+  const appearance = screen.getByLabelText('화면 모드')
+  localStorage.setItem(PREFERENCES_KEY, JSON.stringify({version: 1, preferences: {...DEFAULT_PREFERENCES, language: 'en'}}))
+  fireEvent.change(appearance, {target: {value: 'dark'}})
+  expect(loadPreferences()).toMatchObject({language: 'en', appearance: 'dark'})
+})
+
+it('retranslates an active NAS list error when the display language changes', async () => {
+  const fetcher = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation((path, init) =>
+    path === '/api/notes' ? Promise.resolve(Response.json({error: 'NAS_UNAVAILABLE'}, {status: 503})) : fetcher(path, init))
+  mount()
+  const alert = await screen.findByRole('alert')
+  expect(alert.textContent).toContain('NAS와 통신하지 못했습니다')
+  fireEvent.click(screen.getByRole('button', {name: /^설정$/}))
+  fireEvent.change(screen.getByLabelText('표시 언어'), {target: {value: 'en'}})
+  expect(within(alert).getByRole('button', {name: 'Retry'})).toBeTruthy()
+  expect(alert.textContent).toContain('Could not reach the NAS')
 })
 
 it('follows system theme changes live while keeping an explicit appearance override across reloads', async () => {

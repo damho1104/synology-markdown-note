@@ -1,4 +1,4 @@
-import { currentLanguage, t, translate, UiError, type Message } from "./i18n";
+import { currentLanguage, languageForPreference, setLanguage, t, translate, UiError, type Message } from "./i18n";
 import { supportedLanguages } from "./catalogs";
 import { editorPhrases } from "./editorPhrases";
 import { NasConnectionStatus } from "./NasConnectionStatus";
@@ -75,7 +75,7 @@ import {
 import { annotateFormattedDraft, editFormattedDraft, escapeText, formattedSelection } from "./formattedDraft";
 import { NoteLinkPicker } from "./NoteLinkPicker";
 import { SettingsDialog } from "./SettingsDialog";
-import { loadPreferences, savePreferences } from "./preferences";
+import { loadPreferences, savePreferences, type PreviewPreferences } from "./preferences";
 import CodeMirror, { EditorView, type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { Transaction } from "@codemirror/state";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
@@ -161,6 +161,12 @@ function confirmedImport({filename, completed, total}: ImportProgress): string {
   return t("workspace.imported", filename, completed + 1, total, remaining > 0
     ? t("workspace.selectRemainingFilesContinue", remaining)
     : t("workspace.importConfirmed"));
+}
+
+type DisplayError = { cause: unknown };
+
+function displayError(error: string | DisplayError): string {
+  return typeof error === "string" ? error : errorText(error.cause);
 }
 
 type Draft = {
@@ -423,10 +429,10 @@ export function Workspace({
   const listMutationVersion = useRef(0);
   const [libraryReady, setLibraryReady] = useState(false);
   const graphRevision = useMemo(() => JSON.stringify(notes.map(note => [note.id, note.version, note.locked, note.trashed])), [notes]);
-  const [listError, setListError] = useState("");
+  const [listError, setListError] = useState<string | DisplayError>("");
   const [nasConnected, setNasConnected] = useState(false);
   const nasFailureGeneration = useRef(0);
-  const [noteError, setNoteError] = useState("");
+  const [noteError, setNoteError] = useState<string | DisplayError>("");
   const [noteActionNotice, setNoteActionNotice] = useState("");
   const [detail, setDetail] = useState<NoteDetail | null>(null);
   const [formatHistory, setFormatHistory] = useState<FormattedHistory>();
@@ -448,7 +454,7 @@ export function Workspace({
   const [showGlobalSearch,setShowGlobalSearch] = useState(false);
   const [graphState, setGraphState] = useState<NavigationState>(initialState);
   const [pending, setPending] = useState<WriteOperation[]>([]);
-  const [pendingError, setPendingError] = useState("");
+  const [pendingError, setPendingError] = useState<string | DisplayError>("");
   const [createReceipt, setCreateReceipt] = useState<{status:string;operation_id?:string} | null>(null);
   const [recoveredDetail, setRecoveredDetail] = useState<NoteDetail | null>(null);
   const [compare, setCompare] = useState<NoteDetail | null>(null);
@@ -481,6 +487,12 @@ export function Workspace({
   const [inspector, setInspector] = useState(false);
   const [revisionNoteId, setRevisionNoteId] = useState<string | null>(null);
   const [preferences, setPreferences] = useState(loadPreferences);
+  function changePreferences(changes: Partial<PreviewPreferences>) {
+    const next = savePreferences(changes, preferences);
+    // Apply the display language before re-rendering so the new catalog is used immediately.
+    if (next.language !== preferences.language) setLanguage(languageForPreference(next.language, navigator.languages));
+    setPreferences(next);
+  }
   const [showSettings, setShowSettings] = useState(false);
   const [systemDark, setSystemDark] = useState(
     () => window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false,
@@ -491,12 +503,11 @@ export function Workspace({
     editorPhrases(),
     EditorView.contentAttributes.of({"aria-label": t("workspace.markdownBody")}),
     ...(preferences.lineWrapping ? [EditorView.lineWrapping] : []),
-  ], [preferences.lineWrapping]);
+  ], [preferences.lineWrapping, currentLanguage()]);
   const attachmentInput = useRef<HTMLInputElement>(null);
-  const [attachmentError, setAttachmentError] = useState("");
+  const [attachmentError, setAttachmentError] = useState<string | DisplayError>("");
   const composingNow = useRef(false);
   const mermaidPreferences = { mermaidStyle: preferences.mermaidStyle, mermaidTheme: preferences.mermaidTheme };
-  useEffect(() => { savePreferences(preferences); }, [preferences]);
   useEffect(() => {
     const media = window.matchMedia?.("(prefers-color-scheme: dark)");
     if (!media) return;
@@ -821,8 +832,8 @@ export function Workspace({
   }, []);
 
   const handleError = useCallback(
-    (error: unknown, setter: (text: string) => void) => {
-      setter(errorText(error));
+    (error: unknown, setter: (error: DisplayError) => void) => {
+      setter({ cause: error });
       if (error instanceof WebConnectionError ||
           (error instanceof ApiFailure && ["NAS_UNAVAILABLE", "NAS_ADDRESS_BLOCKED"].includes(error.code)))
         markNasUnavailable();
@@ -1345,7 +1356,7 @@ export function Workspace({
     const restore = head && "restore" in head ? head.restore : undefined;
     if (restore && !restore.version) {
       setSaveFailure("safe");
-      setNoteError(t("workspace.couldNotVerifyNasVersionRestoreYourDraft"));
+      setNoteError({ cause: new UiError("workspace.couldNotVerifyNasVersionRestoreYourDraft") });
       return false;
     }
     const manifest = head && !("changes" in head) ? [] :
@@ -1632,7 +1643,7 @@ export function Workspace({
       if (current.draftKey !== activeDraftKey || !source?.review_required || !source.recovery_acknowledged) return;
       setRecoveredDetail(fresh); setCompare(fresh);
       if (!editableRecovery(fresh, source) || fresh.version !== recoveredDetail.version) {
-        setNoteError(t("workspace.nasCopyHasChangedReviewLatestContentsAnd"));
+        setNoteError({ cause: new UiError("workspace.nasCopyHasChangedReviewLatestContentsAnd") });
         return;
       }
       const formatted = source.markdown === undefined;
@@ -1923,7 +1934,7 @@ export function Workspace({
         commitRoute({shelf: route.shelf, notebook: destination, note: null, compose: true});
         void loadPending();
       } else {
-        handleError(error, message => setMessage(t("workspace.imported", filename, imported, files.length, message)));
+        handleError(error, failure => setMessage(t("workspace.imported", filename, imported, files.length, displayError(failure))));
       }
     } finally {
       if (imported) await loadLists();
@@ -1998,7 +2009,7 @@ export function Workspace({
     let body: string | undefined;
     try {
       body = draft?.markdown ?? detail?.markdown ?? (draft && detail ? exportHtml(detail, draft) : draft?.html ?? detail?.html);
-    } catch (error) { setNoteError(errorText(error)); return; }
+    } catch (error) { setNoteError({ cause: error }); return; }
     if (body === undefined) return;
     const isMarkdown = (draft?.markdown ?? detail?.markdown) !== undefined;
     const url = URL.createObjectURL(
@@ -2239,7 +2250,7 @@ export function Workspace({
       )}
       {pendingError && (
         <p className="workspace-alert error" role="alert">
-          {pendingError}
+          {displayError(pendingError)}
         </p>
       )}
       {message && (
@@ -2408,7 +2419,10 @@ export function Workspace({
           <div className="account-footer">
             <div>
               <b>{session.username}</b>
-              <p>{nasConnected ? t("workspace.nasConnectedAvailable") : t("common.disconnectedNas")}</p>
+              <p className="nas-account-status">
+                <NasConnectionStatus connected={nasConnected} />
+                <span>{nasConnected ? t("workspace.nasConnectedAvailable") : t("common.disconnectedNas")}</span>
+              </p>
             </div>
             <button
               className="icon-button"
@@ -2467,7 +2481,7 @@ export function Workspace({
           </div>
           {listError && (
             <div role="alert" className="workspace-alert error">
-              {listError}
+              {displayError(listError)}
               <button onClick={() => void loadLists()}>{t("workspace.retry")}</button>
             </div>
           )}
@@ -2695,7 +2709,7 @@ export function Workspace({
               </div>
               {noteError && (
                 <div className="workspace-alert error" role="alert">
-                  {noteError}
+                  {displayError(noteError)}
                   {saveFailure === "safe" && <button className="native-button" onClick={() => { setSaveFailure(null); setNoteError(""); }}>{t("workspace.retryAutosave")}</button>}
                 </div>
               )}
@@ -2936,7 +2950,7 @@ export function Workspace({
                   )}
                 </div>
               )}
-              {attachmentError && <p role="alert" className="attachment-error">{attachmentError}</p>}
+              {attachmentError && <p role="alert" className="attachment-error">{displayError(attachmentError)}</p>}
               {uploads?.items.length ? <AttachmentQueue uploads={uploads} savingIds={pendingUploadIds}
                 busy={saving} reviewing={reviewingUploads} composing={composing} references={referencedUploads}
                 cancel={cancelUpload} discard={id => void discardReviewedUpload(id)} retry={id =>
@@ -3042,7 +3056,6 @@ export function Workspace({
           </aside>
         )}
       </div>
-      <NasConnectionStatus connected={nasConnected} />
       {contextMenu && (
         <div
           className="native-context-menu"
@@ -3139,7 +3152,7 @@ export function Workspace({
       {showGlobalSearch && <GlobalSearchDialog notes={notes} notebooks={notebooks} loading={listLoading} searchBody={searchNoteBody}
         onSelect={(id)=>navigate({shelf:null,notebook:null,note:id,compose:false},false,'')}
         onClose={()=>setShowGlobalSearch(false)} />}
-      {showSettings && <SettingsDialog preferences={preferences} onChange={setPreferences} onClose={() => setShowSettings(false)} />}
+      {showSettings && <SettingsDialog preferences={preferences} onChange={changePreferences} onClose={() => setShowSettings(false)} />}
       {detail && revisionNoteId === detail.id && <NoteRevisionDialog key={detail.id}
         noteId={detail.id} currentVersion={detail.version} dark={dark}
         canRestore={!saving && !dirty && !hasStagedUploads && !draft?.review_required &&

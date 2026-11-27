@@ -1,6 +1,9 @@
+import { supportedLanguages } from './catalogs'
+
 export type PreviewPreferences = {
   appearance: 'system' | 'light' | 'dark'
   editorFontSize: number
+  language: string
   lineNumbers: boolean
   lineWrapping: boolean
   listRefreshMinutes: number
@@ -8,9 +11,13 @@ export type PreviewPreferences = {
   mermaidTheme: 'system' | 'default' | 'dark' | 'neutral' | 'forest'
 }
 
+// '' follows the server default, 'auto' follows the browser language.
+const LANGUAGE_PREFERENCES: readonly string[] = ['', 'auto', ...supportedLanguages]
+
 export const DEFAULT_PREFERENCES: PreviewPreferences = Object.freeze({
   appearance: 'system',
   editorFontSize: 14,
+  language: '',
   lineNumbers: false,
   lineWrapping: false,
   listRefreshMinutes: 5,
@@ -33,6 +40,7 @@ export function validatePreferences(value: unknown): PreviewPreferences {
     appearance: input.appearance === 'light' || input.appearance === 'dark' ? input.appearance : 'system',
     editorFontSize: typeof input.editorFontSize === 'number' && Number.isFinite(input.editorFontSize)
       ? Math.min(22, Math.max(11, Math.round(input.editorFontSize))) : defaults.editorFontSize,
+    language: typeof input.language === 'string' && LANGUAGE_PREFERENCES.includes(input.language) ? input.language : '',
     lineNumbers: typeof input.lineNumbers === 'boolean' ? input.lineNumbers : defaults.lineNumbers,
     lineWrapping: typeof input.lineWrapping === 'boolean' ? input.lineWrapping : defaults.lineWrapping,
     listRefreshMinutes: typeof input.listRefreshMinutes === 'number'
@@ -54,10 +62,16 @@ export function loadPreferences(): PreviewPreferences {
   return { ...DEFAULT_PREFERENCES }
 }
 
-export function savePreferences(preferences: PreviewPreferences): void {
+export function savePreferences(
+  changes: Partial<PreviewPreferences>,
+  current: PreviewPreferences = DEFAULT_PREFERENCES,
+): PreviewPreferences {
   try {
-    localStorage.setItem(PREFERENCES_KEY, JSON.stringify({ version: 1, preferences: validatePreferences(preferences) }))
+    const preferences = validatePreferences({ ...loadPreferences(), ...changes })
+    localStorage.setItem(PREFERENCES_KEY, JSON.stringify({ version: 1, preferences }))
+    return preferences
   } catch {
     // Keep applying the in-memory settings if browser storage is unavailable.
+    return validatePreferences({ ...current, ...changes })
   }
 }

@@ -5,9 +5,23 @@ import userEvent from "@testing-library/user-event";
 
 beforeEach(() => {
   vi.resetModules();
+  localStorage.clear();
   document.documentElement.lang = "en";
   document.body.innerHTML = '<div id="root"></div>';
   vi.spyOn(navigator, "languages", "get").mockReturnValue(["ko-KR"]);
+});
+
+it.each([
+  ["en", ["ko-KR"], "Sign in to NAS", "en"],
+  ["auto", ["en-US", "ko-KR"], "Sign in to NAS", "en"],
+  ["unknown", ["en-US"], "NAS 계정 로그인", "ko"],
+] as const)("applies the browser's saved %s override over the server default on startup", async (language, preferred, heading, expected) => {
+  vi.spyOn(navigator, "languages", "get").mockReturnValue(preferred);
+  localStorage.setItem("synonote:web-preferences", JSON.stringify({version: 1, preferences: {language}}));
+  mockStartup(async () => Response.json({default_language: "ko"}));
+  await import("./main");
+  await screen.findByRole("heading", {name: heading});
+  expect(document.documentElement.lang).toBe(expected);
 });
 
 afterEach(() => {
@@ -103,4 +117,16 @@ it("offers a keyboard retry in the same document when early requests fail", asyn
   await screen.findByRole("heading", {name: "NAS 계정 로그인"});
   expect(document.getElementById("root")).toBe(root);
   expect(document.documentElement.lang).toBe("ko");
+});
+
+it("keeps startup failure and retry controls in the saved display language", async () => {
+  vi.useFakeTimers();
+  localStorage.setItem("synonote:web-preferences", JSON.stringify({version: 1, preferences: {language: "en"}}));
+  const requests = mockStartup(async () => Response.json({}, {status: 503}));
+  await act(async () => { await import("./main"); });
+  expect(screen.getByRole("status").closest("[lang]")?.getAttribute("lang")).toBe("en");
+  await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+  expect(screen.getByRole("status").textContent).toBe("Could not load web settings.");
+  expect(screen.getByRole("button", {name: "Retry"})).toBeTruthy();
+  expect(requests()).toEqual(["/api/public-config", "/api/public-config"]);
 });

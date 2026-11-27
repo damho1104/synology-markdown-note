@@ -64,7 +64,7 @@ cat > "$APP_CONTENTS/Info.plist" <<PLIST
 <key>CFBundleLocalizations</key><array><string>en</string><string>ko</string></array>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>$APP_VERSION</string>
-<key>CFBundleVersion</key><string>29</string>
+<key>CFBundleVersion</key><string>30</string>
 <key>SynologyDisplayVersion</key><string>$DISPLAY_VERSION</string>
 <key>SynologyGitCommit</key><string>$APP_COMMIT</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>

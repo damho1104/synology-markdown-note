@@ -7,6 +7,7 @@ final class EditorSession: Identifiable {
     var note: NoteRecord
     var isSaving = false
     var isDownloading = false
+    var isWaitingForMarkdownSource = false
     var saveError: String?
     var editGeneration = 0
     var savedGeneration = 0

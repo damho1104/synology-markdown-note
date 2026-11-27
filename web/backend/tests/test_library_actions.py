@@ -552,6 +552,34 @@ def test_create_notebook_in_stack_uses_verified_create_then_assignment(harness):
     assert store.pending_writes(OWNER) == []
 
 
+def test_note_format_stays_unconfirmed_until_markdown_publication(harness):
+    from synonote_web.compat.source_envelope import SourceEnvelope
+
+    station, store, _, client = harness
+    markdown = "# New Markdown note"
+    document_id = "12345678-1234-1234-1234-123456789012"
+    station.download_bytes = SourceEnvelope.make(
+        markdown, station.note["content"], document_id=document_id,
+        operation_id="12345678-1234-1234-1234-123456789013", is_staging=True,
+    ).encode()
+
+    response = client.get("/api/notes/note1")
+    assert response.status_code == 200
+    assert response.json()["write_in_progress"] is True
+    assert "markdown" not in response.json()
+    assert store.load_note_formats(OWNER) == {}
+
+    station.note.update(ver="v2", content="<h1>New Markdown note</h1>")
+    station.download_bytes = SourceEnvelope.make(
+        markdown, station.note["content"], document_id=document_id,
+    ).encode()
+    response = client.get("/api/notes/note1")
+    assert response.status_code == 200
+    assert response.json()["markdown"] == markdown
+    assert store.load_note_formats(OWNER) == {"note1": ("v2", True)}
+    assert station.mutations == []
+
+
 @pytest.mark.parametrize("action,value", [("move", "book2"), ("tags", ["new"]), ("favorite", True), ("trash", None), ("restore", None)])
 def test_staging_envelope_blocks_all_metadata_before_mutation(harness, action, value):
     from synonote_web.compat.source_envelope import SourceEnvelope

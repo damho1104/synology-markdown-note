@@ -22,10 +22,11 @@ extension LibraryStore {
         let transport = try NoteStationSyncTransport(client: client, repository: repository, assets: attachments,
             directory: root.appendingPathComponent(profile.storageKey).appendingPathComponent("upload-journal"))
         uploadTransport = transport
+        uploadError = nil
         let account = String(profile.storageKey.prefix(12))
         syncCoordinator = SyncCoordinator(repository: repository, attachments: attachments, transport: transport, mathRenderer: MathImageRenderer(),
             reportError: { [weak self] noteID, error in
-                await self?.logEvent(.uploadFailed, noteID: noteID, fields: ["account": account], error: error)
+                if let noteID { await self?.logEvent(.uploadFailed, noteID: noteID, fields: ["account": account], error: error) }
             })
     }
     func scheduleUpload() {
@@ -51,10 +52,11 @@ extension LibraryStore {
         guard let coordinator = syncCoordinator, isConnected, !isPushing, !isRefreshing, !isManagingStacks, deletingNotebookIDs.isEmpty, deletingNoteIDs.isEmpty,
               automaticUploadReady else { return }
         let generation = connectionGeneration, account = accountGeneration, repo = repository
-        isPushing = true; uploadAgain = false; uploadStatus = appText("Uploading to NAS…")
+        isPushing = true; uploadAgain = false
         defer {
             if generation == connectionGeneration {
                 isPushing = false
+                uploadProgress = nil
                 if uploadAgain { scheduleUpload() }
             }
         }
@@ -63,13 +65,24 @@ extension LibraryStore {
         do {
             let queued = try await repo.pendingOperations()
             if !queued.isEmpty { logEvent(.uploadStarted, fields: ["count": String(queued.count)]) }
-            try await migrateLegacyNotebooks()
+            let notebookMigrationError: NoteStationError?
+            do {
+                try await migrateLegacyNotebooks()
+                notebookMigrationError = nil
+            } catch let error as NoteStationError {
+                guard case .notebookWriteUncertain = error else { throw error }
+                notebookMigrationError = error
+                logEvent(.uploadFailed, error: error)
+            }
             guard generation == connectionGeneration, account == accountGeneration else { return }
             var eligible: Set<UUID> = []
             for operation in try await repo.pendingOperations() {
                 if let note = try await repo.note(id: operation.noteID), isNASNotebook(note.notebookID) { eligible.insert(note.id) }
             }
-            await coordinator.push(noteIDs: eligible)
+            let batchError = await coordinator.push(noteIDs: eligible) { [weak self] processed, total in
+                await self?.showUploadProgress(processed, total: total, generation: generation)
+            }
+            if let batchError { throw batchError }
             guard generation == connectionGeneration, account == accountGeneration else { return }
             for session in Array(sessions.values) {
                 let editing = session.editGeneration, saving = session.savedGeneration
@@ -78,18 +91,52 @@ extension LibraryStore {
                 integrateUploadedRecord(saved, into: session, expectedEditGeneration: editing, expectedSavedGeneration: saving)
             }
             try await reload()
-            let pending = try await repo.pendingOperations().filter { eligible.contains($0.noteID) }
+            let remaining = try await repo.pendingOperations()
+            guard generation == connectionGeneration, account == accountGeneration else { return }
+            uploadError = nil
+            pendingUploadCount = remaining.count
+            let pending = remaining.filter { eligible.contains($0.noteID) }
             if !eligible.isEmpty { logEvent(.uploadCompleted, fields: ["count": String(eligible.count), "pending": String(pending.count)]) }
             for operation in pending {
                 logEvent(.uploadPending, noteID: operation.noteID, fields: ["state": operation.state.rawValue, "attempts": String(operation.attempts)])
             }
-            uploadStatus = pending.isEmpty ? appText("Synced with NAS") : pending.contains(where: { $0.state == .conflict || $0.state == .uncertain }) ? appText("Some Changes Need Review") : appText("Pending uploads: %@", AppLocalization.number(pending.count))
+            if case .notebookWriteUncertain(objectID: nil)? = notebookMigrationError {
+                uploadStatus = NoteStationError.notebookWriteUncertain(objectID: nil).localizedDescription
+            } else if pending.contains(where: { $0.state == .conflict ||
+                ($0.state == .uncertain && AppLocalization.syncRequiresManualReview($0.error)) }) {
+                uploadStatus = appText("Some Changes Need Review")
+            } else if !pending.isEmpty {
+                uploadStatus = pending.contains { $0.state == .uncertain } ? appText("Verifying NAS Save") : appText("Waiting to Upload")
+            } else if notebookMigrationError != nil {
+                uploadStatus = appText("Local notebook sync is pending. The app checks automatically.")
+            } else {
+                uploadStatus = appText("Synced with NAS")
+            }
             if let client, !(await client.isAuthenticated) { requestConnectionRecovery(after: NoteStationError.sessionExpired) }
             else { startOfflineDownload() }
         } catch {
-            uploadStatus = appText("NAS Upload Needs Review"); connectionError = error.localizedDescription
+            guard generation == connectionGeneration, account == accountGeneration, !Task.isCancelled,
+                  !(error is CancellationError), (error as? NoteStationError) != .cancelled else { return }
+            if Self.isRecoverableConnectionError(error) {
+                uploadStatus = appText("Waiting to Upload")
+                requestConnectionRecovery(after: error)
+            } else {
+                uploadStatus = appText("NAS Upload Needs Review")
+                uploadError = error.localizedDescription
+            }
             logEvent(.uploadFailed, error: error)
         }
+    }
+
+    private func showUploadProgress(_ processed: Int, total: Int, generation: Int) {
+        guard generation == connectionGeneration else { return }
+        uploadProgress = appText("Uploading %@/%@", AppLocalization.number(processed), AppLocalization.number(total))
+    }
+
+    var uploadQueueStatus: String? {
+        if let uploadProgress { return uploadProgress }
+        guard pendingUploadCount > 0 else { return nil }
+        return appText("Pending uploads: %@", AppLocalization.number(pendingUploadCount))
     }
 
     func integrateUploadedRecord(_ saved: NoteRecord, into session: EditorSession, expectedEditGeneration: Int, expectedSavedGeneration: Int) {

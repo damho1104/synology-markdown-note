@@ -217,6 +217,7 @@
 "NAS Revision History" = "NAS Revision History";
 "NAS Status" = "NAS Status";
 "NAS Upload Needs Review" = "NAS Upload Needs Review";
+"Local notebook sync is pending. The app checks automatically." = "Local notebook sync is pending. The app checks automatically.";
 "NAS Write Compatibility Check" = "NAS Write Compatibility Check";
 "Needs Review" = "Needs Review";
 "Neutral" = "Neutral";
@@ -515,3 +516,6 @@
 "System Default" = "System Default";
 "Quit and reopen the app to apply the language change." = "Quit and reopen the app to apply the language change.";
 "diagnostics.readme" = "Developer Diagnostics\ndatabase-summary.json contains only counts, sizes, and integrity results for the selected account (full diagnostics only).\nlogs contains current and previous diagnostic logs. Identifiers are replaced with aliases specific to this ZIP.\nThe original database, note titles and bodies, revision history contents, attachments, NAS address, and Keychain details are excluded.\nTimestamps, error codes, and operation counts are included for diagnostics. Damaged or unrecognized log lines are skipped.\nThe original logs and local database were kept intact. This archive cannot restore notes.";
+
+"Uploading %@/%@" = "Uploading %@/%@";
+"Syncing…" = "Syncing…";

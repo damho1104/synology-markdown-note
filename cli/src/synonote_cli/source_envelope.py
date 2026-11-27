@@ -74,9 +74,9 @@ class SourceEnvelope:
             if self.operation_id:
                 uuid.UUID(self.operation_id)
         except ValueError as ex:
-            raise CLIError("INVALID_SOURCE", "잘못된 문서/작업 UUID입니다.") from ex
+            raise CLIError("INVALID_SOURCE", "The document or operation UUID is invalid.") from ex
         if not validate_blocks(self.markdown, self.blocks):
-            raise CLIError("INVALID_SOURCE", "원문 보존 블록이 유효하지 않습니다.")
+            raise CLIError("INVALID_SOURCE", "The source contains invalid preserved blocks.")
         version = 3 if self.math_attachments else (2 if self.operation_id or self.is_staging or self.attachment_bindings else 1)
         m: dict[str, object] = {
             "formatVersion": version, "fingerprintVersion": 1, "documentID": str(uuid.UUID(self.document_id)).upper(),
@@ -127,7 +127,7 @@ class SourceEnvelope:
             elif "mathAttachments" in m:
                 raise ValueError()
         except (KeyError, ValueError, TypeError, OverflowError) as ex:
-            raise CLIError("INVALID_SOURCE", "원문 메타데이터나 지문이 손상되었습니다.") from ex
+            raise CLIError("INVALID_SOURCE", "The source metadata or fingerprints are invalid.") from ex
 
     @classmethod
     def decode(cls, data: bytes) -> SourceEnvelope:
@@ -147,7 +147,7 @@ class SourceEnvelope:
             return cls(m["documentID"], markdown, m["bodyFingerprint"], m["blocks"],
                        m.get("operationID"), m.get("isStaging", False), m.get("attachmentBindings", {}), m.get("mathAttachments", {}))
         except (ValueError, UnicodeError, KeyError, TypeError, base64.binascii.Error) as ex:
-            raise CLIError("INVALID_SOURCE", "원문 첨부가 유효하지 않습니다.") from ex
+            raise CLIError("INVALID_SOURCE", "The source attachment is invalid.") from ex
 
     def matches(self, html: str) -> bool:
         return not self.is_staging and self.body_fingerprint == fingerprint(html)

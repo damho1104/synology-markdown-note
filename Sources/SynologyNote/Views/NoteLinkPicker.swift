@@ -33,9 +33,9 @@ import NoteCore
         let rows = results
         return rows.isEmpty ? nil : rows[min(selected, rows.count - 1)]
     }
-    func title(_ note: NoteSummary) -> String { note.title.isEmpty ? "제목 없음" : note.title }
+    func title(_ note: NoteSummary) -> String { note.title.isEmpty ? appText("Untitled") : note.title }
     func notebook(_ note: NoteSummary) -> String {
-        notebooks.first(where: { $0.id == note.notebookID })?.name ?? "알 수 없는 메모장"
+        notebooks.first(where: { $0.id == note.notebookID })?.name ?? appText("Unknown Notebook")
     }
 }
 
@@ -49,22 +49,22 @@ struct NoteLinkPicker: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if searchField {
-                TextField("노트 제목 검색", text: $model.query)
+                TextField(appText("Search Note Titles"), text: $model.query)
                     .textFieldStyle(.roundedBorder)
                     .focused($focused)
                     .accessibilityIdentifier("note-link-search")
                     .onChange(of: model.query) { _, _ in model.selected = 0 }
                     .onKeyPress(.upArrow) { model.step(-1); return .handled }
                     .onKeyPress(.downArrow) { model.step(1); return .handled }
-                Picker("메모장", selection: $model.notebookID) {
-                    Text("전체 메모장").tag(String?.none)
+                Picker(appText("Notebook"), selection: $model.notebookID) {
+                    Text(appText("All Notebooks")).tag(String?.none)
                     ForEach(model.notebooks) { notebook in
-                        Text(notebook.name.isEmpty ? "이름 없는 메모장" : notebook.name).tag(Optional(notebook.id))
+                        Text(notebook.name.isEmpty ? appText("Untitled Notebook") : notebook.name).tag(Optional(notebook.id))
                     }
                 }
                 .accessibilityIdentifier("note-link-notebook")
                 .onChange(of: model.notebookID) { _, _ in model.selected = 0 }
-                Text("↑↓ 선택 · Enter 연결 · Esc 취소").font(.caption).foregroundStyle(.secondary)
+                Text(appText("↑↓ to Select · Return to Link · Esc to Cancel")).font(.caption).foregroundStyle(.secondary)
             }
             ScrollViewReader { proxy in
                 ScrollView {
@@ -80,7 +80,7 @@ struct NoteLinkPicker: View {
                                         Spacer(minLength: 4)
                                         Text(model.notebook(note)).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                                     }
-                                    Text(note.excerpt.isEmpty ? "본문 미리보기 없음" : note.excerpt)
+                                    Text(note.excerpt.isEmpty ? appText("No Body Preview") : note.excerpt)
                                         .font(.caption).foregroundStyle(.secondary).lineLimit(2)
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                 }
@@ -96,10 +96,10 @@ struct NoteLinkPicker: View {
                 }
                 .onChange(of: model.selected) { _, _ in if let chosen = model.chosen { proxy.scrollTo(chosen.id) } }
             }
-            if model.results.isEmpty { Text("일치하는 노트 없음").foregroundStyle(.secondary).font(.caption) }
+            if model.results.isEmpty { Text(appText("No Matching Notes")).foregroundStyle(.secondary).font(.caption) }
             if searchField {
-                HStack { Spacer(); Button("취소", action: onCancel).keyboardShortcut(.cancelAction)
-                    Button("연결") { if let chosen = model.chosen { onSelect(chosen) } }
+                HStack { Spacer(); Button(appText("Cancel"), action: onCancel).keyboardShortcut(.cancelAction)
+                    Button(appText("Link")) { if let chosen = model.chosen { onSelect(chosen) } }
                         .disabled(model.chosen == nil)
                         .keyboardShortcut(.defaultAction)
                 }

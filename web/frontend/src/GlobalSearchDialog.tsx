@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Search, X } from 'lucide-react'
 import { sortNotes, type DatedNote } from './library'
@@ -67,8 +68,8 @@ export function GlobalSearchDialog({notes, notebooks, loading, searchBody, onSel
     setBusy(true);setError('')
     try {
       if(await onSelect(id)) onClose()
-      else setError('현재 노트의 저장을 확인한 뒤 다시 선택해 주세요.')
-    } catch { setError('노트를 열지 못했습니다. 다시 선택해 주세요.') }
+      else setError(t("search.confirmThatCurrentNoteWasSavedThenTry"))
+    } catch { setError(t("search.couldNotOpenNoteSelectItAgainRetry")) }
     finally { setBusy(false) }
   }
   return <dialog ref={dialogRef} className="native-settings-dialog native-search-dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={helpId}
@@ -87,26 +88,26 @@ export function GlobalSearchDialog({notes, notebooks, loading, searchBody, onSel
       if(event.shiftKey && document.activeElement===controls[0]) {event.preventDefault();controls.at(-1)?.focus()}
       else if(!event.shiftKey && document.activeElement===controls.at(-1)) {event.preventDefault();controls[0]?.focus()}
     }}>
-    <header className="global-search-header"><Search size={18}/><h2 id={titleId}>전체 노트 검색</h2>
-      <button className="icon-button" aria-label="검색 닫기" onClick={onClose}><X size={17}/></button></header>
+    <header className="global-search-header"><Search size={18}/><h2 id={titleId}>{t("common.searchAllNotes")}</h2>
+      <button className="icon-button" aria-label={t("search.closeSearch")} onClick={onClose}><X size={17}/></button></header>
     <form className="global-search-field" onSubmit={event=>{event.preventDefault();if(rows[0]) void open(rows[0].id)}}>
-      <input ref={inputRef} type="search" aria-label="전체 노트 검색어" placeholder="노트 제목·본문·태그 검색" value={query} maxLength={256}
+      <input ref={inputRef} type="search" aria-label={t("search.searchQueryForAllNotes")} placeholder={t("search.searchNoteTitlesBodiesAndTags")} value={query} maxLength={256}
         onChange={event=>setQuery(event.target.value)}
         onKeyDown={event=>{if(event.key==='Enter' && (event.nativeEvent.isComposing || event.keyCode===229)) event.preventDefault()}} />
     </form>
-    <p id={helpId} className="global-search-help">휴지통을 제외한 노트의 제목·본문·태그를 검색합니다.</p>
-    <p className="global-search-count" role="status" aria-live="polite">{loading ? '노트를 불러오는 중…' : `검색 결과 ${rows.length}개${rows.length>100 ? ' · 처음 100개 표시' : ''}`}
-      {searchingBody && ' · 본문 검색 중…'}
-      {result && result.indexed < result.total && ` · 본문 색인 ${result.indexed}/${result.total}`}
-      {searchBody && term && term === body?.query && !result && ' · 본문 검색 실패'}
+    <p id={helpId} className="global-search-help">{t("search.searchesTitlesBodiesAndTagsAllNotesOutside")}</p>
+    <p className="global-search-count" role="status" aria-live="polite">{loading ? t("common.loadingNotes") : t("search.results", rows.length, rows.length > 100 ? " · " + t("common.showingFirst100") : "")}
+      {searchingBody && " " + t("search.searchingNoteBodies")}
+      {result && result.indexed < result.total && " " + t("search.bodyIndex", result.indexed, result.total)}
+      {searchBody && term && term === body?.query && !result && " " + t("search.couldNotSearchNoteBodies")}
     </p>
     {error && <p className="global-search-error" role="alert">{error}</p>}
-    <div className="global-search-results" aria-label="전체 검색 결과" aria-busy={busy}>
+    <div className="global-search-results" aria-label={t("search.allSearchResults")} aria-busy={busy}>
       {rows.slice(0,100).map(note=><button className="global-search-result" key={note.id} disabled={busy} onClick={()=>void open(note.id)}>
-        <strong>{note.title || '제목 없음'}</strong><small>{books.get(note.notebook_id) ?? note.notebook_id}{note.tags?.length ? ` · ${note.tags.map(tag=>`#${tag}`).join(' ')}` : ''}</small>
+        <strong>{note.title || t("common.untitled")}</strong><small>{books.get(note.notebook_id) ?? note.notebook_id}{note.tags?.length ? ` · ${note.tags.map(tag=>`#${tag}`).join(' ')}` : ''}</small>
         {note.excerpt && <span>{note.excerpt}</span>}
       </button>)}
-      {!loading && !searchingBody && !rows.length && <p className="global-search-empty">검색 결과가 없습니다.</p>}
+      {!loading && !searchingBody && !rows.length && <p className="global-search-empty">{t("search.noResultsFound")}</p>}
     </div>
   </dialog>
 }

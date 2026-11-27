@@ -1,3 +1,4 @@
+import { UiError } from "./i18n";
 import katex from "katex";
 import css from "katex/dist/katex.min.css?inline";
 import { toPng } from "html-to-image";
@@ -23,13 +24,13 @@ export async function exportMath(markdown: string, csrf: string) {
       await document.fonts.ready;
       const width = Math.ceil(node.getBoundingClientRect().width);
       const height = Math.ceil(node.getBoundingClientRect().height);
-      if (!width || !height || width > 2048 || height > 2048) throw new Error("수식 이미지가 너무 큽니다.");
+      if (!width || !height || width > 2048 || height > 2048) throw new UiError("errors.equationImageTooLarge");
       // Embed KaTeX font files in the SVG before canvas conversion.
       const urls = [...new Set([...css.matchAll(/url\(["']?([^"')]+)["']?\)/g)].map(m => m[1]))];
       let fontEmbedCSS = css;
       for (const url of urls) {
         const response = await fetch(url);
-        if (!response.ok) throw new Error("수식 글꼴을 불러오지 못했습니다.");
+        if (!response.ok) throw new UiError("errors.couldNotLoadEquationFonts");
         const blob = await response.blob();
         const data = await new Promise<string>((resolve, reject) => {
           const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = reject; reader.readAsDataURL(blob);

@@ -39,7 +39,7 @@ import SwiftSoup
         let dom = try SwiftSoup.parse(MarkdownPipeline.previewPage(html))
         #expect(try dom.select("details.note-frontmatter").count == 1)
         #expect(try dom.select("details.note-frontmatter[open]").isEmpty())
-        #expect(try dom.select("details > summary").text() == "문서 정보")
+        #expect(try dom.select("details > summary").text() == coreText("Document Information"))
         let metadata = try dom.select("details pre code").text(trimAndNormaliseWhitespace: false)
         #expect(metadata.contains("session_count: 34"))
         #expect(metadata.contains("'lotto-web': 29"))

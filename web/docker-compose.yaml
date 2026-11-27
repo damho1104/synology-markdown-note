@@ -13,6 +13,7 @@ services:
       NAS_ALLOW_PRIVATE: ${NAS_ALLOW_PRIVATE:-false}
       # Optional: private CA only; also uncomment the read-only mount below.
       NAS_CA_FILE: ${NAS_CA_FILE:-}
+      WEB_DEFAULT_LANGUAGE: ${WEB_DEFAULT_LANGUAGE:-auto}
       # Advanced proxy settings; ordinary installations use these defaults.
       WEB_PUBLIC_ORIGIN: ${WEB_PUBLIC_ORIGIN:-}
       WEB_COOKIE_SECURE: ${WEB_COOKIE_SECURE:-auto}

@@ -5,7 +5,7 @@ extension LibraryStore {
     func setOfflineStorage(_ enabled: Bool) {
         profile.keepOffline = enabled; profile.persist(to: preferences)
         if enabled { startOfflineDownload() }
-        else { cancelOfflineDownload(); offlineStatus = "오프라인 보관 일시 중지" }
+        else { cancelOfflineDownload(); offlineStatus = appText("Offline Download Paused") }
     }
 
     func cancelOfflineDownload() {
@@ -28,8 +28,8 @@ extension LibraryStore {
                     guard !Task.isCancelled, self.offlineRunID == run, connection == self.connectionGeneration,
                           account == self.accountGeneration, self.isConnected else { return }
                     // Never block editing/uploads behind an entire library download.
-                    if self.isPushing { self.offlineStatus = "NAS 전송 후 오프라인 보관 재개"; return }
-                    self.offlineStatus = "본문·첨부 보관 중 \(self.offlineCompleted)/\(self.offlineTotal)"
+                    if self.isPushing { self.offlineStatus = appText("Offline Download Will Resume After Upload"); return }
+                    self.offlineStatus = appText("Downloading content and attachments %1$@/%2$@", AppLocalization.number(self.offlineCompleted), AppLocalization.number(self.offlineTotal))
                     do {
                         guard let remoteID = candidate.remoteID else { continue }
                         if try await repo.pendingOperations().contains(where: { $0.noteID == candidate.id }) { continue }
@@ -58,9 +58,9 @@ extension LibraryStore {
                 guard self.offlineRunID == run else { return }
                 try await self.reload()
                 let remaining = try await repo.offlineCandidates().count
-                self.offlineStatus = remaining == 0 ? "전체 노트·첨부 오프라인 보관 완료" : "\(remaining)개 보관 대기 · \(self.offlineFailures.count)개 확인 필요"
+                self.offlineStatus = remaining == 0 ? appText("All Notes and Attachments Available Offline") : appText("Waiting to download: %1$@ · Needs review: %2$@", AppLocalization.number(remaining), AppLocalization.number(self.offlineFailures.count))
             } catch {
-                if self.offlineRunID == run { self.offlineStatus = "오프라인 보관 확인 필요"; self.connectionError = error.localizedDescription }
+                if self.offlineRunID == run { self.offlineStatus = appText("Offline Download Needs Review"); self.connectionError = error.localizedDescription }
             }
         }
     }

@@ -123,7 +123,8 @@ expected = {'CFBundleIdentifier': 'com.damho.SynologyMarkdown',
             'CFBundleName': 'Synology Markdown Note',
             'CFBundleDisplayName': 'Synology Markdown Note',
             'CFBundleShortVersionString': base_version, 'CFBundleVersion': '29',
-            'CFBundleIconFile': 'AppIcon', 'LSMinimumSystemVersion': '14.0'}
+            'CFBundleIconFile': 'AppIcon', 'LSMinimumSystemVersion': '14.0',
+            'CFBundleDevelopmentRegion': 'en', 'CFBundleLocalizations': ['en', 'ko']}
 for key, value in expected.items():
     if info.get(key) != value: raise SystemExit(f'{key}: expected {value!r}, got {info.get(key)!r}')
 display_version = info.get('SynologyDisplayVersion', '')
@@ -141,6 +142,11 @@ resources = contents / 'Resources/SynologyNote_SynologyNote.bundle'
 runtime_files = [resources / name for name in (
     'mermaid.min.js', 'MERMAID-LICENSE.txt',
     'katex.min.js', 'katex-offline.min.css', 'KATEX-LICENSE.txt')]
+runtime_files += [
+    contents / 'Resources' / bundle / f'{language}.lproj' / 'Localizable.strings'
+    for bundle in ('SynologyNote_SynologyNote.bundle', 'SynologyNote_NoteCore.bundle')
+    for language in ('en', 'ko')
+]
 for path in (binary, helper, icon, *runtime_files):
     if not path.is_file() or path.stat().st_size == 0: raise SystemExit(f'Missing bundle file: {path.name}')
 math_css = (resources / 'katex-offline.min.css').read_text()

@@ -1,0 +1,20 @@
+{
+  "allNotebooks": "모든 메모장",
+  "cancel": "취소",
+  "close": "닫기",
+  "disconnectedNas": "NAS 연결 안 됨",
+  "fullGraph": "전체 그래프",
+  "linkNote": "노트 연결",
+  "loadingNotes": "노트를 불러오는 중…",
+  "noResults": "검색 결과 없음",
+  "notebook": "메모장",
+  "reviewDraftAndAnyPendingSaveFirst": "편집본과 진행 중인 저장을 먼저 확인하세요.",
+  "searchAllNotes": "전체 노트 검색",
+  "selectNotebook": "메모장을 선택하세요",
+  "settings": "설정",
+  "showingFirst100": "처음 100개 표시",
+  "stack": "책장",
+  "tryAgain": "다시 시도",
+  "unstackedNotebooks": "책장 밖 메모장",
+  "untitled": "제목 없음"
+}

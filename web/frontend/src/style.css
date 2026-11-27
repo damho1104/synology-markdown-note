@@ -75,6 +75,8 @@ input {
   --muted: #989898;
   --selection: #464646;
   --accent: #1685ed;
+  --nas-disconnected: #ff686a;
+  --nas-connected: #3ecb79;
   color-scheme: dark;
 }
 .native-app button,
@@ -279,10 +281,6 @@ input {
   align-items: center;
   gap: 9px;
   font-size: 11px;
-}
-.account-footer > svg {
-  color: var(--muted);
-  flex-shrink: 0;
 }
 .account-footer > div {
   flex: 1;
@@ -808,6 +806,7 @@ input {
   min-height: 100dvh;
   background: #f0f0f0;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   color: #242424;
@@ -815,6 +814,35 @@ input {
 .auth-main {
   width: min(100%, 430px);
   padding: 24px;
+  margin-block: auto;
+}
+.nas-connection-footer {
+  display: flex;
+  flex: none;
+  justify-content: flex-end;
+  align-items: center;
+  width: 100%;
+  min-height: 26px;
+  padding: 3px 12px;
+  border-top: 1px solid var(--line, #d9d9d9);
+  background: var(--toolbar, #f7f7f7);
+  color: var(--muted, #5b5b5b);
+  font-size: 11px;
+}
+.nas-connection-footer > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.nas-connection-footer > span::after {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--nas-disconnected, #c73340);
+}
+.nas-connection-footer > span[data-connected="true"]::after {
+  background: var(--nas-connected, #168249);
 }
 .auth-brand {
   display: flex;
@@ -1273,9 +1301,9 @@ input {
 }
 
 /* Shared index status stays outside the editor so progress cannot move its caret or preview. */
-.native-status:has([aria-label="백그라운드 인덱싱 상태"]) { height:auto; min-height:28px; display:flex; flex-wrap:wrap; gap:3px 10px; }
-[aria-label="백그라운드 인덱싱 상태"] { font-size:11px; overflow-wrap:anywhere; }
-[aria-label="백그라운드 인덱싱 상태"] button { color:var(--accent); margin-left:4px; }
+.native-status:has(.graph-index-status) { height:auto; min-height:28px; display:flex; flex-wrap:wrap; gap:3px 10px; }
+.graph-index-status { font-size:11px; overflow-wrap:anywhere; }
+.graph-index-status button { color:var(--accent); margin-left:4px; }
 
 /* Keep each panel control at its own header boundary, including when folded. */
 .native-toolbar { position:relative; }

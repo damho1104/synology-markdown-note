@@ -44,10 +44,10 @@ public enum SyncError: LocalizedError {
     case remoteChanged(SyncRemoteSnapshot)
     public var errorDescription: String? {
         switch self {
-        case .invalidBlocks: return "원본 보존 블록의 참조를 확인하세요."
-        case .verificationFailed: return "NAS 저장 결과를 아직 확인하지 못했습니다. 원문을 보관한 채 다시 확인합니다."
-        case .uncertain: return "이전 전송의 반영 여부를 확인할 수 없습니다. 재생성 전에 서버를 확인하세요."
-        case .remoteChanged: return "NAS에서 먼저 변경된 내용이 있습니다. 두 버전을 확인하세요."
+        case .invalidBlocks: return coreText("Check the references to preserved blocks.")
+        case .verificationFailed: return coreText("The NAS save could not be confirmed yet. The source was kept while verification continues.")
+        case .uncertain: return coreText("The previous upload could not be confirmed. Check the server before creating the note again.")
+        case .remoteChanged: return coreText("The note changed on the NAS first. Review both versions.")
         }
     }
 }
@@ -166,7 +166,7 @@ public actor SyncCoordinator {
         }
         let missing = formulas.filter { !ready.contains($0.key) }
         if !missing.isEmpty {
-            guard let mathRenderer else { throw RepositoryError(message: "수식 이미지 렌더러를 사용할 수 없습니다. 원문을 보존했습니다.") }
+            guard let mathRenderer else { throw RepositoryError(message: coreText("The math image renderer is unavailable. The source was preserved.")) }
             let rendered = try await mathRenderer.render(missing)
             guard rendered.count == missing.count, Set(rendered.map(\.key)) == Set(missing.map(\.key)) else { throw SyncError.verificationFailed }
             for image in rendered {

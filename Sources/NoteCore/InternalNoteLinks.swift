@@ -95,7 +95,7 @@ public enum InternalNoteLinks {
     }
 
     public static func addManagedLink(_ markdown: String, target: NoteSummary) -> String? {
-        addManagedLink(markdown, label: target.title.isEmpty ? "제목 없음" : target.title,
+        addManagedLink(markdown, label: target.title.isEmpty ? coreText("Untitled") : target.title,
                        destination: destination(for: target), aliases: destinations(for: target))
     }
 
@@ -111,7 +111,7 @@ public enum InternalNoteLinks {
         // Fail closed for malformed/duplicated markers rather than rewriting user content.
         guard !markdown.contains(managedStart), !markdown.contains(managedEnd) else { return nil }
         let separator = markdown.isEmpty ? "" : (markdown.hasSuffix("\n") ? "\n" : "\n\n")
-        return markdown + separator + managedStart + "\n## 관련 노트 (앱에서 관리)\n" + item + "\n" + managedEnd + "\n"
+        return markdown + separator + managedStart + coreText("\n## Related Notes (Managed by the App)\n") + item + "\n" + managedEnd + "\n"
     }
 
     public static func removeManagedLink(_ markdown: String, documentID: UUID) -> String? {

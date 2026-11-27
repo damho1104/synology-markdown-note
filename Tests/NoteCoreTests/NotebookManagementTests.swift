@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import Testing
 @testable import NoteCore
 @testable import SynologyNote
@@ -124,16 +125,73 @@ import Testing
         defer { try? FileManager.default.removeItem(at: root) }
         let store = try LibraryStore(root: root, profile: ConnectionProfile(server: "https://\(server.host)", username: "user"))
         store.client = client; store.isConnected = true
-        try await store.repository.setNotebooks([Notebook(id: "local-old", name: "markdown")])
-        let note = try await store.repository.save(NoteRecord(title: "Test", notebookID: "local-old", markdown: "# 제목\n- 안녕?"), enqueue: false)
+        try await store.repository.setNotebooks([Notebook(id: "local-old", name: "내 메모장")])
+        let note = try await store.repository.save(NoteRecord(title: "새 노트", notebookID: "local-old", markdown: "# 제목\n- 안녕?"), enqueue: false)
         let session = try #require(await store.session(for: note.id))
-        server.books([("book", "markdown")])
+        server.books([("book", "내 메모장")])
         try await store.migrateLegacyNotebooks()
         let moved = try #require(try await store.repository.note(id: note.id))
         #expect(moved.notebookID == "book" && moved.markdown == note.markdown)
+        #expect(moved.title == "새 노트")
         #expect(moved.syncState == .pending && session.note.notebookID == "book")
         #expect(try await store.repository.pendingOperations().map(\.noteID) == [note.id])
         #expect(store.notebooks.map(\.id) == ["book"])
+        #expect(store.notebooks.map(\.name) == ["내 메모장"])
+        #expect(!server.requests.contains { $0["method"] == "create" })
+        server.assertConsumed()
+    }
+
+    @MainActor @Test(arguments: [true, false])
+    func migrationUsesOldLanguageReceiptAndPreservesUnacknowledgedCreates(hasIdentity: Bool) async throws {
+        let server = ManagementNAS(); defer { server.close() }
+        let client = try await server.connectedClient()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let profile = ConnectionProfile(server: "https://\(server.host)", username: "user")
+        let store = try LibraryStore(root: root, profile: profile)
+        store.client = client; store.isConnected = true
+        let localID = "local-interrupted"
+        let draft = try await store.repository.save(NoteRecord(notebookID: localID, markdown: "legacy draft"))
+        let currentName = appText("My Notebook")
+        let oldName = currentName == "My Notebook" ? "내 메모장" : "My Notebook"
+        let key = SHA256.hash(data: Data(localID.utf8)).map { String(format: "%02x", $0) }.joined()
+        let directory = root.appendingPathComponent(profile.storageKey).appendingPathComponent("notebook-migration").appendingPathComponent(key)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let receipt = directory.appendingPathComponent("notebook-create-pending.json")
+        var fields = ["name": oldName]
+        if hasIdentity { fields["objectID"] = "acknowledged" }
+        let originalReceipt = try JSONSerialization.data(withJSONObject: fields)
+        try originalReceipt.write(to: receipt)
+
+        if hasIdentity {
+            server.books([("same-name", oldName), ("acknowledged", oldName), ("new-language", currentName)])
+            try await store.migrateLegacyNotebooks()
+            let moved = try #require(try await store.repository.note(id: draft.id))
+            #expect(moved.notebookID == "acknowledged" && moved.markdown == draft.markdown)
+            #expect(try await store.repository.pendingOperations().map(\.noteID) == [draft.id])
+        } else {
+            await #expect(throws: NoteStationError.notebookWriteUncertain(objectID: nil)) {
+                try await store.migrateLegacyNotebooks()
+            }
+            #expect(try await store.repository.note(id: draft.id)?.notebookID == localID)
+        }
+        #expect(try Data(contentsOf: receipt) == originalReceipt)
+        #expect(!server.requests.contains { $0["method"] == "create" })
+        server.assertConsumed()
+    }
+
+    @Test func migrationRecordsAnExistingDestinationBeforeMovingDrafts() async throws {
+        let server = ManagementNAS(); defer { server.close() }
+        let client = try await server.connectedClient()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let manager = try NotebookCreationManager(directory: directory, retainReceipt: true)
+        server.books([("existing", "내 메모장")])
+        #expect(try await manager.migrationDestination(name: "내 메모장", client: client).id == "existing")
+
+        let restarted = try NotebookCreationManager(directory: directory, retainReceipt: true)
+        server.books([("existing", "내 메모장"), ("other", "My Notebook")])
+        #expect(try await restarted.migrationDestination(name: "My Notebook", client: client).id == "existing")
         #expect(!server.requests.contains { $0["method"] == "create" })
         server.assertConsumed()
     }

@@ -6,9 +6,9 @@ public enum MarkdownFileError: LocalizedError {
     case outsideDirectory, missingAsset(String), unsupportedEncoding
     public var errorDescription: String? {
         switch self {
-        case .outsideDirectory: return "문서 폴더 밖의 첨부 경로는 자동으로 가져오지 않습니다. 파일을 문서 폴더에 복사한 뒤 다시 가져오세요."
-        case .missingAsset(let name): return "첨부파일을 찾을 수 없습니다: \(name)"
-        case .unsupportedEncoding: return "UTF-8 Markdown 파일을 선택하세요."
+        case .outsideDirectory: return coreText("Attachments outside the document’s folder are skipped. Copy the file into that folder and import again.")
+        case .missingAsset(let name): return coreText("Attachment not found: %@", "\(name)")
+        case .unsupportedEncoding: return coreText("Choose a UTF-8 Markdown file.")
         }
     }
 }
@@ -160,7 +160,7 @@ public enum MarkdownFiles {
             if !FileManager.default.fileExists(atPath: candidate.path) { return candidate }
             if try Data(contentsOf: candidate) == data { return candidate }
         }
-        throw RepositoryError(message: "첨부파일 내보내기 이름을 만들 수 없습니다.")
+        throw RepositoryError(message: coreText("Could not generate a filename for the exported attachment."))
     }
 
     private static func availableSidecarURL(for destination: URL) -> URL {

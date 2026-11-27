@@ -7,12 +7,12 @@ import UniformTypeIdentifiers
 public enum AttachmentManagement {
     public static func removing(_ attachment: NoteAttachment, from note: NoteRecord) throws -> NoteRecord {
         guard note.mode != .locked, note.hasRemoteContent else {
-            throw RepositoryError(message: "첨부를 제거하려면 본문을 먼저 내려받으세요.")
+            throw RepositoryError(message: coreText("Download the note body before removing an attachment."))
         }
         guard let attachment = note.attachments.first(where: { $0.id == attachment.id }) else { throw AttachmentError.missing }
         if note.mode == .markdown, let math = attachment.generatedMath,
            MathExport.formulas(in: note.markdown).contains(where: { $0.key == math.key }) {
-            throw RepositoryError(message: "현재 본문에서 사용하는 수식 이미지입니다. 먼저 수식을 제거하세요.")
+            throw RepositoryError(message: coreText("The body uses this math image. Remove the equation first."))
         }
         let rendered = note.mode == .original ? note.originalHTML : MarkdownPipeline.render(note.markdown, blocks: note.activeBlocks)
         let identities = [attachment.id.uuidString, attachment.remoteID, attachment.remoteReference].compactMap { $0 }
@@ -20,7 +20,7 @@ public enum AttachmentManagement {
         let renderedReferences = try referencesHTML(rendered, identities: identities, name: attachment.name)
         let blockReferences = try note.activeBlocks.contains { try referencesHTML($0.html, identities: identities, name: attachment.name) }
         if markdownReferences || renderedReferences || blockReferences {
-            throw RepositoryError(message: "본문 또는 원본 보존 블록에서 사용하는 첨부파일입니다. 먼저 본문의 참조를 제거하세요.")
+            throw RepositoryError(message: coreText("The body or a preserved block uses this attachment. Remove the reference first."))
         }
         var result = note
         result.attachments.removeAll { $0.id == attachment.id }
@@ -115,7 +115,7 @@ public actor NoteStationSyncTransport: SyncTransport {
                         if file.name.hasSuffix(".md"), let source = try? SourceEnvelope.decode(try await client.download(fileID: file.id, noteID: id)),
                            source.documentID == (note.sourceDocumentID ?? note.id) { continue }
                         guard try !AttachmentManagement.referencesHTML(desiredHTML, identities: [file.id, file.reference].compactMap { $0 }, name: file.name) else {
-                            throw RepositoryError(message: "본문에서 사용하는 NAS 첨부파일은 제거할 수 없습니다.")
+                            throw RepositoryError(message: coreText("A NAS attachment referenced in the body cannot be removed."))
                         }
                         removed.append(file.id)
                     }
@@ -350,8 +350,8 @@ public actor NoteStationSyncTransport: SyncTransport {
                 if let id = bindings[asset.id.uuidString] { return file.id == id }
                 return file.id == asset.remoteID || file.reference.flatMap(UUID.init(uuidString:)) == asset.id
             }
-            guard matches.count == 1, let file = matches.first else { throw RepositoryError(message: "NAS 첨부 참조를 하나로 확인할 수 없습니다.") }
-            guard try await client.download(fileID: file.id, noteID: remote.summary.id) == expected else { throw RepositoryError(message: "NAS 첨부 바이트가 로컬 사본과 다릅니다.") }
+            guard matches.count == 1, let file = matches.first else { throw RepositoryError(message: coreText("Could not identify a single matching NAS attachment.")) }
+            guard try await client.download(fileID: file.id, noteID: remote.summary.id) == expected else { throw RepositoryError(message: coreText("The NAS attachment bytes differ from the local copy.")) }
             result[asset.id.uuidString] = file.id
         }
         return result

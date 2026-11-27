@@ -1,3 +1,5 @@
+import { errorText } from "./api";
+import { t } from "./i18n";
 import { useState } from "react";
 export type LibraryAction = {
   kind: "note" | "notebook" | "stack";
@@ -51,7 +53,7 @@ export function LibraryDialog({
       await onSubmit(request);
       onClose();
     } catch (error) {
-      setError(error instanceof Error ? error.message : "작업에 실패했습니다.");
+      setError(errorText(error, "library.operationFailed"));
     }
   }
   return (
@@ -66,11 +68,11 @@ export function LibraryDialog({
         <form onSubmit={(e) => void submit(e)}>
           {config.mode === "delete" ? (
             <p>{config.request.kind === "stack"
-              ? "책장 분류를 해제합니다. 메모장과 노트는 그대로 남습니다."
-              : "NAS에서 메모장을 삭제하고 포함된 노트를 휴지통으로 이동합니다."}</p>
+              ? t("library.thisRemovesStackGroupingAndKeepsItsNotebooks")
+              : t("library.thisDeletesNotebookNasAndMovesItsNotes")}</p>
           ) : config.mode === "notebook" ? (
             <label>
-              메모장
+              {t("common.notebook")}
               <select
                 autoFocus
                 value={value}
@@ -78,7 +80,7 @@ export function LibraryDialog({
                 onChange={(e) => setValue(e.target.value)}
               >
                 <option value="" disabled>
-                  메모장을 선택하세요
+                  {t("common.selectNotebook")}
                 </option>
                 {notebooks.map((b) => (
                   <option key={b.id} value={b.id}>
@@ -90,13 +92,13 @@ export function LibraryDialog({
             </label>
           ) : config.mode === "stack" ? (
             <label>
-              책장
+              {t("common.stack")}
               <select
                 autoFocus
                 value={value}
                 onChange={(e) => setValue(e.target.value)}
               >
-                <option value="">책장 밖 메모장</option>
+                <option value="">{t("common.unstackedNotebooks")}</option>
                 {Array.from(
                   new Set(notebooks.map((b) => b.stack).filter(Boolean)),
                 )
@@ -110,7 +112,7 @@ export function LibraryDialog({
             </label>
           ) : (
             <label>
-              {config.mode === "tags" ? "태그 (쉼표로 구분)" : "이름"}
+              {config.mode === "tags" ? t("library.tagsCommaSeparated") : t("library.name")}
               <input
                 autoFocus
                 value={value}
@@ -122,7 +124,7 @@ export function LibraryDialog({
           )}
           {config.mode === "createStack" && (
             <fieldset>
-              <legend>책장에 넣을 메모장</legend>
+              <legend>{t("library.notebooksAddStack")}</legend>
               {notebooks.map((book) => (
                 <label key={book.id} className="native-checkbox">
                   <input
@@ -153,7 +155,7 @@ export function LibraryDialog({
               disabled={busy}
               onClick={onClose}
             >
-              취소
+              {t("common.cancel")}
             </button>
             <button
               type="submit"
@@ -162,7 +164,7 @@ export function LibraryDialog({
                 busy || (config.mode === "createStack" && !members.length)
               }
             >
-              {busy ? "처리 중…" : config.mode === "delete" ? "삭제" : "확인"}
+              {busy ? t("library.working") : config.mode === "delete" ? t("library.delete") : t("library.confirm")}
             </button>
           </div>
         </form>

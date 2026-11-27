@@ -24,42 +24,42 @@ struct GlobalSearchSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Label("전체 노트 검색", systemImage: "magnifyingglass").font(.headline)
+                Label(appText("Search All Notes"), systemImage: "magnifyingglass").font(.headline)
                 Spacer()
                 Button(action: onClose) { Image(systemName: "xmark") }
                     .buttonStyle(.borderless)
-                    .accessibilityLabel("검색 닫기")
+                    .accessibilityLabel(appText("Close Search"))
                     .keyboardShortcut(.cancelAction)
             }
-            TextField("노트 제목·미리보기·태그·본문 검색", text: $query)
+            TextField(appText("Search titles, previews, tags, and note bodies"), text: $query)
                 .textFieldStyle(.roundedBorder)
                 .focused($searchFocused)
-                .accessibilityLabel("전체 노트 검색어")
+                .accessibilityLabel(appText("Search All Notes"))
                 .accessibilityIdentifier("global-search-query")
                 // Native TextField submission respects the input method's
                 // marked text; do not intercept Return with a key handler.
                 .onSubmit { if let first = rows.first { onSelect(first.id) } }
-            Text("휴지통을 제외한 모든 노트의 제목·미리보기·태그와 내려받은 본문을 검색합니다.")
+            Text(appText("Search titles, previews, tags, and downloaded note bodies across all notes outside the Trash."))
                 .font(.caption).foregroundStyle(.secondary)
             HStack(spacing: 6) {
                 if currentResult == nil {
                     ProgressView().controlSize(.small)
-                    Text("검색 중…")
+                    Text(appText("Searching…"))
                 } else {
-                    Text("검색 결과 \(rows.count)개" + (rows.count > 100 ? " · 처음 100개 표시" : ""))
+                    Text(appText("Results: %@", AppLocalization.number(rows.count)) + (rows.count > 100 ? appText(" · Showing the first 100") : ""))
                 }
                 Spacer()
-                Text("Enter 첫 결과 열기 · Esc 닫기")
+                Text(appText("Return to Open First Result · Esc to Close"))
             }
             .font(.caption).foregroundStyle(.secondary)
             .accessibilityIdentifier("global-search-status")
             Divider()
             if let error = currentResult?.error {
-                ContentUnavailableView("검색하지 못했습니다", systemImage: "exclamationmark.triangle",
+                ContentUnavailableView(appText("Search Failed"), systemImage: "exclamationmark.triangle",
                                        description: Text(error))
             } else if currentResult != nil && rows.isEmpty {
-                ContentUnavailableView("검색 결과가 없습니다", systemImage: "magnifyingglass",
-                                       description: Text("다른 검색어를 입력해 보세요."))
+                ContentUnavailableView(appText("No Search Results"), systemImage: "magnifyingglass",
+                                       description: Text(appText("Try a different search term.")))
             } else {
                 ScrollView {
                     LazyVStack(spacing: 4) {
@@ -70,7 +70,7 @@ struct GlobalSearchSheet: View {
                         }
                     }
                 }
-                .accessibilityLabel("전체 검색 결과")
+                .accessibilityLabel(appText("Global Search Results"))
             }
         }
         .padding(20)
@@ -95,7 +95,7 @@ struct GlobalSearchSheet: View {
 
     private func resultRow(_ note: NoteSummary) -> some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text(note.title.isEmpty ? "제목 없음" : note.title).fontWeight(.medium).lineLimit(1)
+            Text(note.title.isEmpty ? appText("Untitled") : note.title).fontWeight(.medium).lineLimit(1)
             Text(notebookName(note) + (note.tags.isEmpty ? "" : " · " + note.tags.map { "#" + $0 }.joined(separator: " ")))
                 .font(.caption).foregroundStyle(.secondary).lineLimit(1)
             if !note.excerpt.isEmpty {
@@ -109,6 +109,6 @@ struct GlobalSearchSheet: View {
     }
 
     private func notebookName(_ note: NoteSummary) -> String {
-        library.notebooks.first(where: { $0.id == note.notebookID })?.name ?? "알 수 없는 메모장"
+        library.notebooks.first(where: { $0.id == note.notebookID })?.name ?? appText("Unknown Notebook")
     }
 }

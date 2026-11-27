@@ -159,10 +159,24 @@ public enum CredentialStoreError: Error, Equatable, Sendable, LocalizedError {
     case keychain(status: OSStatus)
 
     public var errorDescription: String? {
+        let key: String
+        let arguments: [String]
         switch self {
-        case .invalidAccount: return "Keychain 계정 식별자가 필요합니다."
-        case .invalidData: return "Keychain 비밀번호 데이터를 읽을 수 없습니다."
-        case .keychain(let status): return "Keychain 작업에 실패했습니다 (\(status))."
+        case .invalidAccount:
+            key = "A Keychain account identifier is required."
+            arguments = []
+        case .invalidData:
+            key = "Could not read the password data from Keychain."
+            arguments = []
+        case .keychain(let status):
+            key = "Keychain operation failed (%@)."
+            arguments = [String(status)]
         }
+        #if SWIFT_PACKAGE
+        return NoteLocalization.text(key, arguments: arguments, in: NoteLocalization.coreBundle)
+        #else
+        // The standalone Keychain helper builds this file without package resources.
+        return arguments.isEmpty ? key : String(format: key, arguments: arguments)
+        #endif
     }
 }

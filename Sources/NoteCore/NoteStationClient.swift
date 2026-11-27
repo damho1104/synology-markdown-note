@@ -431,7 +431,7 @@ public actor NoteStationClient {
         let listed = try await notes()
         try requireValidationConnection(attempt)
         guard let current = listed.first(where: { $0.id == noteID }) else { return }
-        guard current.isTrashed else { throw NoteStationError.invalidArgument("휴지통 노트만 영구 삭제할 수 있습니다") }
+        guard current.isTrashed else { throw NoteStationError.invalidArgument(coreText("Only notes in the Trash can be permanently deleted")) }
         guard current.version == baseVersion else { throw NoteStationError.versionConflict }
         do {
             _ = try await request(api: Self.noteAPI, method: "delete", cap: 3, minimum: 3,
@@ -608,11 +608,11 @@ public actor NoteStationClient {
             try requireValidationConnection(attempt)
             do {
                 _ = try await setValidationNote(receipt: receipt, baseVersion: receipt.version, html: stale)
-                report.failure = "서버가 오래된 버전의 저장 요청을 성공으로 응답했습니다."
+                report.failure = coreText("The server accepted a write request with an older version.")
             } catch NoteStationError.versionConflict {
                 report.conflictRejected = true
             } catch {
-                report.failure = "충돌 거절을 확인하지 못했습니다: " + error.localizedDescription
+                report.failure = coreText("Could not confirm that the conflicting write was rejected: ") + error.localizedDescription
             }
             report.stage = .conflictRead
             try requireValidationConnection(attempt)
@@ -621,7 +621,7 @@ public actor NoteStationClient {
                 && latest.summary.title == title && latest.summary.notebookID == notebookID
                 && !latest.summary.isTrashed && latest.attachments.isEmpty
             if !report.latestContentPreserved {
-                report.failure = "오래된 버전 저장 시도 후 최신 본문·버전이 유지되지 않았습니다."
+                report.failure = coreText("The latest content or version changed after the attempted write with an older version.")
             }
             if report.conflictRejected && report.latestContentPreserved && report.failure == nil {
                 report.stage = .completed
@@ -1042,28 +1042,28 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate, Sendable {
 extension NoteStationError: LocalizedError {
     public var errorDescription: String? {
         switch self {
-        case .invalidBaseURL: return "NAS 주소 형식이 올바르지 않습니다."
-        case .insecureTransport: return "인증 정보를 보호하려면 HTTPS 주소를 사용하세요."
-        case .invalidArgument(let name): return "필수 입력이 없습니다: \(name)"
-        case .notConnected: return "NAS에 먼저 로그인하세요."
-        case .connectionChanged: return "연결이 변경되어 이전 요청을 취소했습니다."
-        case .unsupportedAPI(let api): return "서버가 지원하는 API 버전이 없습니다: \(api)"
-        case .authenticationFailed(let code): return "NAS 인증에 실패했습니다 (\(code))."
-        case .otpRequired: return "일회용 인증 코드가 필요합니다."
-        case .invalidOTP: return "일회용 인증 코드가 올바르지 않습니다."
-        case .sessionExpired: return "NAS 세션이 만료되었습니다. 다시 로그인하세요."
-        case .permissionDenied: return "노트에 접근할 권한이 없습니다."
-        case .lockedNote: return "암호화 노트 읽기는 아직 지원하지 않습니다."
-        case .http(let status): return "NAS HTTP 요청에 실패했습니다 (\(status))."
-        case .transport(let code): return "NAS 네트워크 요청에 실패했습니다 (\(code))."
-        case .cancelled: return "NAS 요청이 취소되었습니다."
-        case .api(let code): return "Note Station API 요청에 실패했습니다 (\(code))."
-        case .invalidResponse: return "Note Station 응답이 예상 계약과 다릅니다."
-        case .writeContractUnvalidated: return "실제 NAS 왕복 검증 전에는 NAS 쓰기를 사용할 수 없습니다. 로컬 저장과 NAS 읽기만 지원합니다."
-        case .versionConflict: return "NAS에서 노트가 먼저 수정되어 이전 버전의 저장을 거절했습니다 (1064)."
-        case .notebookWriteUncertain(let id): return id == nil ? "노트북 생성 결과가 불확실합니다. NAS에서 확인하기 전에는 다시 생성하지 않습니다." : "노트북 생성 응답은 받았지만 목록 확인에 실패했습니다. 다시 확인하면 조회만 수행합니다."
-        case .stackWriteUncertain: return "책장 변경 결과를 확인할 수 없습니다. NAS 목록을 새로고침해 상태를 확인한 뒤 다시 시도하세요."
-        case .validationInProgress: return "수정·충돌 검사가 이미 진행 중입니다."
+        case .invalidBaseURL: return coreText("The NAS address is invalid.")
+        case .insecureTransport: return coreText("Use an HTTPS address to protect your credentials.")
+        case .invalidArgument(let name): return coreText("Required input is missing: %@", "\(name)")
+        case .notConnected: return coreText("Sign in to the NAS first.")
+        case .connectionChanged: return coreText("The connection changed. The earlier request was canceled.")
+        case .unsupportedAPI(let api): return coreText("The server does not support a version of this API: %@", "\(api)")
+        case .authenticationFailed(let code): return coreText("NAS authentication failed (%@).", "\(code)")
+        case .otpRequired: return coreText("A one-time verification code is required.")
+        case .invalidOTP: return coreText("The one-time verification code is invalid.")
+        case .sessionExpired: return coreText("The NAS session expired. Sign in again.")
+        case .permissionDenied: return coreText("You don’t have permission to access this note.")
+        case .lockedNote: return coreText("Reading encrypted notes is not supported yet.")
+        case .http(let status): return coreText("The NAS HTTP request failed (%@).", "\(status)")
+        case .transport(let code): return coreText("The NAS network request failed (%@).", "\(code)")
+        case .cancelled: return coreText("The NAS request was canceled.")
+        case .api(let code): return coreText("The Note Station API request failed (%@).", "\(code)")
+        case .invalidResponse: return coreText("The Note Station response did not match the expected format.")
+        case .writeContractUnvalidated: return coreText("NAS writes require a successful round-trip check on a real NAS. Local saves and NAS reads are available.")
+        case .versionConflict: return coreText("The note changed on the NAS first. The server rejected the older version (1064).")
+        case .notebookWriteUncertain(let id): return id == nil ? coreText("The notebook creation result is uncertain. The app will wait for you to check the NAS before creating it again.") : coreText("The NAS accepted the notebook creation request, but the list could not be verified. Checking again only refreshes the list.")
+        case .stackWriteUncertain: return coreText("Could not verify the stack change. Refresh the NAS list and check the stack before trying again.")
+        case .validationInProgress: return coreText("A note update and conflict check is already running.")
         }
     }
 }

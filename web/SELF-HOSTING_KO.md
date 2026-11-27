@@ -70,7 +70,16 @@ docker compose up -d
 | `WEB_DATA_PATH` | 선택 | `synonote-web-data` named volume. 호스트 폴더를 쓰려면 절대 경로 지정 |
 | `NAS_CA_FILE` | 선택 | 일반 설치에서는 생략. 사설 CA가 필요한 HTTPS NAS에서만 아래 설정 사용 |
 | `WEB_PUBLIC_ORIGIN` | 선택·고급 | 기본 빈 값. 프록시가 브라우저 Host를 보존하지 못할 때 정확한 origin 지정 |
+| `WEB_DEFAULT_LANGUAGE` | 선택 | `auto`는 브라우저 선호 언어를 따르며, 지원하는 언어가 없으면 영어를 표시합니다. 모든 접속자에게 같은 언어를 표시하려면 영어는 `en`, 한국어는 `ko`를 지정합니다. |
 | `WEB_COOKIE_SECURE` | 선택·고급 | `auto`. 일반 설치에서는 변경 불필요 |
+
+## 소스에서 UI 언어 추가
+
+1. `web/frontend/src/locales/en/`을 템플릿으로 사용합니다. 번역 키와 치환 변수를 유지하며 기능별 번역 파일을 `web/frontend/src/locales/<language>/<feature>.json`에 추가합니다.
+2. `web/backend/synonote_web/locales.json`의 `languages`에 언어 코드를 추가합니다. `fallback`은 `en`으로 유지합니다.
+3. 웹 이미지를 다시 빌드하고 배포합니다. `WEB_DEFAULT_LANGUAGE=auto`에서는 해당 언어를 선호하는 브라우저가 새 언어를 선택할 수 있습니다. 모든 접속자에게 적용하려면 `WEB_DEFAULT_LANGUAGE`에 새 언어 코드를 지정합니다.
+
+개수 메시지에서 첫 번째 치환 값 `{{0}}`이 숫자이면 i18next가 해당 언어의 복수형을 선택합니다. 기본 키를 유지하면서 필요한 경우 `selectRemainingFilesContinue_one` 또는 `selectRemainingFilesContinue_few` 같은 변형을 추가합니다.
 
 ## 선택: Synology 폴더에 데이터 보관
 

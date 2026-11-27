@@ -58,7 +58,7 @@ def bind_html(source: str, bindings: dict, files: list[dict], download_url) -> s
     for key, value in bindings.items():
         uid = str(uuid.UUID(key))
         if uid in normalized:
-            raise CLIError('INVALID_SOURCE', '중복 첨부 바인딩입니다.')
+            raise CLIError('INVALID_SOURCE', 'The attachment binding is duplicated.')
         normalized[uid] = value
 
     class Tags(HTMLParser):
@@ -75,7 +75,7 @@ def bind_html(source: str, bindings: dict, files: list[dict], download_url) -> s
                 if len(matches) != 1:
                     raise ValueError()
             except ValueError as exc:
-                raise CLIError('INVALID_SOURCE', '첨부 바인딩을 확인할 수 없습니다.') from exc
+                raise CLIError('INVALID_SOURCE', 'Could not verify the attachment binding.') from exc
             file = matches[0]
             raw = self.get_starttag_text()
             changes = []

@@ -923,12 +923,12 @@ class NasClient(LibraryNasOperations):
             assets = {}
             supplied = {v['key']: v for v in math_images or []}
             if set(supplied) != {v['key'] for v in formulas}:
-                raise CLIError("INVALID_SOURCE", "수식 이미지와 원문이 일치하지 않습니다.")
+                raise CLIError("INVALID_SOURCE", "The formula images do not match the source.")
             for key, image in supplied.items():
                 data = base64.b64decode(image['png'], validate=True)
                 if (len(data) < 33 or len(data) > 4_000_000 or data[:8] != b'\x89PNG\r\n\x1a\n'
                         or data[12:16] != b'IHDR' or struct.unpack('>II', data[16:24]) != (image['width'] * 2, image['height'] * 2)):
-                    raise CLIError("INVALID_SOURCE", "잘못된 PNG입니다.")
+                    raise CLIError("INVALID_SOURCE", "The PNG is invalid.")
                 assets[key] = dict(image, data=data, ref=str(uuid.uuid4()).upper())
             rendered = render_markdown(markdown, blocks, assets)
             document_id = previous.document_id if previous else str(uuid.uuid4()).upper()

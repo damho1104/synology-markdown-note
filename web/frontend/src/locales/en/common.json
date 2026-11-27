@@ -1,0 +1,20 @@
+{
+  "allNotebooks": "All notebooks",
+  "cancel": "Cancel",
+  "close": "Close",
+  "disconnectedNas": "Disconnected from NAS",
+  "fullGraph": "Full graph",
+  "linkNote": "Link note",
+  "loadingNotes": "Loading notes…",
+  "noResults": "No results",
+  "notebook": "Notebook",
+  "reviewDraftAndAnyPendingSaveFirst": "Review the draft and any pending save first.",
+  "searchAllNotes": "Search all notes",
+  "selectNotebook": "Select a notebook",
+  "settings": "Settings",
+  "showingFirst100": "Showing the first 100",
+  "stack": "Stack",
+  "tryAgain": "Try again",
+  "unstackedNotebooks": "Unstacked notebooks",
+  "untitled": "Untitled"
+}

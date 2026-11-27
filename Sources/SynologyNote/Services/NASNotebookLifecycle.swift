@@ -12,22 +12,14 @@ extension LibraryStore {
         let directory = root.appendingPathComponent(profile.storageKey).appendingPathComponent("notebook-migration")
         var oldBooks = try await repo.notebooks().filter { !isNASNotebook($0.id) }
         for row in try await repo.listNotes() where !isNASNotebook(row.notebookID) && !oldBooks.contains(where: { $0.id == row.notebookID }) {
-            oldBooks.append(Notebook(id: row.notebookID, name: "내 메모장"))
+            oldBooks.append(Notebook(id: row.notebookID, name: appText("My Notebook")))
         }
         for oldBook in oldBooks {
             logEvent(.notebookMigrating, notebookID: oldBook.id)
-            let name = oldBook.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "내 메모장" : oldBook.name
+            let name = oldBook.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? appText("My Notebook") : oldBook.name
             let key = SHA256.hash(data: Data(oldBook.id.utf8)).map { String(format: "%02x", $0) }.joined()
-            let receiptDirectory = directory.appendingPathComponent(key)
-            let receiptExists = FileManager.default.fileExists(atPath: receiptDirectory.appendingPathComponent("notebook-create-pending.json").path)
-            let remote: RemoteNotebook
-            let candidates = try await client.notebooks().filter { $0.name == name }
-            if !receiptExists, candidates.count == 1 {
-                remote = candidates[0]
-            } else {
-                let manager = try NotebookCreationManager(directory: receiptDirectory, retainReceipt: true)
-                remote = try await manager.create(name: name, client: client)
-            }
+            let manager = try NotebookCreationManager(directory: directory.appendingPathComponent(key), retainReceipt: true)
+            let remote = try await manager.migrationDestination(name: name, client: client)
             guard generation == accountGeneration, connection == connectionGeneration, self.client === client else { throw NoteStationError.connectionChanged }
             for row in try await repo.listNotes() where row.notebookID == oldBook.id {
                 guard generation == accountGeneration, connection == connectionGeneration else { throw NoteStationError.connectionChanged }
@@ -53,7 +45,7 @@ extension LibraryStore {
     func deleteNotebook(id: String) async throws {
         guard let client, canManageNASNotebooks, isNASNotebook(id) else { throw NoteStationError.notConnected }
         guard !isPushing, !isRefreshing, !isManagingStacks, !deletingNotebookIDs.contains(id) else {
-            throw RepositoryError(message: "동기화가 끝난 뒤 메모장을 삭제하세요.")
+            throw RepositoryError(message: appText("Wait for sync to finish before deleting the notebook."))
         }
         let generation = accountGeneration, connection = connectionGeneration, repo = repository
         logEvent(.notebookDeleteRequested, notebookID: id)
@@ -66,7 +58,7 @@ extension LibraryStore {
         let pendingIDs = Set(try await repo.pendingOperations().map(\.noteID))
         guard try await repo.listNotes().allSatisfy({ $0.notebookID != id || !pendingIDs.contains($0.id) }),
               !sessions.values.contains(where: { $0.note.notebookID == id && $0.saveError != nil }) else {
-            throw RepositoryError(message: "이 메모장에 아직 NAS로 전송하지 못한 변경이 있습니다. 동기화를 완료한 뒤 삭제하세요.")
+            throw RepositoryError(message: appText("This notebook has changes waiting to upload. Finish syncing before deleting it."))
         }
         guard generation == accountGeneration, connection == connectionGeneration, self.client === client else { throw NoteStationError.connectionChanged }
         try await client.deleteNotebook(notebookID: id)
@@ -91,11 +83,11 @@ extension LibraryStore {
     func promptDeleteNotebook(_ book: Notebook) {
         let generation = accountGeneration
         let alert = NSAlert()
-        alert.messageText = "‘\(book.name.isEmpty ? "이름 없는 메모장" : book.name)’ 메모장을 삭제할까요?"
-        alert.informativeText = "NAS에서 메모장을 삭제하고 포함된 노트는 휴지통으로 이동합니다. 아직 전송하지 못한 변경이 있으면 삭제하지 않습니다."
+        alert.messageText = appText("Delete the “%@” notebook?", "\(book.name.isEmpty ? appText("Untitled Notebook") : book.name)")
+        alert.informativeText = appText("This deletes the notebook from the NAS and moves its notes to the Trash. Pending changes block deletion.")
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "삭제")
-        alert.addButton(withTitle: "취소")
+        alert.addButton(withTitle: appText("Delete"))
+        alert.addButton(withTitle: appText("Cancel"))
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         Task {
             guard generation == accountGeneration else { return }
